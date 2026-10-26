@@ -1,0 +1,58 @@
+# Extraction provenance
+
+- Source: `github.com/jbancroft/concertum`
+- Source branch: `main`
+- Source revision: `06e300eff8a8e4c3ce947fbbe4c6c5e25405ba42`
+- Extraction date: 2026-10-26
+- Latest Go change in that revision's history: `f82fb5e361aeabbc793677d8fd36a56b4e7b1c31`,
+  2026-08-28, `test: cover mixed topology planning`.
+
+The source checkout was clean and its HEAD matched GitHub's `main` when the
+extraction was made. This is a curated copy with fresh repository history;
+the initial commit date records packaging of the sample, not when all the
+underlying code was originally written.
+
+## Retained source
+
+All top-level Go files in these package directories were copied, except eight
+test files that import excluded infrastructure:
+
+```text
+internal/auth          internal/client       internal/memnode
+internal/proto         internal/ratelimit    internal/rpcwire
+internal/storage      pkg/concertum         sinfonia-client
+minuet-index           minuet-sql
+```
+
+The 83 retained source files are unchanged except for replacing the import prefix
+`github.com/jbancroft/concertum/` with `github.com/jbancroft/concertum2/` and
+normalizing constant alignment with `gofmt` in `minuet-index/index_benchmark_test.go`.
+The package comment in `minuet-index/doc.go` is rewritten to describe this
+sample's actual scope and point to its local documentation.
+[source-manifest.json](source-manifest.json) records both SHA-256 hashes for
+every retained file and the exact omitted test paths/dependencies. This
+includes existing node replication, fencing, backup, and directory-client
+code where it is interwoven with the core; it does not include their manager
+or daemon deployment surfaces.
+
+The helper in `internal/memnode/rpc_test_helpers_test.go` is adapted from the
+excluded `replication_control_test.go` so the retained direct-write RPC test
+remains runnable. `cmd/demo/`, the Makefile, `.gitignore`, and this focused
+documentation were added during extraction. `go.mod` keeps the source's Go
+1.22 minimum and uses the new module path. The extracted packages use only
+the Go standard library, so there is no `go.sum`.
+
+The extraction changes packaging and examples rather than transaction,
+recovery, wire, disk, or index algorithms. The new documentation deliberately
+limits compatibility claims to what the retained implementation demonstrates.
+No original Git history, issue database, local configuration, credentials,
+personal contact details, paper PDFs, release artifacts, or GitHub Actions
+workflows were copied. The source repository has no license file; this
+extraction adds no new licensing grant.
+
+## Interview use
+
+The demo and reading guide make this a smaller entry point into existing work.
+Pair it with a description of the components you worked on and the design
+tradeoffs you can discuss. The source dates above distinguish earlier work
+from the later packaging of this sample.

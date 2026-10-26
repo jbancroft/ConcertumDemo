@@ -1,0 +1,38 @@
+package memnode
+
+import (
+	"context"
+
+	"github.com/jbancroft/concertum2/internal/proto"
+)
+
+// DummyNode is a no-logic in-memory memnode for compile/smoke tests.
+type DummyNode struct{}
+
+func (d *DummyNode) Read(_ context.Context, _ uint64, length uint32) ([]byte, error) {
+	return make([]byte, length), nil
+}
+
+func (d *DummyNode) Write(_ context.Context, _ uint64, _ []byte) error {
+	return nil
+}
+
+func (d *DummyNode) ExecPrepare(_ context.Context, _ proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
+	return proto.ExecPrepareResponse{Vote: proto.VoteOK}, nil
+}
+
+func (d *DummyNode) ExecCommit1PC(_ context.Context, _ proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
+	return proto.ExecCommit1PCResponse{Vote: proto.VoteOK, ReadData: map[uint32][]byte{}}, nil
+}
+
+func (d *DummyNode) Commit(_ context.Context, _ proto.CommitRequest) (proto.CommitResponse, error) {
+	return proto.CommitResponse{Ack: true}, nil
+}
+
+func (d *DummyNode) CommitBatch(_ context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
+	acks := make([]bool, len(req.Decisions))
+	for i := range acks {
+		acks[i] = true
+	}
+	return proto.CommitBatchResponse{Acks: acks}, nil
+}

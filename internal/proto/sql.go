@@ -1,0 +1,48 @@
+package proto
+
+const SQLRPCVersion1 uint16 = 1
+
+type SQLExecRequest struct {
+	Version       uint16
+	CorrelationID string
+	Statement     string
+}
+
+type SQLExecResponse struct {
+	Version       uint16
+	CorrelationID string
+	ErrorCode     string
+	ErrorMessage  string
+	Rows          []SQLRow
+}
+
+type SQLPingRequest struct {
+	Version uint16
+}
+
+type SQLPingResponse struct {
+	Version uint16
+	OK      bool
+}
+
+type SQLDescribeCapabilitiesRequest struct {
+	Version uint16
+}
+
+type SQLDescribeCapabilitiesResponse struct {
+	Version      uint16
+	Capabilities SQLCapabilities
+}
+
+type SQLCapabilities struct {
+	DialectTarget       string
+	StatementAtomicity  bool
+	MultiStmtTxns       bool
+	SupportedStatements []string
+	UnsupportedFeatures []string
+}
+
+type SQLRow struct {
+	ID    uint64
+	Value uint64
+}

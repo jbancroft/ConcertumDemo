@@ -1,0 +1,796 @@
+package storage
+
+import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/jbancroft/concertum2/internal/proto"
+)
+
+type RedoEntry struct {
+	TID                   proto.TransactionID `json:"tid"`
+	Participants          []uint32            `json:"participants"`
+	DecisionDeadlineNanos int64               `json:"decision_deadline_nanos,omitempty"`
+	WriteItems            []proto.WriteItem   `json:"write_items"`
+}
+
+type DiskImage struct {
+	mu   sync.Mutex
+	file *os.File
+	size int
+}
+
+func OpenDiskImage(dir string, size int) (*DiskImage, []byte, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, nil, err
+	}
+	path := filepath.Join(dir, "image.bin")
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := f.Truncate(int64(size)); err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	buf := make([]byte, size)
+	if _, err := f.ReadAt(buf, 0); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if !errors.Is(err, io.EOF) {
+			f.Close()
+			return nil, nil, err
+		}
+	}
+	return &DiskImage{file: f, size: size}, buf, nil
+}
+
+func (d *DiskImage) ApplyWrite(addr uint64, data []byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	end := addr + uint64(len(data))
+	if end > uint64(d.size) {
+		return fmt.Errorf("disk image out of bounds")
+	}
+	if _, err := d.file.WriteAt(data, int64(addr)); err != nil {
+		return err
+	}
+	return d.file.Sync()
+}
+
+func (d *DiskImage) Snapshot(path string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, err := d.file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	data := make([]byte, d.size)
+	if _, err := io.ReadFull(d.file, data); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *DiskImage) Sync() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.file.Sync()
+}
+
+func (d *DiskImage) Bytes() ([]byte, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, err := d.file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, d.size)
+	if _, err := io.ReadFull(d.file, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// ReadAt reads a bounded portion of the durable image without materializing
+// the complete image. Callers that need a consistent snapshot must hold the
+// higher-level global write barrier while issuing a sequence of reads.
+func (d *DiskImage) ReadAt(buf []byte, offset int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if offset < 0 || offset+int64(len(buf)) > int64(d.size) {
+		return fmt.Errorf("disk image read out of bounds")
+	}
+	_, err := io.ReadFull(io.NewSectionReader(d.file, offset, int64(len(buf))), buf)
+	return err
+}
+
+func (d *DiskImage) Size() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.size
+}
+
+// SHA256 computes the image digest in bounded chunks.
+func (d *DiskImage) SHA256() ([]byte, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	h := sha256.New()
+	buf := make([]byte, 1<<20)
+	for offset := 0; offset < d.size; {
+		want := len(buf)
+		if remaining := d.size - offset; remaining < want {
+			want = remaining
+		}
+		if _, err := io.ReadFull(io.NewSectionReader(d.file, int64(offset), int64(want)), buf[:want]); err != nil {
+			return nil, err
+		}
+		if _, err := h.Write(buf[:want]); err != nil {
+			return nil, err
+		}
+		offset += want
+	}
+	sum := h.Sum(nil)
+	return sum, nil
+}
+
+// Replace replaces the complete durable image and synchronizes it before
+// returning. The caller must hold any higher-level state transition barrier.
+// The caller must provide exactly the image size; accepting a partial image
+// would make a replication baseline ambiguous.
+func (d *DiskImage) Replace(data []byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(data) != d.size {
+		return fmt.Errorf("disk image size %d, replacement size %d", d.size, len(data))
+	}
+	n, err := d.file.WriteAt(data, 0)
+	if err != nil {
+		return err
+	}
+	if n != len(data) {
+		return io.ErrShortWrite
+	}
+	return d.file.Sync()
+}
+
+// ReplaceFrom replaces the complete durable image from a staged file while
+// keeping memory bounded. The caller must provide exactly the configured image
+// size and hold any higher-level state transition barrier.
+func (d *DiskImage) ReplaceFrom(path string) error {
+	in, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() != int64(d.size) {
+		return fmt.Errorf("disk image size %d, staged replacement size %d", d.size, info.Size())
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	buf := make([]byte, 1<<20)
+	for offset := int64(0); offset < int64(d.size); {
+		want := len(buf)
+		if remaining := int64(d.size) - offset; remaining < int64(want) {
+			want = int(remaining)
+		}
+		if _, err := io.ReadFull(in, buf[:want]); err != nil {
+			return err
+		}
+		n, err := d.file.WriteAt(buf[:want], offset)
+		if err != nil {
+			return err
+		}
+		if n != want {
+			return io.ErrShortWrite
+		}
+		offset += int64(want)
+	}
+	return d.file.Sync()
+}
+
+func (d *DiskImage) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.file == nil {
+		return nil
+	}
+	err := d.file.Close()
+	d.file = nil
+	return err
+}
+
+type RedoLog struct {
+	mu      sync.Mutex
+	path    string
+	entries []RedoEntry
+
+	batchWindow    time.Duration
+	batchMax       int
+	appendReqCh    chan appendReq
+	fsyncFn        func(*os.File) error
+	fsyncCallCount atomic.Uint64
+	onAppend       func(entryBytes int)
+	onFsync        func(latency time.Duration)
+}
+
+type appendReq struct {
+	entry RedoEntry
+	ack   chan error
+}
+
+func OpenRedoLog(dir string) (*RedoLog, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	p := filepath.Join(dir, "redo.log")
+	entries := make([]RedoEntry, 0)
+	f, err := os.OpenFile(p, os.O_RDONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		line := s.Bytes()
+		if len(strings.TrimSpace(string(line))) == 0 {
+			continue
+		}
+		var e RedoEntry
+		if err := json.Unmarshal(line, &e); err != nil {
+			f.Close()
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	if err := s.Err(); err != nil {
+		f.Close()
+		return nil, err
+	}
+	f.Close()
+	r := &RedoLog{path: p, entries: entries, batchWindow: 2 * time.Millisecond, batchMax: 32, fsyncFn: func(f *os.File) error { return f.Sync() }}
+	r.appendReqCh = make(chan appendReq, 4096)
+	go r.runAppender()
+	return r, nil
+}
+
+func (r *RedoLog) Entries() []RedoEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]RedoEntry, len(r.entries))
+	copy(out, r.entries)
+	return out
+}
+
+func (r *RedoLog) Append(entry RedoEntry) error {
+	return r.AppendDurable(entry)
+}
+
+func (r *RedoLog) ConfigureBatchingForTest(window time.Duration, max int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if window > 0 {
+		r.batchWindow = window
+	}
+	if max > 0 {
+		r.batchMax = max
+	}
+}
+
+func (r *RedoLog) SetFsyncHookForTest(fn func(*os.File) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if fn == nil {
+		r.fsyncFn = func(f *os.File) error { return f.Sync() }
+		return
+	}
+	r.fsyncFn = fn
+}
+
+func (r *RedoLog) FsyncCallCount() uint64 {
+	return r.fsyncCallCount.Load()
+}
+
+func (r *RedoLog) SetObservers(onAppend func(entryBytes int), onFsync func(time.Duration)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onAppend = onAppend
+	r.onFsync = onFsync
+}
+
+func (r *RedoLog) AppendDurable(entry RedoEntry) error {
+	ack := make(chan error, 1)
+	r.appendReqCh <- appendReq{entry: entry, ack: ack}
+	return <-ack
+}
+
+func (r *RedoLog) runAppender() {
+	t := time.NewTimer(time.Hour)
+	if !t.Stop() {
+		<-t.C
+	}
+	defer t.Stop()
+
+	batch := make([]appendReq, 0, 64)
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		err := r.flushBatch(batch)
+		for _, req := range batch {
+			req.ack <- err
+		}
+		batch = batch[:0]
+	}
+
+	for {
+		if len(batch) == 0 {
+			req := <-r.appendReqCh
+			batch = append(batch, req)
+			r.mu.Lock()
+			window := r.batchWindow
+			r.mu.Unlock()
+			if window <= 0 {
+				window = time.Millisecond
+			}
+			t.Reset(window)
+		}
+
+		r.mu.Lock()
+		max := r.batchMax
+		r.mu.Unlock()
+		if max <= 0 {
+			max = 1
+		}
+
+		if len(batch) >= max {
+			if !t.Stop() {
+				select {
+				case <-t.C:
+				default:
+				}
+			}
+			flush()
+			continue
+		}
+
+		select {
+		case req := <-r.appendReqCh:
+			batch = append(batch, req)
+		case <-t.C:
+			flush()
+		}
+	}
+}
+
+func (r *RedoLog) flushBatch(batch []appendReq) error {
+	f, err := os.OpenFile(r.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	entries := make([]RedoEntry, 0, len(batch))
+	bytesWritten := 0
+	for _, req := range batch {
+		b, err := json.Marshal(req.entry)
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(append(b, '\n')); err != nil {
+			return err
+		}
+		entries = append(entries, req.entry)
+		bytesWritten += len(b) + 1
+	}
+	r.mu.Lock()
+	fsyncFn := r.fsyncFn
+	r.mu.Unlock()
+	if fsyncFn == nil {
+		fsyncFn = func(f *os.File) error { return f.Sync() }
+	}
+	start := time.Now()
+	if err := fsyncFn(f); err != nil {
+		return err
+	}
+	lat := time.Since(start)
+	r.fsyncCallCount.Add(1)
+
+	r.mu.Lock()
+	r.entries = append(r.entries, entries...)
+	onAppend := r.onAppend
+	onFsync := r.onFsync
+	r.mu.Unlock()
+	if onAppend != nil {
+		onAppend(bytesWritten)
+	}
+	if onFsync != nil {
+		onFsync(lat)
+	}
+	return nil
+}
+func (r *RedoLog) LastTID() proto.TransactionID {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.entries) == 0 {
+		return proto.TransactionID{}
+	}
+	return r.entries[len(r.entries)-1].TID
+}
+
+func (r *RedoLog) TruncateHead(count int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if count <= 0 {
+		return nil
+	}
+	if count > len(r.entries) {
+		count = len(r.entries)
+	}
+	remaining := append([]RedoEntry(nil), r.entries[count:]...)
+	if err := rewriteRedoLogFile(r.path, remaining); err != nil {
+		return err
+	}
+	r.entries = remaining
+	return nil
+}
+
+// Reset removes every redo entry and durably rewrites the log file. It is
+// used when a replica installs a complete authoritative image baseline.
+func (r *RedoLog) Reset() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := rewriteRedoLogFile(r.path, nil); err != nil {
+		return err
+	}
+	r.entries = nil
+	return nil
+}
+
+func rewriteRedoLogFile(path string, entries []RedoEntry) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	for _, e := range entries {
+		b, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(append(b, '\n')); err != nil {
+			return err
+		}
+	}
+	return f.Sync()
+}
+
+type DecidedStore struct {
+	mu       sync.Mutex
+	path     string
+	outcomes map[string]bool
+}
+
+func OpenDecidedStore(dir string) (*DecidedStore, error) {
+	return openOutcomeStore(filepath.Join(dir, "decided.log"))
+}
+
+type ForcedAbortStore struct {
+	mu   sync.Mutex
+	path string
+	set  map[string]struct{}
+}
+
+func OpenForcedAbortStore(dir string) (*ForcedAbortStore, error) {
+	p := filepath.Join(dir, "forced_abort.log")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(p, os.O_RDONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	out := map[string]struct{}{}
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		k := strings.TrimSpace(s.Text())
+		if k != "" {
+			out[k] = struct{}{}
+		}
+	}
+	if err := s.Err(); err != nil {
+		return nil, err
+	}
+	return &ForcedAbortStore{path: p, set: out}, nil
+}
+
+func (s *ForcedAbortStore) Has(tid proto.TransactionID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.set[tidKey(tid)]
+	return ok
+}
+
+func (s *ForcedAbortStore) Add(tid proto.TransactionID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := tidKey(tid)
+	if _, ok := s.set[k]; ok {
+		return nil
+	}
+	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(k + "\n"); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	s.set[k] = struct{}{}
+	return nil
+}
+
+func (s *ForcedAbortStore) GCByEpoch(currentEpoch uint64) ([]proto.TransactionID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if currentEpoch <= 2 {
+		return nil, nil
+	}
+	threshold := currentEpoch - 2
+	changed := false
+	removed := make([]proto.TransactionID, 0)
+	for key := range s.set {
+		tid, ok := parseTidKey(key)
+		if !ok {
+			continue
+		}
+		if tid.Epoch < threshold {
+			delete(s.set, key)
+			removed = append(removed, tid)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil, nil
+	}
+	if err := s.rewriteLocked(); err != nil {
+		return nil, err
+	}
+	return removed, nil
+}
+
+// Reset removes every forced-abort marker and durably rewrites the store.
+// A baseline install replaces the replica's previous transaction history, so
+// retaining an old forced-abort marker could reject a future transaction that
+// is not present in the installed state.
+func (s *ForcedAbortStore) Reset() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.set
+	s.set = map[string]struct{}{}
+	if err := s.rewriteLocked(); err != nil {
+		s.set = previous
+		return err
+	}
+	return nil
+}
+
+func (s *ForcedAbortStore) rewriteLocked() error {
+	keys := make([]string, 0, len(s.set))
+	for k := range s.set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for _, k := range keys {
+		if _, err := f.WriteString(k + "\n"); err != nil {
+			return err
+		}
+	}
+	return f.Sync()
+}
+
+func openOutcomeStore(path string) (*DecidedStore, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	m := map[string]bool{}
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		parts := strings.Split(strings.TrimSpace(s.Text()), " ")
+		if len(parts) != 2 {
+			continue
+		}
+		m[parts[0]] = parts[1] == "commit"
+	}
+	if err := s.Err(); err != nil {
+		return nil, err
+	}
+	return &DecidedStore{path: path, outcomes: m}, nil
+}
+
+func (s *DecidedStore) Get(tid proto.TransactionID) (bool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.outcomes[tidKey(tid)]
+	return v, ok
+}
+
+func (s *DecidedStore) Append(tid proto.TransactionID, committed bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := tidKey(tid)
+	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	state := "abort"
+	if committed {
+		state = "commit"
+	}
+	if _, err := f.WriteString(k + " " + state + "\n"); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	s.outcomes[k] = committed
+	return nil
+}
+
+func (s *DecidedStore) Remove(tid proto.TransactionID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := tidKey(tid)
+	if _, ok := s.outcomes[k]; !ok {
+		return nil
+	}
+	delete(s.outcomes, k)
+	keys := make([]string, 0, len(s.outcomes))
+	for key := range s.outcomes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for _, key := range keys {
+		state := "abort"
+		if s.outcomes[key] {
+			state = "commit"
+		}
+		if _, err := f.WriteString(key + " " + state + "\n"); err != nil {
+			return err
+		}
+	}
+	return f.Sync()
+}
+
+// Reset removes every durable decision and rewrites the store. The caller is
+// responsible for serializing this with participant operations.
+func (s *DecidedStore) Reset() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	s.outcomes = map[string]bool{}
+	return nil
+}
+
+func LoadProcessedPointer(dir string) (int, error) {
+	p := filepath.Join(dir, "processed.ptr")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	s := strings.TrimSpace(string(b))
+	if s == "" {
+		return 0, nil
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+
+func StoreProcessedPointer(dir string, idx int) error {
+	p := filepath.Join(dir, "processed.ptr")
+	tmp, err := os.CreateTemp(dir, ".processed.ptr.tmp-")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.WriteString(strconv.Itoa(idx)); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, p); err != nil {
+		return err
+	}
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = dirFile.Sync()
+	closeErr := dirFile.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
+}
+
+func tidKey(t proto.TransactionID) string {
+	return fmt.Sprintf("%d:%d:%d", t.CoordinatorID, t.Counter, t.Epoch)
+}
+
+func parseTidKey(k string) (proto.TransactionID, bool) {
+	parts := strings.Split(k, ":")
+	if len(parts) != 3 {
+		return proto.TransactionID{}, false
+	}
+	coord, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return proto.TransactionID{}, false
+	}
+	counter, err := strconv.ParseUint(parts[1], 10, 64)
+	if err != nil {
+		return proto.TransactionID{}, false
+	}
+	epoch, err := strconv.ParseUint(parts[2], 10, 64)
+	if err != nil {
+		return proto.TransactionID{}, false
+	}
+	return proto.TransactionID{CoordinatorID: coord, Counter: counter, Epoch: epoch}, true
+}

@@ -1,0 +1,134 @@
+package client
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"time"
+
+	"github.com/jbancroft/concertum2/internal/proto"
+	"github.com/jbancroft/concertum2/internal/rpcwire"
+)
+
+var (
+	ErrDirectoryUpdateOutcomeUnknown = errors.New("directory update outcome unknown")
+	ErrDirectoryUpdateConflict       = errors.New("directory update conflict")
+	ErrDirectoryStoreDegraded        = errors.New("directory store degraded")
+)
+
+type DirectoryClient struct {
+	addr    string
+	tls     *tls.Config
+	timeout time.Duration
+	rpc     *rpcwire.Client
+}
+
+func NewDirectoryClient(addr string, tlsConfig *tls.Config) *DirectoryClient {
+	c := &DirectoryClient{addr: strings.TrimSpace(addr), tls: tlsConfig, timeout: 3 * time.Second}
+	c.reset()
+	return c
+}
+
+func (c *DirectoryClient) SetTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	c.timeout = timeout
+	c.reset()
+}
+
+func (c *DirectoryClient) GetDirectory(ctx context.Context) (map[uint32]proto.DirectoryEntry, error) {
+	var out proto.DirectoryResponse
+	if err := c.rpc.Call(ctx, proto.MethodDirectory, proto.DirectoryRequest{}, &out); err != nil {
+		return nil, err
+	}
+	return out.Mappings, nil
+}
+
+func (c *DirectoryClient) Resolve(ctx context.Context, memID uint32) (proto.ResolveResponse, error) {
+	var out proto.ResolveResponse
+	return out, c.rpc.Call(ctx, proto.MethodResolve, proto.ResolveRequest{MemID: memID}, &out)
+}
+
+func (c *DirectoryClient) UpdateEntry(ctx context.Context, memID uint32, entry proto.DirectoryEntry) error {
+	return c.UpdateEntryCAS(ctx, memID, entry, 0)
+}
+
+func (c *DirectoryClient) UpdateEntryCAS(ctx context.Context, memID uint32, entry proto.DirectoryEntry, expectedGeneration uint64) error {
+	return c.updateEntryCAS(ctx, memID, entry, expectedGeneration, 0, false)
+}
+
+// UpdateEntryCASRevision adds an exact store-wide revision precondition,
+// including bootstrap revision zero.
+func (c *DirectoryClient) UpdateEntryCASRevision(ctx context.Context, memID uint32, entry proto.DirectoryEntry, expectedGeneration, expectedRevision uint64) error {
+	return c.updateEntryCAS(ctx, memID, entry, expectedGeneration, expectedRevision, true)
+}
+
+func (c *DirectoryClient) updateEntryCAS(ctx context.Context, memID uint32, entry proto.DirectoryEntry, expectedGeneration, expectedRevision uint64, expectedRevisionSet bool) error {
+	var out proto.UpdateEntryResponse
+	if err := c.rpc.Call(ctx, proto.MethodUpdateEntry, proto.UpdateEntryRequest{MemID: memID, Entry: entry, ExpectedGeneration: expectedGeneration, ExpectedRevision: expectedRevision, ExpectedRevisionSet: expectedRevisionSet}, &out); err != nil {
+		var remote *rpcwire.RemoteError
+		if errors.As(err, &remote) {
+			return err
+		}
+		return c.reconcileTransportAmbiguity(ctx, memID, entry, expectedRevision, expectedRevisionSet, err)
+	}
+	if out.OutcomeUnknown {
+		resolved, err := c.Resolve(ctx, memID)
+		if err != nil {
+			return fmt.Errorf("%w at revision %d: reconcile: %v", ErrDirectoryUpdateOutcomeUnknown, out.Revision, err)
+		}
+		if sameDirectoryEntry(entry, resolved) {
+			return nil
+		}
+		if out.Revision == 0 || resolved.DirectoryRevision < out.Revision {
+			return fmt.Errorf("%w at revision %d", ErrDirectoryUpdateOutcomeUnknown, out.Revision)
+		}
+		return fmt.Errorf("%w: requested revision %d, selected revision %d", ErrDirectoryUpdateConflict, out.Revision, resolved.DirectoryRevision)
+	}
+	if out.Degraded {
+		return fmt.Errorf("%w at revision %d", ErrDirectoryStoreDegraded, out.Revision)
+	}
+	if !out.Ack {
+		return &rpcwire.RemoteError{Method: proto.MethodUpdateEntry, Message: "directory update not acknowledged"}
+	}
+	return nil
+}
+
+func (c *DirectoryClient) reconcileTransportAmbiguity(ctx context.Context, memID uint32, entry proto.DirectoryEntry, expectedRevision uint64, expectedRevisionSet bool, transportErr error) error {
+	reconcileCtx := ctx
+	var timeoutErr net.Error
+	if ctx.Err() != nil || (errors.As(transportErr, &timeoutErr) && timeoutErr.Timeout()) {
+		var cancel context.CancelFunc
+		reconcileCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), c.timeout)
+		defer cancel()
+	}
+	resolved, err := c.Resolve(reconcileCtx, memID)
+	if err != nil {
+		return fmt.Errorf("%w: update transport: %v; reconcile: %v", ErrDirectoryUpdateOutcomeUnknown, transportErr, err)
+	}
+	if sameDirectoryEntry(entry, resolved) {
+		return nil
+	}
+	if !expectedRevisionSet || resolved.DirectoryRevision <= expectedRevision {
+		return fmt.Errorf("%w: update transport: %v; selected revision %d", ErrDirectoryUpdateOutcomeUnknown, transportErr, resolved.DirectoryRevision)
+	}
+	return fmt.Errorf("%w: expected base revision %d, selected revision %d", ErrDirectoryUpdateConflict, expectedRevision, resolved.DirectoryRevision)
+}
+
+func sameDirectoryEntry(want proto.DirectoryEntry, got proto.ResolveResponse) bool {
+	if want.Generation != got.Generation || want.Primary != got.Primary {
+		return false
+	}
+	if want.Replica == nil || got.Replica == nil {
+		return want.Replica == nil && got.Replica == nil
+	}
+	return *want.Replica == *got.Replica
+}
+
+func (c *DirectoryClient) reset() {
+	c.rpc = rpcwire.NewClient(c.addr, rpcwire.ClientOptions{TLS: c.tls, DialTimeout: c.timeout})
+}
