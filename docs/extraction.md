@@ -24,7 +24,8 @@ internal/storage      pkg/concertum         sinfonia-client
 minuet-index           minuet-sql
 ```
 
-The 83 retained source files are unchanged except for replacing the import prefix
+At extraction, the 83 retained source files were unchanged except for replacing
+the import prefix
 `github.com/jbancroft/concertum/` with `github.com/jbancroft/concertum2/` and
 normalizing constant alignment with `gofmt` in `minuet-index/index_benchmark_test.go`.
 The package comment in `minuet-index/doc.go` is rewritten to describe this
@@ -49,6 +50,21 @@ No original Git history, issue database, local configuration, credentials,
 personal contact details, paper PDFs, release artifacts, or GitHub Actions
 workflows were copied. The source repository has no license file; this
 extraction adds no new licensing grant.
+
+## Changes after extraction
+
+On 2026-10-26, the coordinator's phase-two diagnostic configuration and injected
+clock were removed. Phase-two tests now wrap the existing memory-node interface
+to control delivery through the normal asynchronous workers, including batched
+and fallback commits. A subprocess exits without cleanup after one participant
+commits, then the test reopens both durable nodes and verifies recovery.
+Deadline validation uses the real clock and a pure function tested with fixed
+timestamps. The former diagnostic test file was replaced by
+`internal/client/phase_two_test.go`; deadline cases are in
+`internal/client/deadline_test.go`.
+
+The source manifest records the original extraction snapshot and hashes, before
+these changes; it is not a hash inventory of the current working tree.
 
 ## Interview use
 

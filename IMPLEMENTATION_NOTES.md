@@ -1,5 +1,17 @@
 # Implementation notes
 
+## 2026-10-26: Coordinator test controls
+
+Removed the coordinator's phase-two diagnostic state, pinned transaction IDs,
+alternate synchronous delivery path, and replaceable clock. Delivery tests use
+memory-node wrappers defined in test files, retaining the normal coordinator
+workers, batching, and fallback behavior. Abrupt subprocess exit after partial
+commit delivery exercises recovery from the participants' durable state.
+
+The coordinator reads `time.Now()` when checking comparison deadlines. The
+deadline predicate accepts an explicit timestamp so expiry boundaries can be
+checked without changing the coordinator's clock or waiting in real time.
+
 ## 2026-10-26: Focused Go extraction
 
 Concertum2 preserves the existing Go Sinfonia/Minuet implementation at the
