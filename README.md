@@ -103,3 +103,7 @@ provides the index lineage. This sample implements a smaller single-version
 index and does not claim the complete Minuet system or its published performance.
 The page format, RPC encoding, storage layout, deadline extension, and SQL
 surface are Concertum implementation choices.
+
+## License
+
+Licensed under the [MIT License](LICENSE).

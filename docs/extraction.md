@@ -48,10 +48,12 @@ recovery, wire, disk, or index algorithms. The new documentation deliberately
 limits compatibility claims to what the retained implementation demonstrates.
 No original Git history, issue database, local configuration, credentials,
 personal contact details, paper PDFs, release artifacts, or GitHub Actions
-workflows were copied. The source repository has no license file; this
-extraction adds no new licensing grant.
+workflows were copied. The source snapshot had no license file, and the initial
+extraction added no licensing grant.
 
 ## Changes after extraction
+
+On 2026-10-26, an [MIT License](../LICENSE) was added for this repository.
 
 On 2026-10-26, the coordinator's phase-two diagnostic configuration and injected
 clock were removed. Phase-two tests now wrap the existing memory-node interface
