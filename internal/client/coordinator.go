@@ -90,24 +90,6 @@ type Coordinator struct {
 	workersMu   sync.Mutex
 	workers     map[uint32]*rpcWorker
 	stats       map[uint32]StatsReader
-	diagnostic  *PhaseTwoDiagnostic
-	nowFn       func() time.Time
-}
-
-// PhaseTwoCheckpoint identifies a deterministic coordinator-side delivery
-// boundary used only by executable black-box recovery diagnostics.
-type PhaseTwoCheckpoint struct {
-	TID       proto.TransactionID
-	Delivered int
-	Total     int
-}
-
-// PhaseTwoDiagnostic pins the next transaction ID and serializes phase-two
-// delivery so an external process harness can crash at an exact coordinator
-// boundary. Normal coordinators never install this diagnostic.
-type PhaseTwoDiagnostic struct {
-	TID        proto.TransactionID
-	Checkpoint func(PhaseTwoCheckpoint)
 }
 
 func NewCoordinator(nodes map[uint32]MemNode) *Coordinator {
@@ -115,7 +97,7 @@ func NewCoordinator(nodes map[uint32]MemNode) *Coordinator {
 	for id, node := range nodes {
 		cpy[id] = node
 	}
-	c := &Coordinator{nodes: cpy, primaryFor: map[uint32]uint32{}, generations: map[uint32]uint64{}, coordID: newCoordinatorID(), epoch: 1, backoff: RandomBackoff{}, maxRetries: 5, workers: map[uint32]*rpcWorker{}, stats: map[uint32]StatsReader{}, nowFn: time.Now}
+	c := &Coordinator{nodes: cpy, primaryFor: map[uint32]uint32{}, generations: map[uint32]uint64{}, coordID: newCoordinatorID(), epoch: 1, backoff: RandomBackoff{}, maxRetries: 5, workers: map[uint32]*rpcWorker{}, stats: map[uint32]StatsReader{}}
 	for id, node := range cpy {
 		c.workers[id] = newRPCWorker(id, node)
 	}
@@ -142,21 +124,6 @@ func (c *Coordinator) SetCoordinatorIDForTest(id uint64) {
 	c.genMu.Lock()
 	defer c.genMu.Unlock()
 	c.coordID = id
-}
-
-// ConfigurePhaseTwoDiagnostic configures a single deterministic transaction
-// for the external crash/recovery compatibility contract. Call it before any
-// transaction. The configuration is consumed by the next all-positive 2PC
-// attempt only.
-func (c *Coordinator) ConfigurePhaseTwoDiagnostic(diagnostic PhaseTwoDiagnostic) error {
-	if diagnostic.TID.CoordinatorID == 0 || diagnostic.TID.Counter == 0 || diagnostic.TID.Epoch == 0 {
-		return errors.New("diagnostic transaction id fields must be > 0")
-	}
-	c.genMu.Lock()
-	defer c.genMu.Unlock()
-	tid := diagnostic.TID
-	c.diagnostic = &PhaseTwoDiagnostic{TID: tid, Checkpoint: diagnostic.Checkpoint}
-	return nil
 }
 
 func (c *Coordinator) SetPrimaryMapping(logicalToPrimary map[uint32]uint32) {
@@ -199,12 +166,6 @@ func (c *Coordinator) SetMaxRetriesForTest(max int) {
 	c.maxRetries = max
 }
 
-func (c *Coordinator) SetNowForTest(nowFn func() time.Time) {
-	if nowFn != nil {
-		c.nowFn = nowFn
-	}
-}
-
 func (c *Coordinator) Read(ctx context.Context, memID uint32, addr uint64, length uint32) ([]byte, error) {
 	node, ok := c.nodes[c.resolveMemID(memID)]
 	if !ok {
@@ -238,9 +199,6 @@ func (c *Coordinator) Write(ctx context.Context, memID uint32, addr uint64, data
 func (c *Coordinator) nextTID() proto.TransactionID {
 	c.genMu.Lock()
 	defer c.genMu.Unlock()
-	if c.diagnostic != nil {
-		return c.diagnostic.TID
-	}
 	c.tidCounter++
 	return proto.TransactionID{CoordinatorID: c.coordID, Counter: c.tidCounter, Epoch: c.epoch}
 }
@@ -581,15 +539,9 @@ func (c *Coordinator) execAttempt(ctx context.Context, tid proto.TransactionID, 
 		}
 		c.observeEpoch(r.resp.CurrentEpoch)
 	}
-	if decideCommit {
-		now := c.nowFn()
-		for _, item := range cmp {
-			if !item.ValidUntil.IsZero() && !now.Before(item.ValidUntil) {
-				decideCommit = false
-				status = proto.VoteBadCmp
-				break
-			}
-		}
+	if decideCommit && !comparisonsValidAt(cmp, time.Now()) {
+		decideCommit = false
+		status = proto.VoteBadCmp
 	}
 	decisionWitness := uint32(0)
 	if decisionDeadlineNanos != 0 && len(writes) > 0 && allVotesOK(participantVotes, participants) {
@@ -599,15 +551,6 @@ func (c *Coordinator) execAttempt(ctx context.Context, tid proto.TransactionID, 
 			return ExecResult{Committed: false, UnknownOutcome: true, ReadResults: map[proto.ReadItem][]byte{}, Status: proto.VoteBadInternal, ParticipantVotes: participantVotes, TransportErr: err}, false
 		}
 	}
-	if decideCommit {
-		if consumed, err := c.consumePhaseTwoDiagnostic(tid, participants); consumed {
-			if err != nil {
-				return ExecResult{Committed: false, UnknownOutcome: true, ReadResults: map[proto.ReadItem][]byte{}, Status: proto.VoteBadInternal, ParticipantVotes: participantVotes, TransportErr: err}, false
-			}
-			return ExecResult{Committed: true, ReadResults: aggregatedReads, Status: proto.VoteOK, ParticipantVotes: participantVotes}, false
-		}
-	}
-
 	for _, memID := range participants {
 		if memID == decisionWitness {
 			continue
@@ -697,45 +640,13 @@ func earliestDecisionDeadlineNanos(items []proto.CmpItem) int64 {
 	return earliest.UnixNano()
 }
 
-func (c *Coordinator) consumePhaseTwoDiagnostic(tid proto.TransactionID, participants []uint32) (bool, error) {
-	c.genMu.Lock()
-	diagnostic := c.diagnostic
-	if diagnostic == nil || diagnostic.TID != tid {
-		c.genMu.Unlock()
-		return false, nil
-	}
-	c.diagnostic = nil
-	c.genMu.Unlock()
-
-	ordered := append([]uint32(nil), participants...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
-	checkpoint := func(delivered int) {
-		if diagnostic.Checkpoint != nil {
-			diagnostic.Checkpoint(PhaseTwoCheckpoint{TID: tid, Delivered: delivered, Total: len(ordered)})
+func comparisonsValidAt(items []proto.CmpItem, now time.Time) bool {
+	for _, item := range items {
+		if !item.ValidUntil.IsZero() && !now.Before(item.ValidUntil) {
+			return false
 		}
 	}
-	checkpoint(0)
-	for delivered, memID := range ordered {
-		c.workersMu.Lock()
-		worker := c.workers[memID]
-		c.workersMu.Unlock()
-		if worker == nil {
-			return true, ErrUnknownMemNode
-		}
-		resp, err := worker.node.Commit(context.Background(), proto.CommitRequest{
-			TID: tid, RequestID: proto.RequestID(tid.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(memID), 10)),
-			CorrelationID: tid.CorrelationID(), ActionCommit: true, Generation: c.generationFor(memID),
-			DeadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion,
-		})
-		if err != nil {
-			return true, err
-		}
-		if !resp.Ack {
-			return true, errors.New("diagnostic phase-two delivery was not acknowledged")
-		}
-		checkpoint(delivered + 1)
-	}
-	return true, nil
+	return true
 }
 
 func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, tid proto.TransactionID, memID uint32, class string, cmp []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
