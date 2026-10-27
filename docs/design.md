@@ -8,7 +8,8 @@ flowchart TD
     SQL --> SDK[sinfonia-client]
     Index --> SDK
     SDK --> API[pkg/concertum]
-    API --> Coordinator[internal/client]
+    API --> Transaction[mini_transaction]
+    Transaction --> Coordinator[internal/client]
     Coordinator --> Wire[internal/rpcwire + internal/proto]
     Wire --> Node[internal/memnode]
     Node --> Storage[internal/storage]
@@ -17,6 +18,13 @@ flowchart TD
 This is the logical data path; some Go types in the public adapter also refer
 to internal node result types. Only the index and SQL layers have the strict
 SDK-only dependency boundary.
+
+The transaction builder receives an `Executor` from the public client. It owns
+its compare/read/write bytes and exposes gofonia's host projection methods.
+Participant discovery uses the original `Int64Set`; conversion from the retained
+unsigned 32-bit host IDs is lossless. The builder has no global host registry.
+Wire records retain their existing field names and gob registrations, while
+public transaction items use `HostId`, `Address`, and `Length`.
 
 ## Transaction execution
 
@@ -28,6 +36,10 @@ each node concurrently. Nodes try to acquire range locks without waiting,
 evaluate comparisons, collect reads, and log successful write prepares before
 voting. Lock conflict triggers bounded backoff and retry with a new transaction
 ID. Compare failure is an expected abort.
+
+Range overlap follows gofonia's `RangeLock.OverlapsWith` vocabulary. The lock
+manager also checks earlier long read locks when a later short reader ends
+before a requested write; ordering by start address does not order end addresses.
 
 For ordinary transactions, all positive votes establish the commit decision;
 the coordinator has no durable transaction log. Decision delivery is queued

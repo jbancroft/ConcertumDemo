@@ -46,14 +46,14 @@ func FuzzParseTIDKeyNeverPanics(f *testing.F) {
 	f.Add("-1:2:3")
 	f.Add("1:2:3:4")
 	f.Fuzz(func(t *testing.T, key string) {
-		tid, ok := parseTidKey(key)
+		txId, ok := parseTidKey(key)
 		if !ok {
 			return
 		}
-		canonical := tidKey(tid)
+		canonical := tidKey(txId)
 		reparsed, ok := parseTidKey(canonical)
-		if !ok || reparsed != tid {
-			t.Fatalf("canonical key %q did not preserve transaction ID %+v", canonical, tid)
+		if !ok || reparsed != txId {
+			t.Fatalf("canonical key %q did not preserve transaction ID %+v", canonical, txId)
 		}
 	})
 }

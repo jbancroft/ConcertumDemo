@@ -18,14 +18,14 @@ func TestReplayStoreBytesReturnsDurableSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tid := proto.TransactionID{CoordinatorID: 11, Counter: 1, Epoch: 7}
+	txId := proto.TransactionID{CoordinatorID: 11, Counter: 1, Epoch: 7}
 	resp := proto.ExecPrepareResponse{
 		RequestID:    "prepare-1",
-		Vote:         proto.VoteOK,
+		Vote:         proto.VoteOk,
 		ReadData:     map[uint32][]byte{1: []byte("alpha")},
 		CurrentEpoch: 13,
 	}
-	if err := store.AppendPrepare(tid, resp); err != nil {
+	if err := store.AppendPrepare(txId, resp); err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,7 +49,7 @@ func TestReplayStoreReplaceFromPublishesAndRefreshesIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldTID := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	if err := store.AppendPrepare(oldTID, proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOK, ReadData: map[uint32][]byte{1: []byte("old")}}); err != nil {
+	if err := store.AppendPrepare(oldTID, proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOk, ReadData: map[uint32][]byte{1: []byte("old")}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -115,7 +115,7 @@ func TestReplayStoreReplaceFromRejectsIncompleteJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldTID := proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 4}
-	oldResp := proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOK, ReadData: map[uint32][]byte{9: []byte("stable")}}
+	oldResp := proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOk, ReadData: map[uint32][]byte{9: []byte("stable")}}
 	if err := store.AppendPrepare(oldTID, oldResp); err != nil {
 		t.Fatal(err)
 	}
@@ -168,22 +168,22 @@ func TestReplayStoreRejectsConflictingDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tid := proto.TransactionID{CoordinatorID: 12, Counter: 1, Epoch: 1}
-	if err := store.AppendPrepare(tid, proto.ExecPrepareResponse{RequestID: "first", Vote: proto.VoteOK}); err != nil {
+	txId := proto.TransactionID{CoordinatorID: 12, Counter: 1, Epoch: 1}
+	if err := store.AppendPrepare(txId, proto.ExecPrepareResponse{RequestID: "first", Vote: proto.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendPrepare(tid, proto.ExecPrepareResponse{RequestID: "different", Vote: proto.VoteBadCmp}); !errors.Is(err, storage.ErrReplayConflict) {
+	if err := store.AppendPrepare(txId, proto.ExecPrepareResponse{RequestID: "different", Vote: proto.VoteBadCmp}); !errors.Is(err, storage.ErrReplayConflict) {
 		t.Fatalf("conflicting append error = %v, want ErrReplayConflict", err)
 	}
-	got, ok := store.GetPrepare(tid)
-	if !ok || got.RequestID != "first" || got.Vote != proto.VoteOK {
+	got, ok := store.GetPrepare(txId)
+	if !ok || got.RequestID != "first" || got.Vote != proto.VoteOk {
 		t.Fatalf("conflicting append changed original record: %+v ok=%v", got, ok)
 	}
 }
 
 func TestReplayStoreOpenTruncatesTornTail(t *testing.T) {
 	dir := t.TempDir()
-	stable := proto.ExecPrepareResponse{RequestID: "stable", Vote: proto.VoteOK, ReadData: map[uint32][]byte{1: []byte("keep")}}
+	stable := proto.ExecPrepareResponse{RequestID: "stable", Vote: proto.VoteOk, ReadData: map[uint32][]byte{1: []byte("keep")}}
 	stored, err := storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +231,7 @@ func TestReplayStoreOpenTruncatesTornTail(t *testing.T) {
 
 func TestReplayStoreOpenFailsClosedOnCompleteCorruptLine(t *testing.T) {
 	dir := t.TempDir()
-	stable := proto.ExecPrepareResponse{RequestID: "stable", Vote: proto.VoteOK}
+	stable := proto.ExecPrepareResponse{RequestID: "stable", Vote: proto.VoteOk}
 	stored, err := storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -276,13 +276,13 @@ func TestReplayStoreCompactPreservesRetryableTID(t *testing.T) {
 	if err := store.AppendPrepare(edgeExpired, proto.ExecPrepareResponse{RequestID: "e", Vote: proto.VoteBadCmp}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendPrepare(edgeKept, proto.ExecPrepareResponse{RequestID: "k", Vote: proto.VoteOK}); err != nil {
+	if err := store.AppendPrepare(edgeKept, proto.ExecPrepareResponse{RequestID: "k", Vote: proto.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendPrepare(deepKept, proto.ExecPrepareResponse{RequestID: "d", Vote: proto.VoteOK}); err != nil {
+	if err := store.AppendPrepare(deepKept, proto.ExecPrepareResponse{RequestID: "d", Vote: proto.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendOnePC(legacy, proto.ExecCommit1PCResponse{RequestID: "l", Vote: proto.VoteOK}); err != nil {
+	if err := store.AppendOnePC(legacy, proto.ExecCommit1PCResponse{RequestID: "l", Vote: proto.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Compact(storage.ReplayRetention{CurrentEpoch: 10, RetryHorizon: 8}); err != nil {
@@ -325,14 +325,14 @@ func TestReplayStoreCompactUnboundedRetentionKeepsAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tid := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 2}
-	if err := store.AppendPrepare(tid, proto.ExecPrepareResponse{RequestID: "keep", Vote: proto.VoteOK}); err != nil {
+	txId := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 2}
+	if err := store.AppendPrepare(txId, proto.ExecPrepareResponse{RequestID: "keep", Vote: proto.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Compact(storage.ReplayRetention{CurrentEpoch: 1000, RetryHorizon: 0}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := store.GetPrepare(tid); !ok {
+	if _, ok := store.GetPrepare(txId); !ok {
 		t.Fatal("unbounded retention (RetryHorizon 0) dropped a record")
 	}
 }
@@ -344,7 +344,7 @@ func TestReplayStoreOpenDiscardsValidUnterminatedTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	stableTID := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	if err := store.AppendPrepare(stableTID, proto.ExecPrepareResponse{RequestID: "stable", Vote: proto.VoteOK}); err != nil {
+	if err := store.AppendPrepare(stableTID, proto.ExecPrepareResponse{RequestID: "stable", Vote: proto.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	prefix, err := store.Bytes()
@@ -356,7 +356,7 @@ func TestReplayStoreOpenDiscardsValidUnterminatedTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tailStore.AppendPrepare(tailTID, proto.ExecPrepareResponse{RequestID: "tail", Vote: proto.VoteOK}); err != nil {
+	if err := tailStore.AppendPrepare(tailTID, proto.ExecPrepareResponse{RequestID: "tail", Vote: proto.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	tail, err := tailStore.Bytes()
@@ -389,14 +389,14 @@ func TestReplayStoreCompactRetentionAvoidsEpochOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tid := proto.TransactionID{CoordinatorID: 3, Counter: 1, Epoch: ^uint64(0)}
-	if err := store.AppendPrepare(tid, proto.ExecPrepareResponse{RequestID: "max", Vote: proto.VoteOK}); err != nil {
+	txId := proto.TransactionID{CoordinatorID: 3, Counter: 1, Epoch: ^uint64(0)}
+	if err := store.AppendPrepare(txId, proto.ExecPrepareResponse{RequestID: "max", Vote: proto.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Compact(storage.ReplayRetention{CurrentEpoch: ^uint64(0), RetryHorizon: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := store.GetPrepare(tid); !ok {
+	if _, ok := store.GetPrepare(txId); !ok {
 		t.Fatal("overflow-safe retention incorrectly dropped a near-maximum epoch")
 	}
 }

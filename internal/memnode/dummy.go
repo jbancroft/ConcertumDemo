@@ -17,12 +17,12 @@ func (d *DummyNode) Write(_ context.Context, _ uint64, _ []byte) error {
 	return nil
 }
 
-func (d *DummyNode) ExecPrepare(_ context.Context, _ proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
-	return proto.ExecPrepareResponse{Vote: proto.VoteOK}, nil
+func (d *DummyNode) ExecAndPrepare(_ context.Context, _ proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
+	return proto.ExecPrepareResponse{Vote: proto.VoteOk}, nil
 }
 
 func (d *DummyNode) ExecCommit1PC(_ context.Context, _ proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
-	return proto.ExecCommit1PCResponse{Vote: proto.VoteOK, ReadData: map[uint32][]byte{}}, nil
+	return proto.ExecCommit1PCResponse{Vote: proto.VoteOk, ReadData: map[uint32][]byte{}}, nil
 }
 
 func (d *DummyNode) Commit(_ context.Context, _ proto.CommitRequest) (proto.CommitResponse, error) {

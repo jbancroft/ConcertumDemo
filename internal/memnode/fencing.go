@@ -61,7 +61,7 @@ func isFencingPublicationOutcomeUnknown(err error) bool {
 // setFencingPublicationHookForTest injects deterministic publication failures
 // at the persistence checkpoints. It is intentionally only used by tests; a
 // production node always publishes through the platform barrier below.
-func (n *Node) setFencingPublicationHookForTest(fn func(point string) error) {
+func (n *Participant) setFencingPublicationHookForTest(fn func(point string) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.fencingPublicationHook = fn

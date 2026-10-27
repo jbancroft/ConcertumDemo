@@ -19,7 +19,7 @@ func TestRedoDecisionDeadlineIsAdditiveAndLegacyZeroIsOmitted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := legacy.AppendDurable(storage.RedoEntry{TID: proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, Participants: []uint32{1}}); err != nil {
+	if err := legacy.AddItem(storage.RedoLogItem{TransactionId: proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, HostIds: []uint32{1}}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(legacyDir, "redo.log"))
@@ -36,7 +36,7 @@ func TestRedoDecisionDeadlineIsAdditiveAndLegacyZeroIsOmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	const deadline = int64(123456789)
-	if err := deadlineLog.AppendDurable(storage.RedoEntry{TID: proto.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 1}, Participants: []uint32{1, 2}, DecisionDeadlineNanos: deadline}); err != nil {
+	if err := deadlineLog.AddItem(storage.RedoLogItem{TransactionId: proto.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 1}, HostIds: []uint32{1, 2}, DecisionDeadlineNanos: deadline}); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := storage.OpenRedoLog(deadlineDir)
@@ -71,7 +71,7 @@ func TestRedoLogBatchingReducesFsyncCallsAndPreservesDurability(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			err := log.AppendDurable(storage.RedoEntry{TID: proto.TransactionID{CoordinatorID: 1, Counter: uint64(i + 1), Epoch: 1}, Participants: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: uint64(i), Data: []byte{byte(i)}}}})
+			err := log.AddItem(storage.RedoLogItem{TransactionId: proto.TransactionID{CoordinatorID: 1, Counter: uint64(i + 1), Epoch: 1}, HostIds: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: uint64(i), Data: []byte{byte(i)}}}})
 			if err != nil {
 				t.Errorf("append failed: %v", err)
 			}
@@ -119,26 +119,26 @@ func TestReplicationBaselineStoragePrimitivesResetDurableState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tid := proto.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
 	redo, err := storage.OpenRedoLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := redo.AppendDurable(storage.RedoEntry{TID: tid}); err != nil {
+	if err := redo.AddItem(storage.RedoLogItem{TransactionId: txId}); err != nil {
 		t.Fatal(err)
 	}
-	decided, err := storage.OpenDecidedStore(dir)
+	decided, err := storage.OpenDecidedTransactionLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := decided.Append(tid, true); err != nil {
+	if err := decided.AddItem(txId, true); err != nil {
 		t.Fatal(err)
 	}
-	forced, err := storage.OpenForcedAbortStore(dir)
+	forced, err := storage.OpenForcedAbortLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := forced.Add(tid); err != nil {
+	if err := forced.AddItem(txId); err != nil {
 		t.Fatal(err)
 	}
 	if err := redo.Reset(); err != nil {
@@ -153,10 +153,10 @@ func TestReplicationBaselineStoragePrimitivesResetDurableState(t *testing.T) {
 	if len(redo.Entries()) != 0 {
 		t.Fatal("redo reset retained entries")
 	}
-	if _, ok := decided.Get(tid); ok {
+	if _, ok := decided.Get(txId); ok {
 		t.Fatal("decided reset retained a transaction")
 	}
-	if forced.Has(tid) {
+	if forced.IsForcedAbort(txId) {
 		t.Fatal("forced-abort reset retained a transaction")
 	}
 }

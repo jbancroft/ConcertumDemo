@@ -14,7 +14,7 @@ import (
 )
 
 func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
-	node, err := memnode.NewDurableNode(1, 64, filepath.Join(t.TempDir(), "node"))
+	node, err := memnode.NewDurableParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
 	}

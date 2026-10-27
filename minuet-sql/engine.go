@@ -32,17 +32,17 @@ type QueryResult struct {
 	Rows []Row
 }
 
-type IndexFactory func(memID uint32, baseAddr uint64) *minuetindex.Index
+type BTreeFactory func(hostId uint32, baseAddr uint64) *minuetindex.BTree
 
 type QuotaEnforcer interface {
 	CheckAndConsumeQuota(ctx context.Context, resource string, delta int64) error
 }
 
 type Config struct {
-	MemID        uint32
+	HostId       uint32
 	NextBaseAddr uint64
 	TxnClient    sinfoniaclient.TxnClient
-	IndexFactory IndexFactory
+	BTreeFactory BTreeFactory
 	MaxRetries   int
 	RetryBackoff time.Duration
 	Quota        QuotaEnforcer
@@ -58,7 +58,7 @@ type table struct {
 	tableID       uint64
 	schemaVersion uint32
 	indexBaseAddr uint64
-	index         *minuetindex.Index
+	index         *minuetindex.BTree
 	keyLocks      keyLocker
 }
 
@@ -92,11 +92,11 @@ func NewEngine(cfg Config) (*Engine, error) {
 	if cfg.TxnClient == nil {
 		return nil, errors.New("minuet-sql: txn client is required")
 	}
-	if cfg.IndexFactory == nil {
+	if cfg.BTreeFactory == nil {
 		return nil, errors.New("minuet-sql: index factory is required")
 	}
-	if cfg.MemID == 0 {
-		cfg.MemID = 1
+	if cfg.HostId == 0 {
+		cfg.HostId = 1
 	}
 	if cfg.NextBaseAddr == 0 {
 		cfg.NextBaseAddr = defaultCatalogNextBase
@@ -209,7 +209,7 @@ func (e *Engine) execute(ctx context.Context, p planNode) (QueryResult, error) {
 }
 
 func (e *Engine) loadCatalog(ctx context.Context) error {
-	raw, err := e.cfg.TxnClient.Read(ctx, e.cfg.MemID, catalogAddr, catalogSize)
+	raw, err := e.cfg.TxnClient.Read(ctx, e.cfg.HostId, catalogAddr, catalogSize)
 	if err != nil {
 		return err
 	}
@@ -221,7 +221,7 @@ func (e *Engine) loadCatalog(ctx context.Context) error {
 			tableID:       rec.tableID,
 			schemaVersion: rec.schemaVersion,
 			indexBaseAddr: rec.indexBaseAddr,
-			index:         e.cfg.IndexFactory(e.cfg.MemID, rec.indexBaseAddr),
+			index:         e.cfg.BTreeFactory(e.cfg.HostId, rec.indexBaseAddr),
 			keyLocks:      keyLocker{},
 		}
 	}
@@ -236,7 +236,7 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 		}
 	}
 	for attempt := 0; attempt < e.cfg.MaxRetries; attempt++ {
-		raw, err := e.cfg.TxnClient.Read(ctx, e.cfg.MemID, catalogAddr, catalogSize)
+		raw, err := e.cfg.TxnClient.Read(ctx, e.cfg.HostId, catalogAddr, catalogSize)
 		if err != nil {
 			return err
 		}
@@ -246,15 +246,15 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 		}
 		rec := catalog.newTableRecord(name)
 		next := catalog.cloneWithTable(rec)
-		cmp := []sinfoniaclient.CmpItem{
-			{MemID: e.cfg.MemID, Addr: catalogAddr, Data: raw},
-			{MemID: e.cfg.MemID, Addr: rec.indexBaseAddr, Data: make([]byte, minuetIndexSuperblockSize)},
+		compares := []sinfoniaclient.CompareItem{
+			{HostId: e.cfg.HostId, Address: catalogAddr, Data: raw},
+			{HostId: e.cfg.HostId, Address: rec.indexBaseAddr, Data: make([]byte, minuetIndexSuperblockSize)},
 		}
 		writes := []sinfoniaclient.WriteItem{
-			{MemID: e.cfg.MemID, Addr: catalogAddr, Data: encodeCatalog(next)},
-			{MemID: e.cfg.MemID, Addr: rec.indexBaseAddr, Data: make([]byte, minuetIndexSuperblockSize)},
+			{HostId: e.cfg.HostId, Address: catalogAddr, Data: encodeCatalog(next)},
+			{HostId: e.cfg.HostId, Address: rec.indexBaseAddr, Data: make([]byte, minuetIndexSuperblockSize)},
 		}
-		if !e.cfg.TxnClient.ExecAndCommit(ctx, "minuet-sql:create-table", cmp, nil, writes).Committed {
+		if !e.cfg.TxnClient.ExecuteAndCommit(ctx, "minuet-sql:create-table", compares, nil, writes).Committed {
 			time.Sleep(e.cfg.RetryBackoff)
 			continue
 		}
@@ -263,7 +263,7 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 			tableID:       rec.tableID,
 			schemaVersion: rec.schemaVersion,
 			indexBaseAddr: rec.indexBaseAddr,
-			index:         e.cfg.IndexFactory(e.cfg.MemID, rec.indexBaseAddr),
+			index:         e.cfg.BTreeFactory(e.cfg.HostId, rec.indexBaseAddr),
 			keyLocks:      keyLocker{},
 		}
 		return nil

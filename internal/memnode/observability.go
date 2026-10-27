@@ -284,7 +284,7 @@ type logWriter struct{}
 
 func (logWriter) Write(p []byte) (int, error) { return fmt.Print(string(p)) }
 
-func (n *Node) roleString() string {
+func (n *Participant) roleString() string {
 	switch n.mode {
 	case ModeReplPrimary:
 		return "primary"
@@ -295,40 +295,40 @@ func (n *Node) roleString() string {
 	}
 }
 
-func (n *Node) RecordRetry() {
+func (n *Participant) RecordRetry() {
 	n.RecordRetryForClass("")
 }
 
-func (n *Node) RecordRetryForClass(class string) {
+func (n *Participant) RecordRetryForClass(class string) {
 	n.metrics.minitransactionsRetried.Inc()
 	n.metrics.ObserveClassRetry(class, n.nowFn())
 }
 
-func (n *Node) SetLogger(logger *slog.Logger) {
+func (n *Participant) SetLogger(logger *slog.Logger) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.logger = logger
 }
 
-func (n *Node) log(level slog.Level, msg string, args ...any) {
+func (n *Participant) log(level slog.Level, msg string, args ...any) {
 	if n.logger == nil {
 		return
 	}
-	base := []any{"nodeID", n.memID, "memID", n.memID, "role", n.roleString()}
+	base := []any{"nodeID", n.hostId, "hostId", n.hostId, "role", n.roleString()}
 	base = append(base, args...)
 	n.logger.Log(context.Background(), level, msg, base...)
 }
 
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
 
-func (n *Node) StatsSnapshot() StatsResponse {
+func (n *Participant) StatsSnapshot() StatsResponse {
 	n.mu.Lock()
 	activeLocks := len(n.locks.locks)
 	role := n.roleString()
 	n.mu.Unlock()
 	now := n.nowFn()
 	var resp StatsResponse
-	resp.NodeID = n.memID
+	resp.NodeID = n.hostId
 	resp.Role = role
 	resp.Txns.Total = n.metrics.minitransactionsTotal.Value()
 	resp.Txns.Committed = n.metrics.minitransactionsCommitted.Value()
@@ -361,7 +361,7 @@ func (n *Node) StatsSnapshot() StatsResponse {
 	return resp
 }
 
-func (n *Node) storageAccessible() bool {
+func (n *Participant) storageAccessible() bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.diskImage == nil {
@@ -371,13 +371,13 @@ func (n *Node) storageAccessible() bool {
 	return err == nil
 }
 
-func (n *Node) isReady() bool {
+func (n *Participant) isReady() bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.isReadyLocked()
 }
 
-func (n *Node) isReadyLocked() bool {
+func (n *Participant) isReadyLocked() bool {
 	if !n.recoveryComplete || n.backupMode {
 		return false
 	}
@@ -387,7 +387,7 @@ func (n *Node) isReadyLocked() bool {
 	return true
 }
 
-func (n *Node) HTTPHandler(enablePrometheus bool) http.Handler {
+func (n *Participant) HTTPHandler(enablePrometheus bool) http.Handler {
 	mux := http.NewServeMux()
 	getOnly := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -425,14 +425,14 @@ func (n *Node) HTTPHandler(enablePrometheus bool) http.Handler {
 		if !healthy {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": healthy, "node_id": n.memID})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": healthy, "node_id": n.hostId})
 	}))
 	mux.HandleFunc("/ready", getOnly(func(w http.ResponseWriter, _ *http.Request) {
 		ready := n.isReady()
 		if !ready {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ready": ready, "node_id": n.memID})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ready": ready, "node_id": n.hostId})
 	}))
 	mux.HandleFunc("/debug/in_doubt", debugWrap(func(w http.ResponseWriter, _ *http.Request) {
 		r, _ := n.QueryInDoubt(context.Background(), proto.QueryInDoubtRequest{})
@@ -442,8 +442,8 @@ func (n *Node) HTTPHandler(enablePrometheus bool) http.Handler {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		var entry any
-		if n.redoLog != nil {
-			entries := n.redoLog.Entries()
+		if n.redo != nil {
+			entries := n.redo.Entries()
 			if len(entries) > 0 {
 				entry = entries[0]
 			}
@@ -456,8 +456,8 @@ func (n *Node) HTTPHandler(enablePrometheus bool) http.Handler {
 		entries := []any{}
 		head := any(nil)
 		tail := any(nil)
-		if n.redoLog != nil {
-			raw := n.redoLog.Entries()
+		if n.redo != nil {
+			raw := n.redo.Entries()
 			if len(raw) > 0 {
 				head = raw[0]
 				tail = raw[len(raw)-1]
@@ -466,12 +466,12 @@ func (n *Node) HTTPHandler(enablePrometheus bool) http.Handler {
 			for _, e := range raw {
 				decidedCommit, known := false, false
 				if n.decided != nil {
-					decidedCommit, known = n.decided.Get(e.TID)
+					decidedCommit, known = n.decided.Get(e.TransactionId)
 				}
 				entries = append(entries, map[string]any{
-					"tid":            e.TID,
-					"correlation_id": e.TID.CorrelationID(),
-					"participants":   e.Participants,
+					"tid":            e.TransactionId,
+					"correlation_id": e.TransactionId.CorrelationID(),
+					"participants":   e.HostIds,
 					"write_count":    len(e.WriteItems),
 					"known_decision": known,
 					"decided_commit": decidedCommit,
@@ -487,13 +487,13 @@ func (n *Node) HTTPHandler(enablePrometheus bool) http.Handler {
 		_ = json.NewEncoder(w).Encode(map[string]any{"head": head, "tail": tail, "entries": entries, "processed_ptr": processedPtr})
 	}))
 	mux.HandleFunc("/debug/txn_timeline", debugWrap(func(w http.ResponseWriter, r *http.Request) {
-		tid, err := parseTIDQuery(r)
+		txId, err := parseTIDQuery(r)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"tid": tid, "correlation_id": tid.CorrelationID(), "events": n.TimelineForTID(tid)})
+		_ = json.NewEncoder(w).Encode(map[string]any{"tid": txId, "correlation_id": txId.CorrelationID(), "events": n.TimelineForTID(txId)})
 	}))
 	mux.HandleFunc("/debug/forced_abort", debugWrap(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"forced_abort_current": n.metrics.forcedAbortCountCurrent.Value()})
@@ -550,7 +550,7 @@ func parseTIDQuery(r *http.Request) (proto.TransactionID, error) {
 	return proto.TransactionID{CoordinatorID: coord, Counter: counter, Epoch: epoch}, nil
 }
 
-func (n *Node) prometheusMetrics() string {
+func (n *Participant) prometheusMetrics() string {
 	lines := []string{
 		"# TYPE concertum_minitransactions_total counter",
 		"concertum_minitransactions_total " + strconv.FormatUint(n.metrics.minitransactionsTotal.Value(), 10),

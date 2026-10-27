@@ -13,7 +13,7 @@ import (
 )
 
 type countingNode struct {
-	*memnode.Node
+	*memnode.Participant
 	mu             sync.Mutex
 	execPrepareN   int
 	execCommit1PCN int
@@ -21,40 +21,40 @@ type countingNode struct {
 	commitBatchN   int
 }
 
-func (n *countingNode) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
+func (n *countingNode) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
 	n.mu.Lock()
 	n.execPrepareN++
 	n.mu.Unlock()
-	return n.Node.ExecPrepare(ctx, req)
+	return n.Participant.ExecAndPrepare(ctx, req)
 }
 
 func (n *countingNode) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
 	n.mu.Lock()
 	n.execCommit1PCN++
 	n.mu.Unlock()
-	return n.Node.ExecCommit1PC(ctx, req)
+	return n.Participant.ExecCommit1PC(ctx, req)
 }
 
 func (n *countingNode) Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error) {
 	n.mu.Lock()
 	n.commitN++
 	n.mu.Unlock()
-	return n.Node.Commit(ctx, req)
+	return n.Participant.Commit(ctx, req)
 }
 
 func (n *countingNode) CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
 	n.mu.Lock()
 	n.commitBatchN++
 	n.mu.Unlock()
-	return n.Node.CommitBatch(ctx, req)
+	return n.Participant.CommitBatch(ctx, req)
 }
 
 func TestSingleParticipantUses1PCFastPath(t *testing.T) {
-	n := &countingNode{Node: memnode.NewNode(64)}
-	coord := client.NewCoordinator(map[uint32]client.MemNode{1: n})
+	n := &countingNode{Participant: memnode.NewParticipant(64)}
+	coord := client.NewCoordinator(map[uint32]client.Participant{1: n})
 	c := concertum.NewClient(newCoordinatorBackend(coord))
 
-	committed, _, status := c.NewMTx().Write(1, 0, []byte("x")).ExecAndCommit(context.Background())
+	committed, _, status := c.NewMiniTransaction().Write(1, 0, []byte("x")).ExecuteAndCommit(context.Background())
 	if !committed || status != concertum.StatusCommitted {
 		t.Fatalf("expected commit, got committed=%v status=%v", committed, status)
 	}
@@ -70,9 +70,9 @@ func TestSingleParticipantUses1PCFastPath(t *testing.T) {
 }
 
 func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
-	n1 := memnode.NewNode(4096)
-	n2 := memnode.NewNode(4096)
-	coord := client.NewCoordinator(map[uint32]client.MemNode{1: n1, 2: n2})
+	n1 := memnode.NewParticipant(4096)
+	n2 := memnode.NewParticipant(4096)
+	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	c := concertum.NewClient(newCoordinatorBackend(coord))
 
 	const txns = 1000
@@ -82,10 +82,10 @@ func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			committed, _, _ := c.NewMTx().
+			committed, _, _ := c.NewMiniTransaction().
 				Write(1, uint64(i), []byte{byte(i)}).
 				Write(2, uint64(i), []byte{byte(i)}).
-				ExecAndCommit(context.Background())
+				ExecuteAndCommit(context.Background())
 			if !committed {
 				t.Errorf("txn %d aborted", i)
 			}
@@ -104,13 +104,13 @@ func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
 }
 
 func TestCommitMessageBatchingReducesIndividualCommitRPCs(t *testing.T) {
-	n1 := &countingNode{Node: memnode.NewNode(256)}
-	n2 := &countingNode{Node: memnode.NewNode(256)}
-	coord := client.NewCoordinator(map[uint32]client.MemNode{1: n1, 2: n2})
+	n1 := &countingNode{Participant: memnode.NewParticipant(256)}
+	n2 := &countingNode{Participant: memnode.NewParticipant(256)}
+	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	c := concertum.NewClient(newCoordinatorBackend(coord))
 
 	for i := 0; i < 200; i++ {
-		committed, _, _ := c.NewMTx().Write(1, uint64(i%64), []byte("a")).Write(2, uint64(i%64), []byte("b")).ExecAndCommit(context.Background())
+		committed, _, _ := c.NewMiniTransaction().Write(1, uint64(i%64), []byte("a")).Write(2, uint64(i%64), []byte("b")).ExecuteAndCommit(context.Background())
 		if !committed {
 			t.Fatalf("unexpected abort at %d", i)
 		}
@@ -133,15 +133,15 @@ func TestCommitMessageBatchingReducesIndividualCommitRPCs(t *testing.T) {
 }
 
 func TestFlushPendingCommitsAppliesQueuedDecisions(t *testing.T) {
-	n1 := memnode.NewNode(64)
-	n2 := memnode.NewNode(64)
-	coord := client.NewCoordinator(map[uint32]client.MemNode{1: n1, 2: n2})
+	n1 := memnode.NewParticipant(64)
+	n2 := memnode.NewParticipant(64)
+	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	c := concertum.NewClient(coord)
 
-	committed, _, status := c.NewMTx().
+	committed, _, status := c.NewMiniTransaction().
 		Write(1, 4, []byte("one")).
 		Write(2, 8, []byte("two")).
-		ExecAndCommit(context.Background())
+		ExecuteAndCommit(context.Background())
 	if !committed || status != concertum.StatusCommitted {
 		t.Fatalf("unexpected transaction outcome: committed=%v status=%v", committed, status)
 	}

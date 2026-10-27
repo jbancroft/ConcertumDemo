@@ -20,20 +20,20 @@ const (
 	baselineArtifactReplay           = "replay"
 )
 
-func (n *Node) SetReplicationBaselineBoundaryHookForTest(fn func(phase string) error) {
+func (n *Participant) SetReplicationBaselineBoundaryHookForTest(fn func(phase string) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.baselineInstallBoundaryHook = fn
 }
 
-func (n *Node) callBaselineBoundaryHookLocked(phase string) error {
+func (n *Participant) callBaselineBoundaryHookLocked(phase string) error {
 	if n.baselineInstallBoundaryHook == nil {
 		return nil
 	}
 	return n.baselineInstallBoundaryHook(phase)
 }
 
-func (n *Node) ExportReplicationBaselineChunk(ctx context.Context, req proto.ExportReplicationBaselineChunkRequest) (proto.ExportReplicationBaselineChunkResponse, error) {
+func (n *Participant) ExportReplicationBaselineChunk(ctx context.Context, req proto.ExportReplicationBaselineChunkRequest) (proto.ExportReplicationBaselineChunkResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ExportReplicationBaselineChunkResponse{Ack: false}, err
 	}
@@ -128,14 +128,14 @@ func (n *Node) ExportReplicationBaselineChunk(ctx context.Context, req proto.Exp
 			return proto.ExportReplicationBaselineChunkResponse{Ack: false}, err
 		}
 		resp.SHA256 = digest
-		if artifact == baselineArtifactImage && n.redoLog != nil {
-			resp.BoundaryTID = n.redoLog.LastTID()
+		if artifact == baselineArtifactImage && n.redo != nil {
+			resp.BoundaryTID = n.redo.LastTID()
 		}
 	}
 	return resp, nil
 }
 
-func (n *Node) BeginReplicationBaseline(ctx context.Context, req proto.BeginReplicationBaselineRequest) (proto.BeginReplicationBaselineResponse, error) {
+func (n *Participant) BeginReplicationBaseline(ctx context.Context, req proto.BeginReplicationBaselineRequest) (proto.BeginReplicationBaselineResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.BeginReplicationBaselineResponse{Ack: false}, err
 	}
@@ -208,7 +208,7 @@ func (n *Node) BeginReplicationBaseline(ctx context.Context, req proto.BeginRepl
 	return proto.BeginReplicationBaselineResponse{Ack: true}, nil
 }
 
-func (n *Node) WriteReplicationBaselineChunk(ctx context.Context, req proto.WriteReplicationBaselineChunkRequest) (proto.WriteReplicationBaselineChunkResponse, error) {
+func (n *Participant) WriteReplicationBaselineChunk(ctx context.Context, req proto.WriteReplicationBaselineChunkRequest) (proto.WriteReplicationBaselineChunkResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.WriteReplicationBaselineChunkResponse{Ack: false}, err
 	}
@@ -255,7 +255,7 @@ func (n *Node) WriteReplicationBaselineChunk(ctx context.Context, req proto.Writ
 	return proto.WriteReplicationBaselineChunkResponse{Ack: true}, nil
 }
 
-func (n *Node) CommitReplicationBaseline(ctx context.Context, req proto.CommitReplicationBaselineRequest) (proto.CommitReplicationBaselineResponse, error) {
+func (n *Participant) CommitReplicationBaseline(ctx context.Context, req proto.CommitReplicationBaselineRequest) (proto.CommitReplicationBaselineResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.CommitReplicationBaselineResponse{Ack: false}, err
 	}
@@ -326,7 +326,7 @@ func (n *Node) CommitReplicationBaseline(ctx context.Context, req proto.CommitRe
 	return proto.CommitReplicationBaselineResponse{Ack: true, BoundaryTID: boundary}, nil
 }
 
-func (n *Node) AbortReplicationBaseline(ctx context.Context, req proto.AbortReplicationBaselineRequest) (proto.AbortReplicationBaselineResponse, error) {
+func (n *Participant) AbortReplicationBaseline(ctx context.Context, req proto.AbortReplicationBaselineRequest) (proto.AbortReplicationBaselineResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.AbortReplicationBaselineResponse{Ack: false}, err
 	}
@@ -345,7 +345,7 @@ func (n *Node) AbortReplicationBaseline(ctx context.Context, req proto.AbortRepl
 	return proto.AbortReplicationBaselineResponse{Ack: true}, nil
 }
 
-func (n *Node) abortBaselineTransferLocked() {
+func (n *Participant) abortBaselineTransferLocked() {
 	if n.baselineTransfer == nil {
 		return
 	}
@@ -362,18 +362,18 @@ func (n *Node) abortBaselineTransferLocked() {
 	n.baselineTransfer = nil
 }
 
-func (n *Node) installReplicationBaselineFileLocked(owner, path, replayPath string, boundary proto.TransactionID) (proto.InstallReplicationBaselineResponse, error) {
+func (n *Participant) installReplicationBaselineFileLocked(owner, path, replayPath string, boundary proto.TransactionID) (proto.InstallReplicationBaselineResponse, error) {
 	return n.installReplicationBaselineLocked(owner, nil, path, replayPath, boundary)
 }
 
-func (n *Node) installReplicationBaselineBytesLocked(owner string, image, checksum []byte, boundary proto.TransactionID) (proto.InstallReplicationBaselineResponse, error) {
+func (n *Participant) installReplicationBaselineBytesLocked(owner string, image, checksum []byte, boundary proto.TransactionID) (proto.InstallReplicationBaselineResponse, error) {
 	if len(checksum) != sha256.Size || !equalBytes(checksum, sha256Bytes(image)) {
 		return proto.InstallReplicationBaselineResponse{Ack: false}, errors.New("replication baseline checksum mismatch")
 	}
 	return n.installReplicationBaselineLocked(owner, image, "", "", boundary)
 }
 
-func (n *Node) installReplicationBaselineLocked(owner string, image []byte, stagedPath, stagedReplayPath string, boundary proto.TransactionID) (proto.InstallReplicationBaselineResponse, error) {
+func (n *Participant) installReplicationBaselineLocked(owner string, image []byte, stagedPath, stagedReplayPath string, boundary proto.TransactionID) (proto.InstallReplicationBaselineResponse, error) {
 	if err := n.touchGlobalLockLocked(owner); err != nil {
 		return proto.InstallReplicationBaselineResponse{Ack: false}, err
 	}
@@ -415,8 +415,8 @@ func (n *Node) installReplicationBaselineLocked(owner string, image []byte, stag
 			return proto.InstallReplicationBaselineResponse{Ack: false}, err
 		}
 	}
-	if n.redoLog != nil {
-		if err := n.redoLog.Reset(); err != nil {
+	if n.redo != nil {
+		if err := n.redo.Reset(); err != nil {
 			n.markBaselineInstallFailedLocked(err)
 			return proto.InstallReplicationBaselineResponse{Ack: false}, err
 		}
@@ -435,8 +435,8 @@ func (n *Node) installReplicationBaselineLocked(owner string, image []byte, stag
 			return proto.InstallReplicationBaselineResponse{Ack: false}, err
 		}
 	}
-	if n.forcedAbort != nil {
-		if err := n.forcedAbort.Reset(); err != nil {
+	if n.forcedAborts != nil {
+		if err := n.forcedAborts.Reset(); err != nil {
 			n.markBaselineInstallFailedLocked(err)
 			return proto.InstallReplicationBaselineResponse{Ack: false}, err
 		}
@@ -480,14 +480,14 @@ func (n *Node) installReplicationBaselineLocked(owner string, image []byte, stag
 	return proto.InstallReplicationBaselineResponse{Ack: true, BoundaryTID: boundary}, nil
 }
 
-func (n *Node) resetBaselineMemoryStateLocked() {
+func (n *Participant) resetBaselineMemoryStateLocked() {
 	n.recoveryComplete = true
-	n.inDoubt = map[proto.TransactionID]*preparedTxn{}
-	n.allLogTIDs = map[proto.TransactionID]struct{}{}
+	n.inDoubt = map[proto.TransactionID]*inDoubtTx{}
+	n.allLogTxIds = map[proto.TransactionID]struct{}{}
 	n.appliedLocal = map[proto.TransactionID]bool{}
 	n.appliedRemote = map[proto.TransactionID]map[uint32]bool{}
 	n.pendingNotify = map[uint32]map[proto.TransactionID]struct{}{}
-	n.logParticipants = map[proto.TransactionID][]uint32{}
+	n.logHostIds = map[proto.TransactionID][]uint32{}
 	n.prepareOutcomes = map[proto.TransactionID]prepareOutcome{}
 	n.onePCOutcomes = map[proto.TransactionID]onePCOutcome{}
 	n.commitOutcomes = map[proto.TransactionID]commitOutcome{}
@@ -502,20 +502,20 @@ func (n *Node) resetBaselineMemoryStateLocked() {
 	n.setReplicationErrorLocked(nil)
 }
 
-func (n *Node) markBaselineInstallFailedLocked(err error) {
+func (n *Participant) markBaselineInstallFailedLocked(err error) {
 	n.baselineRecoveryRequired = true
 	n.recoveryComplete = false
 	n.replicaSynced = false
 	n.setReplicationErrorLocked(err)
 }
 
-func (n *Node) replicationBaselineIngressBlockedLocked() bool {
+func (n *Participant) replicationBaselineIngressBlockedLocked() bool {
 	// A failed install clears its staged transfer but remains unsafe until the
 	// next durable open rolls back the published journal.
 	return n.baselineTransfer != nil || n.baselineRecoveryRequired
 }
 
-func (n *Node) baselineTransferChunkLimit() int {
+func (n *Participant) baselineTransferChunkLimit() int {
 	return baselineChunkSize
 }
 

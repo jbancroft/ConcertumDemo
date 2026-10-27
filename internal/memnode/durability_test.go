@@ -21,12 +21,12 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	dir := t.TempDir()
 	aDir := filepath.Join(dir, "a")
 	bDir := filepath.Join(dir, "b")
-	a, err := memnode.NewDurableNode(1, 64, aDir)
+	a, err := memnode.NewDurableParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	b, err := memnode.NewDurableNode(2, 64, bDir)
+	b, err := memnode.NewDurableParticipant(2, 64, bDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,20 +34,20 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
 
-	tid := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
 	participants := []uint32{1, 2}
-	if _, err := a.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: participants, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}); err != nil {
+	if _, err := a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: participants, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: participants, WriteItems: []proto.WriteItem{{MemID: 2, Addr: 0, Data: []byte("B")}}}); err != nil {
+	if _, err := b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: participants, WriteItems: []proto.WriteItem{{MemID: 2, Addr: 0, Data: []byte("B")}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Commit(ctx, proto.CommitRequest{TID: tid, ActionCommit: true}); err != nil {
+	if _, err := b.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: true}); err != nil {
 		t.Fatal(err)
 	}
 
 	_ = a.Close()
-	a2, err := memnode.NewDurableNode(1, 64, aDir)
+	a2, err := memnode.NewDurableParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,30 +70,30 @@ func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
 	dir := t.TempDir()
 	aDir := filepath.Join(dir, "a")
 	bDir := filepath.Join(dir, "b")
-	a, err := memnode.NewDurableNode(1, 64, aDir)
+	a, err := memnode.NewDurableParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	b, err := memnode.NewDurableNode(2, 64, bDir)
+	b, err := memnode.NewDurableParticipant(2, 64, bDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = b.Close() })
-	tid := proto.TransactionID{CoordinatorID: 7, Counter: 4, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 7, Counter: 4, Epoch: 1}
 	participants := []uint32{1, 2}
-	if _, err := a.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: participants, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 5, Data: []byte("K")}}}); err != nil {
+	if _, err := a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: participants, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 5, Data: []byte("K")}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: participants, WriteItems: []proto.WriteItem{{MemID: 2, Addr: 5, Data: []byte("Z")}}}); err != nil {
+	if _, err := b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: participants, WriteItems: []proto.WriteItem{{MemID: 2, Addr: 5, Data: []byte("Z")}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Commit(ctx, proto.CommitRequest{TID: tid, ActionCommit: false}); err != nil {
+	if _, err := b.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: false}); err != nil {
 		t.Fatal(err)
 	}
 
 	_ = a.Close()
-	a2, err := memnode.NewDurableNode(1, 64, aDir)
+	a2, err := memnode.NewDurableParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
 func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	n, err := memnode.NewDurableNode(1, 32, filepath.Join(dir, "n"))
+	n, err := memnode.NewDurableParticipant(1, 32, filepath.Join(dir, "n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,12 +122,12 @@ func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
 	if err := n.ApplyWriteForTest(0, []byte("seed")); err != nil {
 		t.Fatal(err)
 	}
-	tid := proto.TransactionID{CoordinatorID: 9, Counter: 9, Epoch: 1}
-	resp, err := n.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: []uint32{1}, ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 4}}})
+	txId := proto.TransactionID{CoordinatorID: 9, Counter: 9, Epoch: 1}
+	resp, err := n.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: []uint32{1}, ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 4}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Vote != proto.VoteOK {
+	if resp.Vote != proto.VoteOk {
 		t.Fatalf("expected OK vote, got %v", resp.Vote)
 	}
 	if n.RedoEntryCountForTest() != 0 {
@@ -138,19 +138,19 @@ func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
 func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	a, _ := memnode.NewDurableNode(1, 64, filepath.Join(root, "a"))
-	b, _ := memnode.NewDurableNode(2, 64, filepath.Join(root, "b"))
+	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
+	b, _ := memnode.NewDurableParticipant(2, 64, filepath.Join(root, "b"))
 	t.Cleanup(func() { _ = a.Close() })
 	t.Cleanup(func() { _ = b.Close() })
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
 
-	tid := proto.TransactionID{CoordinatorID: 1, Counter: 11, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 1, Counter: 11, Epoch: 1}
 	parts := []uint32{1, 2}
-	_, _ = a.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: parts, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("a")}}})
-	_, _ = b.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: parts, WriteItems: []proto.WriteItem{{MemID: 2, Addr: 0, Data: []byte("b")}}})
-	_, _ = a.Commit(ctx, proto.CommitRequest{TID: tid, ActionCommit: true})
-	_, _ = b.Commit(ctx, proto.CommitRequest{TID: tid, ActionCommit: true})
+	_, _ = a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("a")}}})
+	_, _ = b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []proto.WriteItem{{MemID: 2, Addr: 0, Data: []byte("b")}}})
+	_, _ = a.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: true})
+	_, _ = b.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: true})
 	a.FlushAppliedNotifications(ctx)
 	b.FlushAppliedNotifications(ctx)
 
@@ -160,10 +160,10 @@ func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 	if a.RedoEntryCountForTest() != 0 {
 		t.Fatalf("expected redo gc to truncate committed entry")
 	}
-	if a.HasDecidedForTest(tid) {
+	if a.HasDecidedForTest(txId) {
 		t.Fatalf("expected decided entry cleaned")
 	}
-	if a.HasAppliedTrackingForTest(tid) {
+	if a.HasAppliedTrackingForTest(txId) {
 		t.Fatalf("expected applied tracking cleaned")
 	}
 }
@@ -171,12 +171,12 @@ func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 func TestRedoLogGCNoPrematureTruncationWithoutRemoteConfirm(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	a, _ := memnode.NewDurableNode(1, 64, filepath.Join(root, "a"))
+	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
 	t.Cleanup(func() { _ = a.Close() })
-	tid := proto.TransactionID{CoordinatorID: 1, Counter: 12, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 1, Counter: 12, Epoch: 1}
 	parts := []uint32{1, 2}
-	_, _ = a.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: parts, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 1, Data: []byte("a")}}})
-	_, _ = a.Commit(ctx, proto.CommitRequest{TID: tid, ActionCommit: true})
+	_, _ = a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 1, Data: []byte("a")}}})
+	_, _ = a.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: true})
 
 	if err := a.RunRedoLogGC(ctx); err != nil {
 		t.Fatal(err)
@@ -189,11 +189,11 @@ func TestRedoLogGCNoPrematureTruncationWithoutRemoteConfirm(t *testing.T) {
 func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	a, _ := memnode.NewDurableNode(1, 64, filepath.Join(root, "a"))
+	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
 	t.Cleanup(func() { _ = a.Close() })
-	tid := proto.TransactionID{CoordinatorID: 1, Counter: 13, Epoch: 1}
-	_, _ = a.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 2, Data: []byte("a")}}})
-	_, _ = a.Commit(ctx, proto.CommitRequest{TID: tid, ActionCommit: false})
+	txId := proto.TransactionID{CoordinatorID: 1, Counter: 13, Epoch: 1}
+	_, _ = a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 2, Data: []byte("a")}}})
+	_, _ = a.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: false})
 
 	if err := a.RunRedoLogGC(ctx); err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
 func TestForcedAbortEpochGC(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	n, _ := memnode.NewDurableNode(1, 64, filepath.Join(root, "n"))
+	n, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "n"))
 	t.Cleanup(func() { _ = n.Close() })
 	base := time.Unix(1000, 0)
 	n.SetEpochSourceForTest(time.Second, func() time.Time { return base })
@@ -232,18 +232,18 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
 	bDir := filepath.Join(root, "b")
-	a, _ := memnode.NewDurableNode(1, 64, aDir)
-	b, _ := memnode.NewDurableNode(2, 64, bDir)
+	a, _ := memnode.NewDurableParticipant(1, 64, aDir)
+	b, _ := memnode.NewDurableParticipant(2, 64, bDir)
 	t.Cleanup(func() { _ = a.Close() })
 	t.Cleanup(func() { _ = b.Close() })
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
-	tid := proto.TransactionID{CoordinatorID: 5, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 5, Counter: 1, Epoch: 1}
 	parts := []uint32{1, 2}
-	_, _ = a.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: parts, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 7, Data: []byte("x")}}})
-	_, _ = b.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: parts, WriteItems: []proto.WriteItem{{MemID: 2, Addr: 7, Data: []byte("y")}}})
-	_, _ = a.Commit(ctx, proto.CommitRequest{TID: tid, ActionCommit: true})
-	_, _ = b.Commit(ctx, proto.CommitRequest{TID: tid, ActionCommit: true})
+	_, _ = a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 7, Data: []byte("x")}}})
+	_, _ = b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []proto.WriteItem{{MemID: 2, Addr: 7, Data: []byte("y")}}})
+	_, _ = a.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: true})
+	_, _ = b.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: true})
 	a.FlushAppliedNotifications(ctx)
 	b.FlushAppliedNotifications(ctx)
 	if err := a.RunRedoLogGC(ctx); err != nil {
@@ -251,7 +251,7 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 	}
 
 	_ = a.Close()
-	a2, err := memnode.NewDurableNode(1, 64, aDir)
+	a2, err := memnode.NewDurableParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 
 func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 	ctx := context.Background()
-	n, err := memnode.NewDurableNode(1, 64, filepath.Join(t.TempDir(), "node"))
+	n, err := memnode.NewDurableParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,9 +282,9 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 
 	fault := errors.New("injected write apply failure")
 	n.SetWriteApplyFaultForTest(func(uint64, []byte) error { return fault })
-	tid := proto.TransactionID{CoordinatorID: 1, Counter: 99, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 1, Counter: 99, Epoch: 1}
 	resp, err := n.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{
-		TID:        tid,
+		TID:        txId,
 		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 4, Data: []byte("redo")}},
 	})
 	if !errors.Is(err, fault) || resp.Vote != proto.VoteBadInternal {
@@ -333,7 +333,7 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 	}
 	retry, err := n.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{
 		RequestID:  "retry-after-recovery",
-		TID:        tid,
+		TID:        txId,
 		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 4, Data: []byte("redo")}},
 	})
 	if !errors.Is(err, memnode.ErrReplayUnavailable) || retry.Vote != proto.VoteBadInternal {

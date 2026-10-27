@@ -56,22 +56,22 @@ func (m *memTxnClient) Write(_ context.Context, _ uint32, addr uint64, data []by
 	return nil
 }
 
-func (m *memTxnClient) ExecAndCommit(_ context.Context, _ string, cmp []sinfoniaclient.CmpItem, _ []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
+func (m *memTxnClient) ExecuteAndCommit(_ context.Context, _ string, compares []sinfoniaclient.CompareItem, _ []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, c := range cmp {
-		if string(m.ram[int(c.Addr):int(c.Addr)+len(c.Data)]) != string(c.Data) {
+	for _, c := range compares {
+		if string(m.ram[int(c.Address):int(c.Address)+len(c.Data)]) != string(c.Data) {
 			return sinfoniaclient.ExecResult{Committed: false, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 		}
 	}
 	for _, w := range writes {
-		copy(m.ram[int(w.Addr):int(w.Addr)+len(w.Data)], w.Data)
+		copy(m.ram[int(w.Address):int(w.Address)+len(w.Data)], w.Data)
 	}
 	return sinfoniaclient.ExecResult{Committed: true, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 }
 
 func TestInsertSearchDeleteSplitMergeRegression(t *testing.T) {
-	idx := New(newMemTxnClient(), Config{MemID: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
+	idx := NewBTree(newMemTxnClient(), Config{HostId: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
 	ctx := context.Background()
 	for i := uint64(1); i <= 80; i++ {
 		if err := idx.Insert(ctx, i, i*10); err != nil {
@@ -103,7 +103,7 @@ func TestInsertSearchDeleteSplitMergeRegression(t *testing.T) {
 }
 
 func TestRangeScanIteratorStableSnapshot(t *testing.T) {
-	idx := New(newMemTxnClient(), Config{MemID: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
+	idx := NewBTree(newMemTxnClient(), Config{HostId: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
 	ctx := context.Background()
 	for i := uint64(1); i <= 30; i++ {
 		_ = idx.Insert(ctx, i, i)
@@ -129,7 +129,7 @@ func TestRangeScanIteratorStableSnapshot(t *testing.T) {
 }
 
 func TestRangeScanReturnsEmptyForUnmatchedRanges(t *testing.T) {
-	idx := New(newMemTxnClient(), Config{MemID: 1})
+	idx := NewBTree(newMemTxnClient(), Config{HostId: 1})
 	if err := idx.Insert(context.Background(), 10, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestRangeScanReturnsEmptyForUnmatchedRanges(t *testing.T) {
 
 func TestPropertyOrderingAndModelParity(t *testing.T) {
 	rng := rand.New(rand.NewSource(77))
-	idx := New(newMemTxnClient(), Config{MemID: 1, MaxRetries: 40, RetryBackoff: time.Microsecond})
+	idx := NewBTree(newMemTxnClient(), Config{HostId: 1, MaxRetries: 40, RetryBackoff: time.Microsecond})
 	ctx := context.Background()
 	model := map[uint64]uint64{}
 	for step := 0; step < 800; step++ {
@@ -199,7 +199,7 @@ func TestPropertyOrderingAndModelParity(t *testing.T) {
 }
 
 func TestConcurrentMutationSafety(t *testing.T) {
-	idx := New(newMemTxnClient(), Config{MemID: 1, MaxRetries: 80, RetryBackoff: time.Microsecond})
+	idx := NewBTree(newMemTxnClient(), Config{HostId: 1, MaxRetries: 80, RetryBackoff: time.Microsecond})
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	for w := 0; w < 12; w++ {
@@ -227,27 +227,27 @@ type conflictInjectingClient struct {
 	calls        int32
 }
 
-func (c *conflictInjectingClient) Read(ctx context.Context, memID uint32, addr uint64, length uint32) ([]byte, error) {
-	return c.base.Read(ctx, memID, addr, length)
+func (c *conflictInjectingClient) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
+	return c.base.Read(ctx, hostId, addr, length)
 }
 
-func (c *conflictInjectingClient) Write(ctx context.Context, memID uint32, addr uint64, data []byte) error {
-	return c.base.Write(ctx, memID, addr, data)
+func (c *conflictInjectingClient) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
+	return c.base.Write(ctx, hostId, addr, data)
 }
 
-func (c *conflictInjectingClient) ExecAndCommit(ctx context.Context, class string, cmp []sinfoniaclient.CmpItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
+func (c *conflictInjectingClient) ExecuteAndCommit(ctx context.Context, class string, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
 	_ = class
 	_ = reads
 	call := atomic.AddInt32(&c.calls, 1)
 	if call <= atomic.LoadInt32(&c.rejectFirstN) {
 		return sinfoniaclient.ExecResult{Committed: false, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 	}
-	return c.base.ExecAndCommit(ctx, class, cmp, reads, writes)
+	return c.base.ExecuteAndCommit(ctx, class, compares, reads, writes)
 }
 
 func TestInsertRetriesConflictAndEventuallyCommits(t *testing.T) {
 	client := &conflictInjectingClient{base: newMemTxnClient(), rejectFirstN: 3}
-	idx := New(client, Config{MemID: 1, MaxRetries: 10, RetryBackoff: 10 * time.Microsecond})
+	idx := NewBTree(client, Config{HostId: 1, MaxRetries: 10, RetryBackoff: 10 * time.Microsecond})
 	ctx := context.Background()
 	if err := idx.Insert(ctx, 42, 4200); err != nil {
 		t.Fatalf("insert with retry: %v", err)
@@ -263,7 +263,7 @@ func TestInsertRetriesConflictAndEventuallyCommits(t *testing.T) {
 
 func TestInsertExhaustsRetryBudget(t *testing.T) {
 	client := &conflictInjectingClient{base: newMemTxnClient(), rejectFirstN: 100}
-	idx := New(client, Config{MemID: 1, MaxRetries: 4, RetryBackoff: 10 * time.Microsecond})
+	idx := NewBTree(client, Config{HostId: 1, MaxRetries: 4, RetryBackoff: 10 * time.Microsecond})
 	ctx := context.Background()
 	err := idx.Insert(ctx, 5, 50)
 	if !errors.Is(err, ErrBusy) {
@@ -275,7 +275,7 @@ func TestInsertExhaustsRetryBudget(t *testing.T) {
 }
 
 func TestDeleteRebalanceRootCollapseAndEmptyTree(t *testing.T) {
-	idx := New(newMemTxnClient(), Config{MemID: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
+	idx := NewBTree(newMemTxnClient(), Config{HostId: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
 	ctx := context.Background()
 	for i := uint64(1); i <= 64; i++ {
 		if err := idx.Insert(ctx, i, i*100); err != nil {
@@ -300,7 +300,7 @@ func TestDeleteRebalanceRootCollapseAndEmptyTree(t *testing.T) {
 	}
 }
 
-func assertTreeInvariants(t *testing.T, idx *Index, ctx context.Context) {
+func assertTreeInvariants(t *testing.T, idx *BTree, ctx context.Context) {
 	t.Helper()
 	s, err := idx.loadSnapshot(ctx)
 	if err != nil {
@@ -313,42 +313,42 @@ func assertTreeInvariants(t *testing.T, idx *Index, ctx context.Context) {
 	var walk func(id uint32, isRoot bool) (min, max uint64)
 	walk = func(id uint32, isRoot bool) (uint64, uint64) {
 		n := s.nodes[id]
-		if n.Leaf {
-			if len(n.Keys) != len(n.Values) {
+		if n.isLeaf {
+			if len(n.keys) != len(n.values) {
 				t.Fatalf("leaf key/value mismatch")
 			}
-			if !isRoot && len(n.Keys) < minLeafKeys() {
+			if !isRoot && len(n.keys) < minLeafKeys() {
 				t.Fatalf("leaf underflow")
 			}
-			if len(n.Keys) > maxLeafKeys {
+			if len(n.keys) > maxLeafKeys {
 				t.Fatalf("leaf overflow")
 			}
-			for i := 1; i < len(n.Keys); i++ {
-				if n.Keys[i-1] >= n.Keys[i] {
+			for i := 1; i < len(n.keys); i++ {
+				if n.keys[i-1] >= n.keys[i] {
 					t.Fatalf("leaf keys not strict ascending")
 				}
 			}
 			seenLeaves[id] = true
-			if len(n.Keys) == 0 {
+			if len(n.keys) == 0 {
 				return 0, 0
 			}
-			return n.Keys[0], n.Keys[len(n.Keys)-1]
+			return n.keys[0], n.keys[len(n.keys)-1]
 		}
-		if len(n.Children) != len(n.Keys)+1 {
+		if len(n.children) != len(n.keys)+1 {
 			t.Fatalf("internal child/key mismatch")
 		}
-		if !isRoot && len(n.Keys) < minInternalKeys() {
+		if !isRoot && len(n.keys) < minInternalKeys() {
 			t.Fatalf("internal underflow")
 		}
-		if len(n.Keys) > maxInternalKeys {
+		if len(n.keys) > maxInternalKeys {
 			t.Fatalf("internal overflow")
 		}
-		cmin, cmax := walk(n.Children[0], false)
+		cmin, cmax := walk(n.children[0], false)
 		_ = cmin
 		minv := cmin
 		maxv := cmax
-		for i := 1; i < len(n.Children); i++ {
-			nmin, nmax := walk(n.Children[i], false)
+		for i := 1; i < len(n.children); i++ {
+			nmin, nmax := walk(n.children[i], false)
 			if cmax >= nmin {
 				t.Fatalf("child key ranges overlap")
 			}
@@ -360,8 +360,8 @@ func assertTreeInvariants(t *testing.T, idx *Index, ctx context.Context) {
 	walk(s.super.RootPage, true)
 
 	leaf := s.nodes[s.super.RootPage]
-	for !leaf.Leaf {
-		leaf = s.nodes[leaf.Children[0]]
+	for !leaf.isLeaf {
+		leaf = s.nodes[leaf.children[0]]
 	}
 	prev := uint64(0)
 	first := true
@@ -370,7 +370,7 @@ func assertTreeInvariants(t *testing.T, idx *Index, ctx context.Context) {
 		if seenLeaves[leaf.ID] == false {
 			t.Fatalf("leaf chain references unknown leaf")
 		}
-		for _, k := range leaf.Keys {
+		for _, k := range leaf.keys {
 			if !first && k <= prev {
 				t.Fatalf("leaf chain order violated")
 			}

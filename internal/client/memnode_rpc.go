@@ -10,26 +10,26 @@ import (
 	"github.com/jbancroft/concertum2/internal/rpcwire"
 )
 
-type RPCMemNode struct {
+type RPCParticipant struct {
 	rpc        *rpcwire.Client
 	generation uint64
 }
 
-func NewRPCMemNode(addr string, tlsConfig *tls.Config, timeout time.Duration) *RPCMemNode {
-	return NewRPCMemNodeWithGeneration(addr, tlsConfig, timeout, 0)
+func NewRPCParticipant(addr string, tlsConfig *tls.Config, timeout time.Duration) *RPCParticipant {
+	return NewRPCParticipantWithGeneration(addr, tlsConfig, timeout, 0)
 }
 
-func NewRPCMemNodeWithGeneration(addr string, tlsConfig *tls.Config, timeout time.Duration, generation uint64) *RPCMemNode {
+func NewRPCParticipantWithGeneration(addr string, tlsConfig *tls.Config, timeout time.Duration, generation uint64) *RPCParticipant {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	return &RPCMemNode{
+	return &RPCParticipant{
 		rpc:        rpcwire.NewClient(strings.TrimSpace(addr), rpcwire.ClientOptions{TLS: tlsConfig, DialTimeout: timeout}),
 		generation: generation,
 	}
 }
 
-func (n *RPCMemNode) Read(ctx context.Context, addr uint64, length uint32) ([]byte, error) {
+func (n *RPCParticipant) Read(ctx context.Context, addr uint64, length uint32) ([]byte, error) {
 	var out proto.ReadResponse
 	err := n.rpc.Call(ctx, proto.MethodRead, proto.ReadRequest{Addr: addr, Len: length, Generation: n.generation}, &out)
 	if err != nil {
@@ -38,17 +38,17 @@ func (n *RPCMemNode) Read(ctx context.Context, addr uint64, length uint32) ([]by
 	return out.Data, nil
 }
 
-func (n *RPCMemNode) Write(ctx context.Context, addr uint64, data []byte) error {
+func (n *RPCParticipant) Write(ctx context.Context, addr uint64, data []byte) error {
 	var out proto.WriteResponse
 	return n.rpc.Call(ctx, proto.MethodWrite, proto.WriteRequest{Addr: addr, Data: data, Generation: n.generation}, &out)
 }
 
-func (n *RPCMemNode) DescribeTransactionCapabilities(ctx context.Context, req proto.DescribeTransactionCapabilitiesRequest) (proto.DescribeTransactionCapabilitiesResponse, error) {
+func (n *RPCParticipant) DescribeTransactionCapabilities(ctx context.Context, req proto.DescribeTransactionCapabilitiesRequest) (proto.DescribeTransactionCapabilitiesResponse, error) {
 	var out proto.DescribeTransactionCapabilitiesResponse
 	return out, n.rpc.Call(ctx, proto.MethodTransactionCapabilities, req, &out)
 }
 
-func (n *RPCMemNode) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
+func (n *RPCParticipant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
 	var out proto.ExecPrepareResponse
 	if req.Generation == 0 {
 		req.Generation = n.generation
@@ -56,7 +56,7 @@ func (n *RPCMemNode) ExecPrepare(ctx context.Context, req proto.ExecPrepareReque
 	return out, n.rpc.Call(ctx, proto.MethodExecPrepare, req, &out)
 }
 
-func (n *RPCMemNode) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
+func (n *RPCParticipant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
 	var out proto.ExecCommit1PCResponse
 	if req.Generation == 0 {
 		req.Generation = n.generation
@@ -64,7 +64,7 @@ func (n *RPCMemNode) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCR
 	return out, n.rpc.Call(ctx, proto.MethodExecCommit1PC, req, &out)
 }
 
-func (n *RPCMemNode) Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error) {
+func (n *RPCParticipant) Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error) {
 	var out proto.CommitResponse
 	if req.Generation == 0 {
 		req.Generation = n.generation
@@ -72,7 +72,7 @@ func (n *RPCMemNode) Commit(ctx context.Context, req proto.CommitRequest) (proto
 	return out, n.rpc.Call(ctx, proto.MethodCommit, req, &out)
 }
 
-func (n *RPCMemNode) CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
+func (n *RPCParticipant) CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
 	var out proto.CommitBatchResponse
 	for i := range req.Decisions {
 		if req.Decisions[i].Generation == 0 {

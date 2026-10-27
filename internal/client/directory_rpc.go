@@ -48,36 +48,36 @@ func (c *DirectoryClient) GetDirectory(ctx context.Context) (map[uint32]proto.Di
 	return out.Mappings, nil
 }
 
-func (c *DirectoryClient) Resolve(ctx context.Context, memID uint32) (proto.ResolveResponse, error) {
+func (c *DirectoryClient) Resolve(ctx context.Context, hostId uint32) (proto.ResolveResponse, error) {
 	var out proto.ResolveResponse
-	return out, c.rpc.Call(ctx, proto.MethodResolve, proto.ResolveRequest{MemID: memID}, &out)
+	return out, c.rpc.Call(ctx, proto.MethodResolve, proto.ResolveRequest{MemID: hostId}, &out)
 }
 
-func (c *DirectoryClient) UpdateEntry(ctx context.Context, memID uint32, entry proto.DirectoryEntry) error {
-	return c.UpdateEntryCAS(ctx, memID, entry, 0)
+func (c *DirectoryClient) UpdateEntry(ctx context.Context, hostId uint32, entry proto.DirectoryEntry) error {
+	return c.UpdateEntryCAS(ctx, hostId, entry, 0)
 }
 
-func (c *DirectoryClient) UpdateEntryCAS(ctx context.Context, memID uint32, entry proto.DirectoryEntry, expectedGeneration uint64) error {
-	return c.updateEntryCAS(ctx, memID, entry, expectedGeneration, 0, false)
+func (c *DirectoryClient) UpdateEntryCAS(ctx context.Context, hostId uint32, entry proto.DirectoryEntry, expectedGeneration uint64) error {
+	return c.updateEntryCAS(ctx, hostId, entry, expectedGeneration, 0, false)
 }
 
 // UpdateEntryCASRevision adds an exact store-wide revision precondition,
 // including bootstrap revision zero.
-func (c *DirectoryClient) UpdateEntryCASRevision(ctx context.Context, memID uint32, entry proto.DirectoryEntry, expectedGeneration, expectedRevision uint64) error {
-	return c.updateEntryCAS(ctx, memID, entry, expectedGeneration, expectedRevision, true)
+func (c *DirectoryClient) UpdateEntryCASRevision(ctx context.Context, hostId uint32, entry proto.DirectoryEntry, expectedGeneration, expectedRevision uint64) error {
+	return c.updateEntryCAS(ctx, hostId, entry, expectedGeneration, expectedRevision, true)
 }
 
-func (c *DirectoryClient) updateEntryCAS(ctx context.Context, memID uint32, entry proto.DirectoryEntry, expectedGeneration, expectedRevision uint64, expectedRevisionSet bool) error {
+func (c *DirectoryClient) updateEntryCAS(ctx context.Context, hostId uint32, entry proto.DirectoryEntry, expectedGeneration, expectedRevision uint64, expectedRevisionSet bool) error {
 	var out proto.UpdateEntryResponse
-	if err := c.rpc.Call(ctx, proto.MethodUpdateEntry, proto.UpdateEntryRequest{MemID: memID, Entry: entry, ExpectedGeneration: expectedGeneration, ExpectedRevision: expectedRevision, ExpectedRevisionSet: expectedRevisionSet}, &out); err != nil {
+	if err := c.rpc.Call(ctx, proto.MethodUpdateEntry, proto.UpdateEntryRequest{MemID: hostId, Entry: entry, ExpectedGeneration: expectedGeneration, ExpectedRevision: expectedRevision, ExpectedRevisionSet: expectedRevisionSet}, &out); err != nil {
 		var remote *rpcwire.RemoteError
 		if errors.As(err, &remote) {
 			return err
 		}
-		return c.reconcileTransportAmbiguity(ctx, memID, entry, expectedRevision, expectedRevisionSet, err)
+		return c.reconcileTransportAmbiguity(ctx, hostId, entry, expectedRevision, expectedRevisionSet, err)
 	}
 	if out.OutcomeUnknown {
-		resolved, err := c.Resolve(ctx, memID)
+		resolved, err := c.Resolve(ctx, hostId)
 		if err != nil {
 			return fmt.Errorf("%w at revision %d: reconcile: %v", ErrDirectoryUpdateOutcomeUnknown, out.Revision, err)
 		}
@@ -98,7 +98,7 @@ func (c *DirectoryClient) updateEntryCAS(ctx context.Context, memID uint32, entr
 	return nil
 }
 
-func (c *DirectoryClient) reconcileTransportAmbiguity(ctx context.Context, memID uint32, entry proto.DirectoryEntry, expectedRevision uint64, expectedRevisionSet bool, transportErr error) error {
+func (c *DirectoryClient) reconcileTransportAmbiguity(ctx context.Context, hostId uint32, entry proto.DirectoryEntry, expectedRevision uint64, expectedRevisionSet bool, transportErr error) error {
 	reconcileCtx := ctx
 	var timeoutErr net.Error
 	if ctx.Err() != nil || (errors.As(transportErr, &timeoutErr) && timeoutErr.Timeout()) {
@@ -106,7 +106,7 @@ func (c *DirectoryClient) reconcileTransportAmbiguity(ctx context.Context, memID
 		reconcileCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), c.timeout)
 		defer cancel()
 	}
-	resolved, err := c.Resolve(reconcileCtx, memID)
+	resolved, err := c.Resolve(reconcileCtx, hostId)
 	if err != nil {
 		return fmt.Errorf("%w: update transport: %v; reconcile: %v", ErrDirectoryUpdateOutcomeUnknown, transportErr, err)
 	}

@@ -15,9 +15,9 @@ type backoffFunc func(context.Context, int)
 func (f backoffFunc) Wait(ctx context.Context, attempt int) { f(ctx, attempt) }
 
 func TestTwoNodeAtomicCommit(t *testing.T) {
-	n1 := memnode.NewNode(16)
-	n2 := memnode.NewNode(16)
-	coord := client.NewCoordinator(map[uint32]client.MemNode{1: n1, 2: n2})
+	n1 := memnode.NewParticipant(16)
+	n2 := memnode.NewParticipant(16)
+	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	c := concertum.NewClient(newCoordinatorBackend(coord))
 
 	if err := c.Write(context.Background(), 1, 0, []byte("a")); err != nil {
@@ -27,12 +27,12 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	committed, _, status := c.NewMTx().
-		Cmp(1, 0, []byte("a")).
-		Cmp(2, 0, []byte("x")).
+	committed, _, status := c.NewMiniTransaction().
+		Compare(1, 0, []byte("a")).
+		Compare(2, 0, []byte("x")).
 		Write(1, 1, []byte("b")).
 		Write(2, 1, []byte("y")).
-		ExecAndCommit(context.Background())
+		ExecuteAndCommit(context.Background())
 
 	if !committed || status != concertum.StatusCommitted {
 		t.Fatalf("expected committed, got committed=%v status=%v", committed, status)
@@ -43,14 +43,14 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 }
 
 func TestCompareAbortNoWritesApplied(t *testing.T) {
-	n1 := memnode.NewNode(16)
-	coord := client.NewCoordinator(map[uint32]client.MemNode{1: n1})
+	n1 := memnode.NewParticipant(16)
+	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
 	c := concertum.NewClient(newCoordinatorBackend(coord))
 	if err := c.Write(context.Background(), 1, 0, []byte("seed")); err != nil {
 		t.Fatal(err)
 	}
 
-	committed, _, status := c.NewMTx().Cmp(1, 0, []byte("nope")).Write(1, 0, []byte("new!")).ExecAndCommit(context.Background())
+	committed, _, status := c.NewMiniTransaction().Compare(1, 0, []byte("nope")).Write(1, 0, []byte("new!")).ExecuteAndCommit(context.Background())
 	if committed {
 		t.Fatalf("expected abort")
 	}
@@ -67,9 +67,9 @@ func TestCompareAbortNoWritesApplied(t *testing.T) {
 }
 
 func TestBadLockRetryThenSuccess(t *testing.T) {
-	n1 := memnode.NewNode(16)
-	n2 := memnode.NewNode(16)
-	coord := client.NewCoordinator(map[uint32]client.MemNode{1: n1, 2: n2})
+	n1 := memnode.NewParticipant(16)
+	n2 := memnode.NewParticipant(16)
+	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	release := n1.HoldWriteLockForTest(0, 2)
 	released := false
 	coord.SetBackoffForTest(backoffFunc(func(_ context.Context, _ int) {
@@ -89,12 +89,12 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	committed, _, status := c.NewMTx().
-		Cmp(1, 0, []byte("ab")).
-		Cmp(2, 0, []byte("xy")).
+	committed, _, status := c.NewMiniTransaction().
+		Compare(1, 0, []byte("ab")).
+		Compare(2, 0, []byte("xy")).
 		Write(1, 0, []byte("cd")).
 		Write(2, 0, []byte("zw")).
-		ExecAndCommit(context.Background())
+		ExecuteAndCommit(context.Background())
 
 	if !committed || status != concertum.StatusCommitted {
 		t.Fatalf("expected commit after retry, got committed=%v status=%v", committed, status)
@@ -104,10 +104,10 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 }
 
 func TestMTxWithClassExposesClassStats(t *testing.T) {
-	n1 := memnode.NewNode(32)
-	coord := client.NewCoordinator(map[uint32]client.MemNode{1: n1})
+	n1 := memnode.NewParticipant(32)
+	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
 	c := concertum.NewClient(newCoordinatorBackend(coord))
-	committed, _, status := c.NewMTx().WithClass("inventory").Write(1, 0, []byte("z")).ExecAndCommit(context.Background())
+	committed, _, status := c.NewMiniTransaction().WithClass("inventory").Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
 	if !committed || status != concertum.StatusCommitted {
 		t.Fatalf("expected committed inventory transaction")
 	}
@@ -125,10 +125,10 @@ func TestMTxWithClassExposesClassStats(t *testing.T) {
 }
 
 func TestMTxWithoutClassFallsBackToUnclassified(t *testing.T) {
-	n1 := memnode.NewNode(32)
-	coord := client.NewCoordinator(map[uint32]client.MemNode{1: n1})
+	n1 := memnode.NewParticipant(32)
+	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
 	c := concertum.NewClient(newCoordinatorBackend(coord))
-	committed, _, status := c.NewMTx().Write(1, 0, []byte("z")).ExecAndCommit(context.Background())
+	committed, _, status := c.NewMiniTransaction().Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
 	if !committed || status != concertum.StatusCommitted {
 		t.Fatalf("expected committed unclassified transaction")
 	}
@@ -145,16 +145,16 @@ func TestMTxWithoutClassFallsBackToUnclassified(t *testing.T) {
 	}
 }
 
-func awaitValue(t *testing.T, c *concertum.Client, memID uint32, addr uint64, expected []byte) {
+func awaitValue(t *testing.T, c *concertum.Client, hostId uint32, addr uint64, expected []byte) {
 	t.Helper()
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		data, err := c.Read(context.Background(), memID, addr, uint32(len(expected)))
+		data, err := c.Read(context.Background(), hostId, addr, uint32(len(expected)))
 		if err == nil && string(data) == string(expected) {
 			return
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	data, _ := c.Read(context.Background(), memID, addr, uint32(len(expected)))
-	t.Fatalf("expected %q at mem %d addr %d, got %q", string(expected), memID, addr, string(data))
+	data, _ := c.Read(context.Background(), hostId, addr, uint32(len(expected)))
+	t.Fatalf("expected %q at mem %d addr %d, got %q", string(expected), hostId, addr, string(data))
 }

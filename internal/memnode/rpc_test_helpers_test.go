@@ -8,7 +8,7 @@ import (
 )
 
 // Extracted from the excluded manager integration tests.
-func startMemnodeRPC(t *testing.T, node *memnode.Node) string {
+func startMemnodeRPC(t *testing.T, node *memnode.Participant) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

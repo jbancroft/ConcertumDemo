@@ -15,29 +15,29 @@ import (
 func TestDurableOnePCReplaysOriginalReadPayloadWithoutReapplyingWrite(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
-	n, err := memnode.NewDurableNode(1, 32, dir)
+	n, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := n.ApplyWriteForTest(0, []byte("seed")); err != nil {
 		t.Fatal(err)
 	}
-	tid := proto.TransactionID{CoordinatorID: 71, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 71, Counter: 1, Epoch: 1}
 	req := proto.ExecCommit1PCRequest{
-		TID:        tid,
+		TID:        txId,
 		RequestID:  "first",
 		ReadItems:  []proto.ReadItem{{MemID: 1, Addr: 0, Len: 4}},
 		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}},
 	}
 	resp, err := n.ExecCommit1PC(ctx, req)
-	if err != nil || resp.Vote != proto.VoteOK || string(resp.ReadData[0]) != "seed" {
+	if err != nil || resp.Vote != proto.VoteOk || string(resp.ReadData[0]) != "seed" {
 		t.Fatalf("first response = %+v, err = %v", resp, err)
 	}
 	if err := n.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableNode(1, 32, dir)
+	restarted, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestDurableOnePCReplaysOriginalReadPayloadWithoutReapplyingWrite(t *testing
 	req.RequestID = "retry"
 	req.WriteItems[0].Data = []byte("B")
 	resp, err = restarted.ExecCommit1PC(ctx, req)
-	if err != nil || resp.Vote != proto.VoteOK || resp.RequestID != "retry" || string(resp.ReadData[0]) != "seed" {
+	if err != nil || resp.Vote != proto.VoteOk || resp.RequestID != "retry" || string(resp.ReadData[0]) != "seed" {
 		t.Fatalf("retry response = %+v, err = %v", resp, err)
 	}
 	got, err := restarted.Read(ctx, 8, 1)
@@ -69,29 +69,29 @@ func TestDurableOnePCReplaysOriginalReadPayloadWithoutReapplyingWrite(t *testing
 func TestDurableSuccessfulPrepareReplaysOriginalReadPayloadAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
-	n, err := memnode.NewDurableNode(1, 32, dir)
+	n, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := n.ApplyWriteForTest(0, []byte("seed")); err != nil {
 		t.Fatal(err)
 	}
-	tid := proto.TransactionID{CoordinatorID: 74, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 74, Counter: 1, Epoch: 1}
 	req := proto.ExecPrepareRequest{
-		TID:          tid,
+		TID:          txId,
 		RequestID:    "first",
 		Participants: []uint32{1},
 		ReadItems:    []proto.ReadItem{{MemID: 1, Addr: 0, Len: 4}},
 	}
-	resp, err := n.ExecPrepare(ctx, req)
-	if err != nil || resp.Vote != proto.VoteOK || string(resp.ReadData[0]) != "seed" {
+	resp, err := n.ExecAndPrepare(ctx, req)
+	if err != nil || resp.Vote != proto.VoteOk || string(resp.ReadData[0]) != "seed" {
 		t.Fatalf("first response = %+v, err = %v", resp, err)
 	}
 	if err := n.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableNode(1, 32, dir)
+	restarted, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestDurableSuccessfulPrepareReplaysOriginalReadPayloadAfterRestart(t *testi
 	if err := restarted.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	status, err := restarted.QueryTidStatus(ctx, proto.QueryTidStatusRequest{TID: tid})
+	status, err := restarted.QueryTidStatus(ctx, proto.QueryTidStatusRequest{TID: txId})
 	if err != nil || status.KnownDecision || !status.VotedOK {
 		t.Fatalf("restarted vote status = %+v, err = %v", status, err)
 	}
@@ -107,8 +107,8 @@ func TestDurableSuccessfulPrepareReplaysOriginalReadPayloadAfterRestart(t *testi
 		t.Fatal(err)
 	}
 	req.RequestID = "retry"
-	resp, err = restarted.ExecPrepare(ctx, req)
-	if err != nil || resp.Vote != proto.VoteOK || resp.RequestID != "retry" || string(resp.ReadData[0]) != "seed" {
+	resp, err = restarted.ExecAndPrepare(ctx, req)
+	if err != nil || resp.Vote != proto.VoteOk || resp.RequestID != "retry" || string(resp.ReadData[0]) != "seed" {
 		t.Fatalf("retry response = %+v, err = %v", resp, err)
 	}
 }
@@ -116,26 +116,26 @@ func TestDurableSuccessfulPrepareReplaysOriginalReadPayloadAfterRestart(t *testi
 func TestDurableNegativePrepareOutcomeReplaysAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
-	n, err := memnode.NewDurableNode(1, 32, dir)
+	n, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tid := proto.TransactionID{CoordinatorID: 72, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 72, Counter: 1, Epoch: 1}
 	req := proto.ExecPrepareRequest{
-		TID:          tid,
+		TID:          txId,
 		RequestID:    "first",
 		Participants: []uint32{1},
 		CmpItems:     []proto.CmpItem{{MemID: 1, Addr: 0, Data: []byte("Y")}},
 		WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 4, Data: []byte("A")}},
 	}
-	resp, err := n.ExecPrepare(ctx, req)
+	resp, err := n.ExecAndPrepare(ctx, req)
 	if err != nil || resp.Vote != proto.VoteBadCmp {
 		t.Fatalf("first response = %+v, err = %v", resp, err)
 	}
 	if err := n.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := memnode.NewDurableNode(1, 32, dir)
+	restarted, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestDurableNegativePrepareOutcomeReplaysAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.RequestID = "retry"
-	resp, err = restarted.ExecPrepare(ctx, req)
+	resp, err = restarted.ExecAndPrepare(ctx, req)
 	if err != nil || resp.Vote != proto.VoteBadCmp || resp.RequestID != "retry" {
 		t.Fatalf("retry response = %+v, err = %v", resp, err)
 	}
@@ -156,12 +156,12 @@ func TestDurableNegativePrepareOutcomeReplaysAfterRestart(t *testing.T) {
 func TestDurableNegativeOnePCOutcomeReplaysAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
-	n, err := memnode.NewDurableNode(1, 32, dir)
+	n, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tid := proto.TransactionID{CoordinatorID: 73, Counter: 1, Epoch: 1}
-	req := proto.ExecCommit1PCRequest{TID: tid, RequestID: "first", CmpItems: []proto.CmpItem{{MemID: 1, Addr: 0, Data: []byte("Y")}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 4, Data: []byte("A")}}}
+	txId := proto.TransactionID{CoordinatorID: 73, Counter: 1, Epoch: 1}
+	req := proto.ExecCommit1PCRequest{TID: txId, RequestID: "first", CmpItems: []proto.CmpItem{{MemID: 1, Addr: 0, Data: []byte("Y")}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 4, Data: []byte("A")}}}
 	resp, err := n.ExecCommit1PC(ctx, req)
 	if err != nil || resp.Vote != proto.VoteBadCmp {
 		t.Fatalf("first response = %+v, err = %v", resp, err)
@@ -169,7 +169,7 @@ func TestDurableNegativeOnePCOutcomeReplaysAfterRestart(t *testing.T) {
 	if err := n.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := memnode.NewDurableNode(1, 32, dir)
+	restarted, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestDurableNegativeOnePCOutcomeReplaysAfterRestart(t *testing.T) {
 func TestPrepareCrashAfterRedoBeforeReplayDoesNotReexecuteKnownTID(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
-	n, err := memnode.NewDurableNode(1, 32, dir)
+	n, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,15 +211,15 @@ func TestPrepareCrashAfterRedoBeforeReplayDoesNotReexecuteKnownTID(t *testing.T)
 		}
 		return nil
 	})
-	tid := proto.TransactionID{CoordinatorID: 75, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 75, Counter: 1, Epoch: 1}
 	req := proto.ExecPrepareRequest{
-		TID:          tid,
+		TID:          txId,
 		RequestID:    "first",
 		Participants: []uint32{1},
 		ReadItems:    []proto.ReadItem{{MemID: 1, Addr: 0, Len: 4}},
 		WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}},
 	}
-	resp, err := n.ExecPrepare(ctx, req)
+	resp, err := n.ExecAndPrepare(ctx, req)
 	if !errors.Is(err, crash) || resp.Vote != proto.VoteBadInternal {
 		t.Fatalf("boundary response = %+v, err = %v", resp, err)
 	}
@@ -230,7 +230,7 @@ func TestPrepareCrashAfterRedoBeforeReplayDoesNotReexecuteKnownTID(t *testing.T)
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableNode(1, 32, dir)
+	restarted, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestPrepareCrashAfterRedoBeforeReplayDoesNotReexecuteKnownTID(t *testing.T)
 	}
 	req.RequestID = "retry"
 	req.WriteItems[0].Data = []byte("B")
-	resp, err = restarted.ExecPrepare(ctx, req)
+	resp, err = restarted.ExecAndPrepare(ctx, req)
 	if !errors.Is(err, memnode.ErrReplayUnavailable) || resp.Vote != proto.VoteBadInternal {
 		t.Fatalf("retry response = %+v, err = %v", resp, err)
 	}
@@ -262,7 +262,7 @@ func TestPrepareCrashAfterRedoBeforeReplayDoesNotReexecuteKnownTID(t *testing.T)
 func TestOnePCCrashAfterDecisionBeforeReplayDoesNotReexecuteKnownTID(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
-	n, err := memnode.NewDurableNode(1, 32, dir)
+	n, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,8 +273,8 @@ func TestOnePCCrashAfterDecisionBeforeReplayDoesNotReexecuteKnownTID(t *testing.
 		}
 		return nil
 	})
-	tid := proto.TransactionID{CoordinatorID: 76, Counter: 1, Epoch: 1}
-	req := proto.ExecCommit1PCRequest{TID: tid, RequestID: "first", WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
+	txId := proto.TransactionID{CoordinatorID: 76, Counter: 1, Epoch: 1}
+	req := proto.ExecCommit1PCRequest{TID: txId, RequestID: "first", WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 	resp, err := n.ExecCommit1PC(ctx, req)
 	if !errors.Is(err, crash) || resp.Vote != proto.VoteBadInternal {
 		t.Fatalf("boundary response = %+v, err = %v", resp, err)
@@ -283,7 +283,7 @@ func TestOnePCCrashAfterDecisionBeforeReplayDoesNotReexecuteKnownTID(t *testing.
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableNode(1, 32, dir)
+	restarted, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,24 +315,24 @@ func TestOnePCCrashAfterDecisionBeforeReplayDoesNotReexecuteKnownTID(t *testing.
 func TestOnePCOutOfBoundsWriteDoesNotPersistSuccess(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
-	n, err := memnode.NewDurableNode(1, 32, dir)
+	n, err := memnode.NewDurableParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = n.Close() })
-	tid := proto.TransactionID{CoordinatorID: 77, Counter: 1, Epoch: 1}
-	resp, err := n.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{TID: tid, RequestID: "invalid", WriteItems: []proto.WriteItem{{MemID: 1, Addr: 31, Data: []byte("XX")}}})
+	txId := proto.TransactionID{CoordinatorID: 77, Counter: 1, Epoch: 1}
+	resp, err := n.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{TID: txId, RequestID: "invalid", WriteItems: []proto.WriteItem{{MemID: 1, Addr: 31, Data: []byte("XX")}}})
 	if !errors.Is(err, memnode.ErrOutOfBounds) || resp.Vote != proto.VoteBadInternal {
 		t.Fatalf("out-of-bounds response = %+v, err = %v", resp, err)
 	}
-	if n.RedoEntryCountForTest() != 0 || n.HasDecidedForTest(tid) {
+	if n.RedoEntryCountForTest() != 0 || n.HasDecidedForTest(txId) {
 		t.Fatal("out-of-bounds request created durable transaction state")
 	}
 	store, err := storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replay, ok := store.GetOnePC(tid); ok {
+	if replay, ok := store.GetOnePC(txId); ok {
 		t.Fatalf("out-of-bounds request persisted success replay: %+v", replay)
 	}
 }
@@ -365,7 +365,7 @@ func (r *blockingReplica) ReplicateReplayRecord(context.Context, proto.Replicate
 func TestReplicatedPrepareDuplicateWaitsForOriginalReadPayload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	n, err := memnode.NewDurableNode(1, 32, filepath.Join(t.TempDir(), "node"))
+	n, err := memnode.NewDurableParticipant(1, 32, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,14 +375,14 @@ func TestReplicatedPrepareDuplicateWaitsForOriginalReadPayload(t *testing.T) {
 	}
 	replica := newBlockingReplica()
 	n.ConfigureAsPrimary(2, replica)
-	tid := proto.TransactionID{CoordinatorID: 78, Counter: 1, Epoch: 1}
-	req := proto.ExecPrepareRequest{TID: tid, RequestID: "first", Participants: []uint32{1}, ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 4}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
+	txId := proto.TransactionID{CoordinatorID: 78, Counter: 1, Epoch: 1}
+	req := proto.ExecPrepareRequest{TID: txId, RequestID: "first", Participants: []uint32{1}, ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 4}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 	type result struct {
 		resp proto.ExecPrepareResponse
 		err  error
 	}
 	first := make(chan result, 1)
-	go func() { resp, err := n.ExecPrepare(ctx, req); first <- result{resp, err} }()
+	go func() { resp, err := n.ExecAndPrepare(ctx, req); first <- result{resp, err} }()
 	select {
 	case <-replica.redoStarted:
 	case <-ctx.Done():
@@ -391,7 +391,7 @@ func TestReplicatedPrepareDuplicateWaitsForOriginalReadPayload(t *testing.T) {
 	retry := req
 	retry.RequestID = "retry"
 	duplicate := make(chan result, 1)
-	go func() { resp, err := n.ExecPrepare(ctx, retry); duplicate <- result{resp, err} }()
+	go func() { resp, err := n.ExecAndPrepare(ctx, retry); duplicate <- result{resp, err} }()
 	select {
 	case got := <-duplicate:
 		t.Fatalf("duplicate returned before original completed: %+v err=%v", got.resp, got.err)
@@ -400,7 +400,7 @@ func TestReplicatedPrepareDuplicateWaitsForOriginalReadPayload(t *testing.T) {
 	close(replica.releaseRedo)
 	a := <-first
 	b := <-duplicate
-	if a.err != nil || b.err != nil || a.resp.Vote != proto.VoteOK || b.resp.Vote != proto.VoteOK || string(a.resp.ReadData[0]) != "seed" || string(b.resp.ReadData[0]) != "seed" || b.resp.RequestID != "retry" {
+	if a.err != nil || b.err != nil || a.resp.Vote != proto.VoteOk || b.resp.Vote != proto.VoteOk || string(a.resp.ReadData[0]) != "seed" || string(b.resp.ReadData[0]) != "seed" || b.resp.RequestID != "retry" {
 		t.Fatalf("original=%+v err=%v duplicate=%+v err=%v", a.resp, a.err, b.resp, b.err)
 	}
 }
@@ -408,15 +408,15 @@ func TestReplicatedPrepareDuplicateWaitsForOriginalReadPayload(t *testing.T) {
 func TestReplicatedOnePCDuplicateWaitsForOriginalOutcome(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	n, err := memnode.NewDurableNode(1, 32, filepath.Join(t.TempDir(), "node"))
+	n, err := memnode.NewDurableParticipant(1, 32, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = n.Close() })
 	replica := newBlockingReplica()
 	n.ConfigureAsPrimary(2, replica)
-	tid := proto.TransactionID{CoordinatorID: 79, Counter: 1, Epoch: 1}
-	req := proto.ExecCommit1PCRequest{TID: tid, RequestID: "first", ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
+	txId := proto.TransactionID{CoordinatorID: 79, Counter: 1, Epoch: 1}
+	req := proto.ExecCommit1PCRequest{TID: txId, RequestID: "first", ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 	type result struct {
 		resp proto.ExecCommit1PCResponse
 		err  error
@@ -428,7 +428,7 @@ func TestReplicatedOnePCDuplicateWaitsForOriginalOutcome(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("original 1PC did not reach blocking replica")
 	}
-	retry := proto.ExecCommit1PCRequest{TID: tid, RequestID: "retry", ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("B")}}}
+	retry := proto.ExecCommit1PCRequest{TID: txId, RequestID: "retry", ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("B")}}}
 	duplicate := make(chan result, 1)
 	go func() { resp, err := n.ExecCommit1PC(ctx, retry); duplicate <- result{resp, err} }()
 	select {
@@ -439,7 +439,7 @@ func TestReplicatedOnePCDuplicateWaitsForOriginalOutcome(t *testing.T) {
 	close(replica.releaseRedo)
 	a := <-first
 	b := <-duplicate
-	if a.err != nil || b.err != nil || a.resp.Vote != proto.VoteOK || b.resp.Vote != proto.VoteOK || b.resp.RequestID != "retry" || string(a.resp.ReadData[0]) != "\x00" || string(b.resp.ReadData[0]) != "\x00" {
+	if a.err != nil || b.err != nil || a.resp.Vote != proto.VoteOk || b.resp.Vote != proto.VoteOk || b.resp.RequestID != "retry" || string(a.resp.ReadData[0]) != "\x00" || string(b.resp.ReadData[0]) != "\x00" {
 		t.Fatalf("original=%+v err=%v duplicate=%+v err=%v", a.resp, a.err, b.resp, b.err)
 	}
 	got, err := n.Read(ctx, 8, 1)
@@ -451,7 +451,7 @@ func TestReplicatedOnePCDuplicateWaitsForOriginalOutcome(t *testing.T) {
 func TestReplicatedPrepareDuplicateSharesOriginalReplicationFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	n, err := memnode.NewDurableNode(1, 32, filepath.Join(t.TempDir(), "node"))
+	n, err := memnode.NewDurableParticipant(1, 32, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,14 +460,14 @@ func TestReplicatedPrepareDuplicateSharesOriginalReplicationFailure(t *testing.T
 	replica.redoAck = false
 	replica.redoErr = context.DeadlineExceeded
 	n.ConfigureAsPrimary(2, replica)
-	tid := proto.TransactionID{CoordinatorID: 80, Counter: 1, Epoch: 1}
-	req := proto.ExecPrepareRequest{TID: tid, RequestID: "first", Participants: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
+	txId := proto.TransactionID{CoordinatorID: 80, Counter: 1, Epoch: 1}
+	req := proto.ExecPrepareRequest{TID: txId, RequestID: "first", Participants: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 	type result struct {
 		resp proto.ExecPrepareResponse
 		err  error
 	}
 	first := make(chan result, 1)
-	go func() { resp, err := n.ExecPrepare(ctx, req); first <- result{resp, err} }()
+	go func() { resp, err := n.ExecAndPrepare(ctx, req); first <- result{resp, err} }()
 	select {
 	case <-replica.redoStarted:
 	case <-ctx.Done():
@@ -476,7 +476,7 @@ func TestReplicatedPrepareDuplicateSharesOriginalReplicationFailure(t *testing.T
 	retry := req
 	retry.RequestID = "retry"
 	duplicate := make(chan result, 1)
-	go func() { resp, err := n.ExecPrepare(ctx, retry); duplicate <- result{resp, err} }()
+	go func() { resp, err := n.ExecAndPrepare(ctx, retry); duplicate <- result{resp, err} }()
 	select {
 	case got := <-duplicate:
 		t.Fatalf("duplicate returned before failed original completed: %+v err=%v", got.resp, got.err)

@@ -35,7 +35,7 @@ type SafetyConfig struct {
 	Authorizer   *auth.Authorizer
 }
 
-func (n *Node) ConfigureSafety(cfg SafetyConfig) {
+func (n *Participant) ConfigureSafety(cfg SafetyConfig) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if cfg.MaxInFlightPrepare > 0 {
@@ -71,7 +71,7 @@ func (n *Node) ConfigureSafety(cfg SafetyConfig) {
 	n.enableDebugEndpoints = cfg.EnableDebug
 }
 
-func (n *Node) authorize(ctx context.Context, allowed ...auth.Role) error {
+func (n *Participant) authorize(ctx context.Context, allowed ...auth.Role) error {
 	if n.authorizer == nil {
 		return nil
 	}
@@ -82,7 +82,7 @@ func (n *Node) authorize(ctx context.Context, allowed ...auth.Role) error {
 	}
 	if n.authorizer.Policy != nil {
 		action := callerAction()
-		resource := fmt.Sprintf("memnode/%d", n.memID)
+		resource := fmt.Sprintf("memnode/%d", n.hostId)
 		if err := n.authorizer.Authorize(ctx, action, resource, allowed...); err != nil {
 			n.metrics.authFailures.Inc()
 			return ErrForbidden
@@ -118,7 +118,7 @@ func callerAction() string {
 	return "memnode." + strings.ToLower(b.String())
 }
 
-func (n *Node) allowRate(l *ratelimit.KeyedLimiter, key string) bool {
+func (n *Participant) allowRate(l *ratelimit.KeyedLimiter, key string) bool {
 	if l == nil {
 		return true
 	}

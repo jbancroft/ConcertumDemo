@@ -38,7 +38,7 @@ func (abortRecoveryPeer) NotifyApplied(context.Context, proto.NotifyAppliedReque
 }
 
 type blockingDecisionReplica struct {
-	node    *memnode.Node
+	node    *memnode.Participant
 	started chan struct{}
 	release chan struct{}
 }
@@ -66,27 +66,27 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
 	bDir := filepath.Join(root, "b")
-	a, err := memnode.NewDurableNode(1, 64, aDir)
+	a, err := memnode.NewDurableParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := memnode.NewDurableNode(2, 64, bDir)
+	b, err := memnode.NewDurableParticipant(2, 64, bDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = b.Close() })
 
-	tid := proto.TransactionID{CoordinatorID: 41, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 41, Counter: 1, Epoch: 1}
 	participants := []uint32{1, 2}
-	if _, err := a.ExecPrepare(ctx, proto.ExecPrepareRequest{
-		TID:          tid,
+	if _, err := a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+		TID:          txId,
 		Participants: participants,
 		WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.ExecPrepare(ctx, proto.ExecPrepareRequest{
-		TID:          tid,
+	if _, err := b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+		TID:          txId,
 		Participants: participants,
 		WriteItems:   []proto.WriteItem{{MemID: 2, Addr: 8, Data: []byte("B")}},
 	}); err != nil {
@@ -96,7 +96,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableNode(1, 64, aDir)
+	restarted, err := memnode.NewDurableParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	if !errors.Is(err, memnode.ErrRecoveryPending) {
 		t.Fatalf("Recover() error = %v, want ErrRecoveryPending", err)
 	}
-	if restarted.HasDecidedForTest(tid) {
+	if restarted.HasDecidedForTest(txId) {
 		t.Fatal("missing peer evidence must not persist an abort decision")
 	}
 	processed, err := storage.LoadProcessedPointer(aDir)
@@ -125,7 +125,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	applyBlocked := make(chan struct{})
 	releaseApply := make(chan struct{})
 	restarted.SetRecoverBoundaryHookForTest(func(phase string, hookTID proto.TransactionID) error {
-		if phase == "apply-before" && hookTID == tid {
+		if phase == "apply-before" && hookTID == txId {
 			close(applyBlocked)
 			<-releaseApply
 		}
@@ -149,7 +149,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	}
 	commitDone := make(chan commitResult, 1)
 	go func() {
-		resp, err := restarted.Commit(ctx, proto.CommitRequest{TID: tid, RequestID: "opposite-race", ActionCommit: false})
+		resp, err := restarted.Commit(ctx, proto.CommitRequest{TID: txId, RequestID: "opposite-race", ActionCommit: false})
 		commitDone <- commitResult{resp: resp, err: err}
 	}()
 	select {
@@ -186,7 +186,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	if err := restarted.ApplyWriteForTest(8, []byte("Z")); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := restarted.Commit(ctx, proto.CommitRequest{TID: tid, RequestID: "same-tid-retry", ActionCommit: true})
+	resp, err := restarted.Commit(ctx, proto.CommitRequest{TID: txId, RequestID: "same-tid-retry", ActionCommit: true})
 	if err != nil || !resp.Ack {
 		t.Fatalf("same-TID commit retry resp=%+v err=%v", resp, err)
 	}
@@ -214,27 +214,27 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 			root := t.TempDir()
 			aDir := filepath.Join(root, "a")
 			bDir := filepath.Join(root, "b")
-			a, err := memnode.NewDurableNode(1, 64, aDir)
+			a, err := memnode.NewDurableParticipant(1, 64, aDir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, err := memnode.NewDurableNode(2, 64, bDir)
+			b, err := memnode.NewDurableParticipant(2, 64, bDir)
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = b.Close() })
 
-			tid := proto.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
+			txId := proto.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
 			participants := []uint32{1, 2}
-			if _, err := a.ExecPrepare(ctx, proto.ExecPrepareRequest{
-				TID:          tid,
+			if _, err := a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+				TID:          txId,
 				Participants: participants,
 				WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}},
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := b.ExecPrepare(ctx, proto.ExecPrepareRequest{
-				TID:          tid,
+			if _, err := b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+				TID:          txId,
 				Participants: participants,
 				WriteItems:   []proto.WriteItem{{MemID: 2, Addr: 8, Data: []byte("B")}},
 			}); err != nil {
@@ -244,7 +244,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			restarted, err := memnode.NewDurableNode(1, 64, aDir)
+			restarted, err := memnode.NewDurableParticipant(1, 64, aDir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -252,7 +252,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 			restarted.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 			injected := errors.New("injected recovery terminalization failure")
 			restarted.SetRecoverBoundaryHookForTest(func(phase string, hookTID proto.TransactionID) error {
-				if phase == failurePhase && hookTID == tid {
+				if phase == failurePhase && hookTID == txId {
 					return injected
 				}
 				return nil
@@ -267,7 +267,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 				t.Fatal(err)
 			}
 			resp, err := restarted.Commit(ctx, proto.CommitRequest{
-				TID:          tid,
+				TID:          txId,
 				RequestID:    "opposite-after-recovery-failure",
 				ActionCommit: false,
 			})
@@ -307,12 +307,12 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	primary, err := memnode.NewDurableNode(1, 64, filepath.Join(root, "primary"))
+	primary, err := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "primary"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = primary.Close() })
-	replica, err := memnode.NewDurableNode(2, 64, filepath.Join(root, "replica"))
+	replica, err := memnode.NewDurableParticipant(2, 64, filepath.Join(root, "replica"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,19 +325,19 @@ func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	}
 	primary.ConfigureAsPrimary(2, blocking)
 
-	tid := proto.TransactionID{CoordinatorID: 43, Counter: 1, Epoch: 1}
-	if prep, err := primary.ExecPrepare(ctx, proto.ExecPrepareRequest{
-		TID:          tid,
+	txId := proto.TransactionID{CoordinatorID: 43, Counter: 1, Epoch: 1}
+	if prep, err := primary.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+		TID:          txId,
 		Participants: []uint32{1, 3},
 		WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("C")}},
-	}); err != nil || prep.Vote != proto.VoteOK {
-		t.Fatalf("ExecPrepare() resp=%+v err=%v", prep, err)
+	}); err != nil || prep.Vote != proto.VoteOk {
+		t.Fatalf("ExecAndPrepare() resp=%+v err=%v", prep, err)
 	}
 	primary.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{3: abortRecoveryPeer{}})
 	replayBlocked := make(chan struct{})
 	releaseReplay := make(chan struct{})
 	primary.SetRecoverBoundaryHookForTest(func(phase string, hookTID proto.TransactionID) error {
-		if phase == "replay-before" && hookTID == tid {
+		if phase == "replay-before" && hookTID == txId {
 			close(replayBlocked)
 			<-releaseReplay
 		}
@@ -357,7 +357,7 @@ func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	}
 	commitDone := make(chan commitResult, 1)
 	go func() {
-		resp, err := primary.Commit(ctx, proto.CommitRequest{TID: tid, RequestID: "replicated-race", ActionCommit: true})
+		resp, err := primary.Commit(ctx, proto.CommitRequest{TID: txId, RequestID: "replicated-race", ActionCommit: true})
 		commitDone <- commitResult{resp: resp, err: err}
 	}()
 	select {
@@ -369,7 +369,7 @@ func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	if err := <-recoverDone; err != nil {
 		t.Fatal(err)
 	}
-	primaryStatus, err := primary.QueryTidStatus(ctx, proto.QueryTidStatusRequest{TID: tid})
+	primaryStatus, err := primary.QueryTidStatus(ctx, proto.QueryTidStatusRequest{TID: txId})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	if result.err != nil || !result.resp.Ack {
 		t.Fatalf("Commit() resp=%+v err=%v", result.resp, result.err)
 	}
-	replicaStatus, err := replica.QueryTidStatus(ctx, proto.QueryTidStatusRequest{TID: tid})
+	replicaStatus, err := replica.QueryTidStatus(ctx, proto.QueryTidStatusRequest{TID: txId})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,29 +401,29 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
-	a, err := memnode.NewDurableNode(1, 64, aDir)
+	a, err := memnode.NewDurableParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := memnode.NewNodeWithID(2, 64)
+	b := memnode.NewParticipantWithId(2, 64)
 
-	tid := proto.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
 	participants := []uint32{1, 2}
-	if _, err := a.ExecPrepare(ctx, proto.ExecPrepareRequest{
-		TID:          tid,
+	if _, err := a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+		TID:          txId,
 		Participants: participants,
 		WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 9, Data: []byte("R")}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: tid, Participants: participants}); err != nil {
+	if _, err := b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: participants}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableNode(1, 64, aDir)
+	restarted, err := memnode.NewDurableParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +433,7 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 	if err := restarted.Recover(ctx); !errors.Is(err, memnode.ErrRecoveryPending) {
 		t.Fatalf("Recover() error = %v, want ErrRecoveryPending", err)
 	}
-	if restarted.HasDecidedForTest(tid) {
+	if restarted.HasDecidedForTest(txId) {
 		t.Fatal("unreachable peer must not persist an abort decision")
 	}
 

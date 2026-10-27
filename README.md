@@ -1,9 +1,13 @@
 # Concertum2
 
-A focused Go code sample extracted from Concertum: Sinfonia-style distributed
-minitransactions, durable memory nodes, a Minuet-style B+tree, and a small SQL
-layer. The engine code and retained tests come from the existing Go project;
-the extraction adds a runnable demo and review documentation.
+A focused Go code sample: Sinfonia-style distributed minitransactions, durable
+participants, a Minuet-style B+tree, and a small SQL layer. The working engine
+was extracted from Concertum. The transaction builder, host projections, ID
+set, vote names, and range-overlap checks incorporate the original gofonia
+project. The demo and documentation explain how these layers fit together.
+
+See [gofonia analysis and integration](docs/gofonia-lineage.md) for the source
+revision, adopted names, adapted code, and implementation differences.
 
 Go 1.22 or newer. No third-party dependencies or external services are required.
 
@@ -38,14 +42,19 @@ restart demonstration; participant crash/recovery cases live in the tests.
 | --- | --- |
 | [Demo](cmd/demo/main.go) | How the layers fit together, with checked outcomes |
 | [Coordinator](internal/client/coordinator.go) | Parallel prepare, votes, retries, one-participant fast path, asynchronous decision delivery |
-| [Memory node](internal/memnode/node.go) | Range locking, conditional execution, durable decisions, idempotency, recovery |
+| [Transaction builder](mini_transaction/mini_transaction.go) | Compare/read/write operations, host projections, and the gofonia vocabulary |
+| [Participant](internal/memnode/participant.go) | Range locking, conditional execution, durable decisions, idempotency, recovery |
 | [Storage](internal/storage/) | Disk image, redo log, replay records, durable metadata |
 | [Public API](pkg/concertum/client.go) | Transaction builder and explicit unknown outcomes |
-| [Index](minuet-index/index.go) | B+tree layout, search, splits, borrowing/merging, ordered scans |
+| [B+tree](minuet-index/btree.go) | B+tree layout, search, splits, borrowing/merging, ordered scans |
 | [SQL engine](minuet-sql/engine.go) | Catalog-backed tables over the index |
 
 The index and SQL layers depend on `sinfonia-client`, which adapts the public
 transaction API. They do not import memory-node internals.
+
+Transactions use `api.NewMiniTransaction().Compare(...).Read(...).Write(...)`
+followed by `ExecuteAndCommit(ctx)`. Items expose `HostId`, `Address`, and
+`Length` for reads; compare and write lengths are inferred from `Data`.
 
 ## Verify
 

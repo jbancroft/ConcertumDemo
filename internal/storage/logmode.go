@@ -20,9 +20,9 @@ import (
 	"github.com/jbancroft/concertum2/internal/proto"
 )
 
-type RedoEntry struct {
-	TID                   proto.TransactionID `json:"tid"`
-	Participants          []uint32            `json:"participants"`
+type RedoLogItem struct {
+	TransactionId         proto.TransactionID `json:"tid"`
+	HostIds               []uint32            `json:"participants"`
 	DecisionDeadlineNanos int64               `json:"decision_deadline_nanos,omitempty"`
 	WriteItems            []proto.WriteItem   `json:"write_items"`
 }
@@ -219,7 +219,7 @@ func (d *DiskImage) Close() error {
 type RedoLog struct {
 	mu      sync.Mutex
 	path    string
-	entries []RedoEntry
+	entries []RedoLogItem
 
 	batchWindow    time.Duration
 	batchMax       int
@@ -231,7 +231,7 @@ type RedoLog struct {
 }
 
 type appendReq struct {
-	entry RedoEntry
+	entry RedoLogItem
 	ack   chan error
 }
 
@@ -240,7 +240,7 @@ func OpenRedoLog(dir string) (*RedoLog, error) {
 		return nil, err
 	}
 	p := filepath.Join(dir, "redo.log")
-	entries := make([]RedoEntry, 0)
+	entries := make([]RedoLogItem, 0)
 	f, err := os.OpenFile(p, os.O_RDONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		return nil, err
@@ -251,7 +251,7 @@ func OpenRedoLog(dir string) (*RedoLog, error) {
 		if len(strings.TrimSpace(string(line))) == 0 {
 			continue
 		}
-		var e RedoEntry
+		var e RedoLogItem
 		if err := json.Unmarshal(line, &e); err != nil {
 			f.Close()
 			return nil, err
@@ -269,16 +269,16 @@ func OpenRedoLog(dir string) (*RedoLog, error) {
 	return r, nil
 }
 
-func (r *RedoLog) Entries() []RedoEntry {
+func (r *RedoLog) Entries() []RedoLogItem {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]RedoEntry, len(r.entries))
+	out := make([]RedoLogItem, len(r.entries))
 	copy(out, r.entries)
 	return out
 }
 
-func (r *RedoLog) Append(entry RedoEntry) error {
-	return r.AppendDurable(entry)
+func (r *RedoLog) Append(entry RedoLogItem) error {
+	return r.AddItem(entry)
 }
 
 func (r *RedoLog) ConfigureBatchingForTest(window time.Duration, max int) {
@@ -313,7 +313,7 @@ func (r *RedoLog) SetObservers(onAppend func(entryBytes int), onFsync func(time.
 	r.onFsync = onFsync
 }
 
-func (r *RedoLog) AppendDurable(entry RedoEntry) error {
+func (r *RedoLog) AddItem(entry RedoLogItem) error {
 	ack := make(chan error, 1)
 	r.appendReqCh <- appendReq{entry: entry, ack: ack}
 	return <-ack
@@ -385,7 +385,7 @@ func (r *RedoLog) flushBatch(batch []appendReq) error {
 	}
 	defer f.Close()
 
-	entries := make([]RedoEntry, 0, len(batch))
+	entries := make([]RedoLogItem, 0, len(batch))
 	bytesWritten := 0
 	for _, req := range batch {
 		b, err := json.Marshal(req.entry)
@@ -430,7 +430,7 @@ func (r *RedoLog) LastTID() proto.TransactionID {
 	if len(r.entries) == 0 {
 		return proto.TransactionID{}
 	}
-	return r.entries[len(r.entries)-1].TID
+	return r.entries[len(r.entries)-1].TransactionId
 }
 
 func (r *RedoLog) TruncateHead(count int) error {
@@ -442,7 +442,7 @@ func (r *RedoLog) TruncateHead(count int) error {
 	if count > len(r.entries) {
 		count = len(r.entries)
 	}
-	remaining := append([]RedoEntry(nil), r.entries[count:]...)
+	remaining := append([]RedoLogItem(nil), r.entries[count:]...)
 	if err := rewriteRedoLogFile(r.path, remaining); err != nil {
 		return err
 	}
@@ -462,7 +462,7 @@ func (r *RedoLog) Reset() error {
 	return nil
 }
 
-func rewriteRedoLogFile(path string, entries []RedoEntry) error {
+func rewriteRedoLogFile(path string, entries []RedoLogItem) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -483,23 +483,23 @@ func rewriteRedoLogFile(path string, entries []RedoEntry) error {
 	return f.Sync()
 }
 
-type DecidedStore struct {
+type DecidedTransactionLog struct {
 	mu       sync.Mutex
 	path     string
 	outcomes map[string]bool
 }
 
-func OpenDecidedStore(dir string) (*DecidedStore, error) {
+func OpenDecidedTransactionLog(dir string) (*DecidedTransactionLog, error) {
 	return openOutcomeStore(filepath.Join(dir, "decided.log"))
 }
 
-type ForcedAbortStore struct {
+type ForcedAbortLog struct {
 	mu   sync.Mutex
 	path string
 	set  map[string]struct{}
 }
 
-func OpenForcedAbortStore(dir string) (*ForcedAbortStore, error) {
+func OpenForcedAbortLog(dir string) (*ForcedAbortLog, error) {
 	p := filepath.Join(dir, "forced_abort.log")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -520,20 +520,20 @@ func OpenForcedAbortStore(dir string) (*ForcedAbortStore, error) {
 	if err := s.Err(); err != nil {
 		return nil, err
 	}
-	return &ForcedAbortStore{path: p, set: out}, nil
+	return &ForcedAbortLog{path: p, set: out}, nil
 }
 
-func (s *ForcedAbortStore) Has(tid proto.TransactionID) bool {
+func (s *ForcedAbortLog) IsForcedAbort(txId proto.TransactionID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.set[tidKey(tid)]
+	_, ok := s.set[tidKey(txId)]
 	return ok
 }
 
-func (s *ForcedAbortStore) Add(tid proto.TransactionID) error {
+func (s *ForcedAbortLog) AddItem(txId proto.TransactionID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := tidKey(tid)
+	k := tidKey(txId)
 	if _, ok := s.set[k]; ok {
 		return nil
 	}
@@ -552,7 +552,7 @@ func (s *ForcedAbortStore) Add(tid proto.TransactionID) error {
 	return nil
 }
 
-func (s *ForcedAbortStore) GCByEpoch(currentEpoch uint64) ([]proto.TransactionID, error) {
+func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]proto.TransactionID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if currentEpoch <= 2 {
@@ -562,13 +562,13 @@ func (s *ForcedAbortStore) GCByEpoch(currentEpoch uint64) ([]proto.TransactionID
 	changed := false
 	removed := make([]proto.TransactionID, 0)
 	for key := range s.set {
-		tid, ok := parseTidKey(key)
+		txId, ok := parseTidKey(key)
 		if !ok {
 			continue
 		}
-		if tid.Epoch < threshold {
+		if txId.Epoch < threshold {
 			delete(s.set, key)
-			removed = append(removed, tid)
+			removed = append(removed, txId)
 			changed = true
 		}
 	}
@@ -585,7 +585,7 @@ func (s *ForcedAbortStore) GCByEpoch(currentEpoch uint64) ([]proto.TransactionID
 // A baseline install replaces the replica's previous transaction history, so
 // retaining an old forced-abort marker could reject a future transaction that
 // is not present in the installed state.
-func (s *ForcedAbortStore) Reset() error {
+func (s *ForcedAbortLog) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous := s.set
@@ -597,7 +597,7 @@ func (s *ForcedAbortStore) Reset() error {
 	return nil
 }
 
-func (s *ForcedAbortStore) rewriteLocked() error {
+func (s *ForcedAbortLog) rewriteLocked() error {
 	keys := make([]string, 0, len(s.set))
 	for k := range s.set {
 		keys = append(keys, k)
@@ -616,7 +616,7 @@ func (s *ForcedAbortStore) rewriteLocked() error {
 	return f.Sync()
 }
 
-func openOutcomeStore(path string) (*DecidedStore, error) {
+func openOutcomeStore(path string) (*DecidedTransactionLog, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
@@ -637,20 +637,20 @@ func openOutcomeStore(path string) (*DecidedStore, error) {
 	if err := s.Err(); err != nil {
 		return nil, err
 	}
-	return &DecidedStore{path: path, outcomes: m}, nil
+	return &DecidedTransactionLog{path: path, outcomes: m}, nil
 }
 
-func (s *DecidedStore) Get(tid proto.TransactionID) (bool, bool) {
+func (s *DecidedTransactionLog) Get(txId proto.TransactionID) (bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	v, ok := s.outcomes[tidKey(tid)]
+	v, ok := s.outcomes[tidKey(txId)]
 	return v, ok
 }
 
-func (s *DecidedStore) Append(tid proto.TransactionID, committed bool) error {
+func (s *DecidedTransactionLog) AddItem(txId proto.TransactionID, committed bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := tidKey(tid)
+	k := tidKey(txId)
 	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
@@ -670,10 +670,10 @@ func (s *DecidedStore) Append(tid proto.TransactionID, committed bool) error {
 	return nil
 }
 
-func (s *DecidedStore) Remove(tid proto.TransactionID) error {
+func (s *DecidedTransactionLog) Remove(txId proto.TransactionID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := tidKey(tid)
+	k := tidKey(txId)
 	if _, ok := s.outcomes[k]; !ok {
 		return nil
 	}
@@ -702,7 +702,7 @@ func (s *DecidedStore) Remove(tid proto.TransactionID) error {
 
 // Reset removes every durable decision and rewrites the store. The caller is
 // responsible for serializing this with participant operations.
-func (s *DecidedStore) Reset() error {
+func (s *DecidedTransactionLog) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)

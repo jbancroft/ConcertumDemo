@@ -60,7 +60,7 @@ func TestRecoverBaselineInstallRestoresReplayLogAndImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldTID := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	oldResp := proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOK, ReadData: map[uint32][]byte{1: []byte("old")}, CurrentEpoch: 9}
+	oldResp := proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOk, ReadData: map[uint32][]byte{1: []byte("old")}, CurrentEpoch: 9}
 	if err := replay.AppendPrepare(oldTID, oldResp); err != nil {
 		t.Fatal(err)
 	}

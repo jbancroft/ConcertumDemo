@@ -1,6 +1,10 @@
 package proto
 
-import "time"
+import (
+	"time"
+
+	"github.com/jbancroft/concertum2/mini_transaction"
+)
 
 // TransactionID uniquely identifies a minitransaction and carries epoch information.
 type TransactionID struct {
@@ -37,12 +41,18 @@ type CmpItem struct {
 	ValidUntil time.Time
 }
 
+func (i CmpItem) Offset() uint64 { return i.Addr }
+func (i CmpItem) Size() uint64   { return uint64(len(i.Data)) }
+
 // ReadItem requests Len bytes at (MemID, Addr).
 type ReadItem struct {
 	MemID uint32
 	Addr  uint64
 	Len   uint32
 }
+
+func (i ReadItem) Offset() uint64 { return i.Addr }
+func (i ReadItem) Size() uint64   { return uint64(i.Len) }
 
 // WriteItem writes Data at (MemID, Addr).
 type WriteItem struct {
@@ -51,14 +61,18 @@ type WriteItem struct {
 	Data  []byte
 }
 
+func (i WriteItem) Offset() uint64 { return i.Addr }
+func (i WriteItem) Size() uint64   { return uint64(len(i.Data)) }
+
 // Vote represents a participant's prepare-phase outcome.
-type Vote int32
+type Vote = mini_transaction.Vote
 
 const (
-	VoteOK Vote = iota
-	VoteBadLock
-	VoteBadForced
-	VoteBadCmp
-	VoteBadStaleEpoch
-	VoteBadInternal
+	VoteUnknown       = mini_transaction.VoteUnknown
+	VoteOk            = mini_transaction.VoteOk
+	VoteBadLock       = mini_transaction.VoteBadLock
+	VoteBadForced     = mini_transaction.VoteBadForced
+	VoteBadCmp        = mini_transaction.VoteBadCmp
+	VoteBadStaleEpoch = mini_transaction.VoteBadStaleEpoch
+	VoteBadInternal   = mini_transaction.VoteBadInternal
 )

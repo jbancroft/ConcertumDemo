@@ -11,12 +11,12 @@ import (
 )
 
 type lost1PCNode struct {
-	*memnode.Node
+	*memnode.Participant
 	dropped bool
 }
 
 func (n *lost1PCNode) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
-	resp, err := n.Node.ExecCommit1PC(ctx, req)
+	resp, err := n.Participant.ExecCommit1PC(ctx, req)
 	if !n.dropped {
 		n.dropped = true
 		return proto.ExecCommit1PCResponse{}, errors.New("lost 1pc response")
@@ -25,16 +25,16 @@ func (n *lost1PCNode) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 }
 
 type lostPrepareNode struct {
-	*memnode.Node
+	*memnode.Participant
 	dropped bool
 }
 
 type failingCommitNode struct {
-	*memnode.Node
+	*memnode.Participant
 }
 
 type unacknowledgedFallbackCommitNode struct {
-	*memnode.Node
+	*memnode.Participant
 }
 
 func (n *failingCommitNode) Commit(context.Context, proto.CommitRequest) (proto.CommitResponse, error) {
@@ -53,8 +53,8 @@ func (n *unacknowledgedFallbackCommitNode) CommitBatch(context.Context, proto.Co
 	return proto.CommitBatchResponse{}, errors.New("commit batch unavailable")
 }
 
-func (n *lostPrepareNode) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
-	resp, err := n.Node.ExecPrepare(ctx, req)
+func (n *lostPrepareNode) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
+	resp, err := n.Participant.ExecAndPrepare(ctx, req)
 	if !n.dropped {
 		n.dropped = true
 		return proto.ExecPrepareResponse{}, errors.New("lost prepare response")
@@ -63,9 +63,9 @@ func (n *lostPrepareNode) ExecPrepare(ctx context.Context, req proto.ExecPrepare
 }
 
 func TestCoordinatorReportsUnknownWhen1PCResponseLostAfterApply(t *testing.T) {
-	n := &lost1PCNode{Node: memnode.NewNode(16)}
-	coord := NewCoordinator(map[uint32]MemNode{1: n})
-	res := coord.ExecAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
+	n := &lost1PCNode{Participant: memnode.NewParticipant(16)}
+	coord := NewCoordinator(map[uint32]Participant{1: n})
+	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
 	if !res.UnknownOutcome || res.TransportErr == nil || res.Committed {
 		t.Fatalf("expected unknown outcome with transport error, got %+v", res)
 	}
@@ -76,16 +76,16 @@ func TestCoordinatorReportsUnknownWhen1PCResponseLostAfterApply(t *testing.T) {
 }
 
 func TestCoordinatorReportsUnknownWhenPrepareResponseLostAfterVote(t *testing.T) {
-	n1 := &lostPrepareNode{Node: memnode.NewNode(16)}
-	n2 := memnode.NewNode(16)
-	coord := NewCoordinator(map[uint32]MemNode{1: n1, 2: n2})
+	n1 := &lostPrepareNode{Participant: memnode.NewParticipant(16)}
+	n2 := memnode.NewParticipant(16)
+	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 	coord.coordID = 1
-	res := coord.ExecAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
+	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
 	if !res.UnknownOutcome || res.TransportErr == nil || res.Committed {
 		t.Fatalf("expected unknown outcome with transport error, got %+v", res)
 	}
-	resp, err := n1.ExecPrepare(context.Background(), proto.ExecPrepareRequest{TID: proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, RequestID: "retry", Participants: []uint32{1, 2}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}})
-	if err != nil || resp.Vote != proto.VoteOK {
+	resp, err := n1.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, RequestID: "retry", Participants: []uint32{1, 2}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}})
+	if err != nil || resp.Vote != proto.VoteOk {
 		t.Fatalf("expected idempotent prepared vote on retry, resp=%+v err=%v", resp, err)
 	}
 }
@@ -102,12 +102,12 @@ func TestCoordinatorIDsAreDistinctAndNonZero(t *testing.T) {
 }
 
 func TestFlushPendingCommitsReportsEarlierTimerDeliveryFailure(t *testing.T) {
-	failing := &failingCommitNode{Node: memnode.NewNode(16)}
-	coord := NewCoordinator(map[uint32]MemNode{
+	failing := &failingCommitNode{Participant: memnode.NewParticipant(16)}
+	coord := NewCoordinator(map[uint32]Participant{
 		1: failing,
-		2: memnode.NewNode(16),
+		2: memnode.NewParticipant(16),
 	})
-	res := coord.ExecAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{
+	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{
 		{MemID: 1, Addr: 0, Data: []byte("A")},
 		{MemID: 2, Addr: 0, Data: []byte("B")},
 	})
@@ -123,12 +123,12 @@ func TestFlushPendingCommitsReportsEarlierTimerDeliveryFailure(t *testing.T) {
 }
 
 func TestFlushPendingCommitsReportsUnacknowledgedFallbackDelivery(t *testing.T) {
-	unacknowledged := &unacknowledgedFallbackCommitNode{Node: memnode.NewNode(16)}
-	coord := NewCoordinator(map[uint32]MemNode{
+	unacknowledged := &unacknowledgedFallbackCommitNode{Participant: memnode.NewParticipant(16)}
+	coord := NewCoordinator(map[uint32]Participant{
 		1: unacknowledged,
-		2: memnode.NewNode(16),
+		2: memnode.NewParticipant(16),
 	})
-	res := coord.ExecAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{
+	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{
 		{MemID: 1, Addr: 0, Data: []byte("A")},
 		{MemID: 2, Addr: 0, Data: []byte("B")},
 	})

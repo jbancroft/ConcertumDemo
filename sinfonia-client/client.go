@@ -4,35 +4,15 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"time"
 
+	"github.com/jbancroft/concertum2/mini_transaction"
 	"github.com/jbancroft/concertum2/pkg/concertum"
 )
 
-type CmpItem struct {
-	MemID      uint32
-	Addr       uint64
-	Data       []byte
-	ValidUntil time.Time
-}
-
-type ReadItem struct {
-	MemID uint32
-	Addr  uint64
-	Len   uint32
-}
-
-type WriteItem struct {
-	MemID uint32
-	Addr  uint64
-	Data  []byte
-}
-
-type ReadKey struct {
-	MemID uint32
-	Addr  uint64
-	Len   uint32
-}
+type CompareItem = mini_transaction.CompareItem
+type ReadItem = mini_transaction.ReadItem
+type WriteItem = mini_transaction.WriteItem
+type ReadKey = mini_transaction.ReadKey
 
 type ExecResult struct {
 	Committed      bool
@@ -42,9 +22,9 @@ type ExecResult struct {
 
 // TxnClient is the minitransaction contract consumed by higher layers.
 type TxnClient interface {
-	ExecAndCommit(ctx context.Context, class string, cmp []CmpItem, reads []ReadItem, writes []WriteItem) ExecResult
-	Read(ctx context.Context, memID uint32, addr uint64, length uint32) ([]byte, error)
-	Write(ctx context.Context, memID uint32, addr uint64, data []byte) error
+	ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult
+	Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error)
+	Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
 }
 
 // TransactionDomainProvider identifies clients that can participate in the
@@ -116,33 +96,33 @@ func isNilReference(value reflect.Value) bool {
 	}
 }
 
-func (c *Client) Read(ctx context.Context, memID uint32, addr uint64, length uint32) ([]byte, error) {
-	return c.inner.Read(ctx, memID, addr, length)
+func (c *Client) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
+	return c.inner.Read(ctx, hostId, addr, length)
 }
 
-func (c *Client) Write(ctx context.Context, memID uint32, addr uint64, data []byte) error {
-	return c.inner.Write(ctx, memID, addr, data)
+func (c *Client) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
+	return c.inner.Write(ctx, hostId, addr, data)
 }
 
-func (c *Client) ExecAndCommit(ctx context.Context, class string, cmp []CmpItem, reads []ReadItem, writes []WriteItem) ExecResult {
-	mtx := c.inner.NewMTx().WithClass(class)
-	for _, item := range cmp {
+func (c *Client) ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult {
+	tx := c.inner.NewMiniTransaction().WithClass(class)
+	for _, item := range compares {
 		if item.ValidUntil.IsZero() {
-			mtx.Cmp(item.MemID, item.Addr, item.Data)
+			tx.Compare(item.HostId, item.Address, item.Data)
 		} else {
-			mtx.CmpValidUntil(item.MemID, item.Addr, item.Data, item.ValidUntil)
+			tx.CompareValidUntil(item.HostId, item.Address, item.Data, item.ValidUntil)
 		}
 	}
 	for _, item := range reads {
-		mtx.Read(item.MemID, item.Addr, item.Len)
+		tx.Read(item.HostId, item.Address, item.Length)
 	}
 	for _, item := range writes {
-		mtx.Write(item.MemID, item.Addr, item.Data)
+		tx.Write(item.HostId, item.Address, item.Data)
 	}
-	committed, readResults, status, _ := mtx.ExecAndCommitDetailed(ctx)
+	committed, readResults, status, _ := tx.ExecuteAndCommitDetailed(ctx)
 	out := make(map[ReadKey][]byte, len(readResults))
 	for k, v := range readResults {
-		out[ReadKey{MemID: k.MemID, Addr: k.Addr, Len: k.Len}] = append([]byte(nil), v...)
+		out[ReadKey{HostId: k.HostId, Address: k.Address, Length: k.Length}] = append([]byte(nil), v...)
 	}
 	return ExecResult{Committed: committed, ReadResults: out, UnknownOutcome: status == concertum.StatusUnknown}
 }

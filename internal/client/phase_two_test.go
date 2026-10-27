@@ -16,25 +16,25 @@ import (
 	"github.com/jbancroft/concertum2/internal/proto"
 )
 
-// phaseTwoNode controls delivery at the existing MemNode interface while the
+// phaseTwoNode controls delivery at the existing Participant interface while the
 // coordinator runs its normal asynchronous workers and batching implementation.
 type phaseTwoNode struct {
-	MemNode
+	Participant
 	prepared  chan proto.TransactionID
 	delivered chan proto.CommitRequest
 	gate      <-chan struct{}
 	batchErr  error
 }
 
-func newPhaseTwoNode(node MemNode, gate <-chan struct{}) *phaseTwoNode {
+func newPhaseTwoNode(node Participant, gate <-chan struct{}) *phaseTwoNode {
 	return &phaseTwoNode{
-		MemNode: node, prepared: make(chan proto.TransactionID, 2),
+		Participant: node, prepared: make(chan proto.TransactionID, 2),
 		delivered: make(chan proto.CommitRequest, 2), gate: gate,
 	}
 }
 
-func (n *phaseTwoNode) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
-	resp, err := n.MemNode.ExecPrepare(ctx, req)
+func (n *phaseTwoNode) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
+	resp, err := n.Participant.ExecAndPrepare(ctx, req)
 	n.prepared <- req.TID
 	return resp, err
 }
@@ -55,7 +55,7 @@ func (n *phaseTwoNode) Commit(ctx context.Context, req proto.CommitRequest) (pro
 	if err := n.waitForDelivery(ctx); err != nil {
 		return proto.CommitResponse{}, err
 	}
-	resp, err := n.MemNode.Commit(ctx, req)
+	resp, err := n.Participant.Commit(ctx, req)
 	if err == nil && resp.Ack {
 		n.delivered <- req
 	}
@@ -69,7 +69,7 @@ func (n *phaseTwoNode) CommitBatch(ctx context.Context, req proto.CommitBatchReq
 	if err := n.waitForDelivery(ctx); err != nil {
 		return proto.CommitBatchResponse{}, err
 	}
-	resp, err := n.MemNode.CommitBatch(ctx, req)
+	resp, err := n.Participant.CommitBatch(ctx, req)
 	if err == nil {
 		for i, decision := range req.Decisions {
 			if i < len(resp.Acks) && resp.Acks[i] {
@@ -105,11 +105,11 @@ func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T
 	gate := make(chan struct{})
 	release := sync.OnceFunc(func() { close(gate) })
 	defer release()
-	n1 := newPhaseTwoNode(memnode.NewNode(64), nil)
-	n2 := newPhaseTwoNode(memnode.NewNode(64), gate)
-	coord := NewCoordinator(map[uint32]MemNode{1: n1, 2: n2})
+	n1 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
+	n2 := newPhaseTwoNode(memnode.NewParticipant(64), gate)
+	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 
-	result := coord.ExecAndCommit(ctx, "", nil, nil, phaseTwoWrites())
+	result := coord.ExecuteAndCommit(ctx, "", nil, nil, phaseTwoWrites())
 	if !result.Committed || result.UnknownOutcome {
 		t.Fatalf("result=%+v", result)
 	}
@@ -137,7 +137,7 @@ func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T
 		t.Fatalf("delivered write=%q, err=%v", got, err)
 	}
 
-	result = coord.ExecAndCommit(ctx, "", nil, nil, phaseTwoWrites())
+	result = coord.ExecuteAndCommit(ctx, "", nil, nil, phaseTwoWrites())
 	if !result.Committed || result.UnknownOutcome {
 		t.Fatalf("second result=%+v", result)
 	}
@@ -161,10 +161,10 @@ func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T
 func TestCoordinatorPhaseTwoDeliversAbortAfterRejectedPrepare(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	n1 := newPhaseTwoNode(memnode.NewNode(64), nil)
-	n2 := newPhaseTwoNode(memnode.NewNode(64), nil)
-	coord := NewCoordinator(map[uint32]MemNode{1: n1, 2: n2})
-	result := coord.ExecAndCommit(ctx, "",
+	n1 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
+	n2 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
+	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+	result := coord.ExecuteAndCommit(ctx, "",
 		[]proto.CmpItem{{MemID: 2, Addr: 8, Data: []byte("stale")}}, nil, phaseTwoWrites())
 	if result.Committed || result.UnknownOutcome || result.Status != proto.VoteBadCmp {
 		t.Fatalf("expected compare abort, got %+v", result)
@@ -173,9 +173,9 @@ func TestCoordinatorPhaseTwoDeliversAbortAfterRejectedPrepare(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, node := range []*phaseTwoNode{n1, n2} {
-		tid := receivePhaseTwo(t, ctx, node.prepared)
-		if got := receivePhaseTwo(t, ctx, node.delivered); got.TID != tid || got.ActionCommit {
-			t.Fatalf("delivery=%+v, want abort for %+v", got, tid)
+		txId := receivePhaseTwo(t, ctx, node.prepared)
+		if got := receivePhaseTwo(t, ctx, node.delivered); got.TID != txId || got.ActionCommit {
+			t.Fatalf("delivery=%+v, want abort for %+v", got, txId)
 		}
 		if got, err := node.Read(ctx, 8, 1); err != nil || string(got) != "\x00" {
 			t.Fatalf("aborted write was applied: %q, err=%v", got, err)
@@ -204,12 +204,12 @@ func TestCoordinatorRecoversAfterPartialCommitDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var tid proto.TransactionID
-			if err := json.Unmarshal(data, &tid); err != nil {
+			var txId proto.TransactionID
+			if err := json.Unmarshal(data, &txId); err != nil {
 				t.Fatal(err)
 			}
-			if tid.CoordinatorID == 0 || tid.Counter == 0 || tid.Epoch == 0 {
-				t.Fatalf("invalid captured transaction ID: %+v", tid)
+			if txId.CoordinatorID == 0 || txId.Counter == 0 || txId.Epoch == 0 {
+				t.Fatalf("invalid captured transaction ID: %+v", txId)
 			}
 
 			nodes := openPhaseTwoNodes(t, dir)
@@ -226,11 +226,11 @@ func TestCoordinatorRecoversAfterPartialCommitDelivery(t *testing.T) {
 	}
 }
 
-func openPhaseTwoNodes(t *testing.T, dir string) []*memnode.Node {
+func openPhaseTwoNodes(t *testing.T, dir string) []*memnode.Participant {
 	t.Helper()
-	var nodes []*memnode.Node
+	var nodes []*memnode.Participant
 	for id := uint32(1); id <= 2; id++ {
-		node, err := memnode.NewDurableNode(id, 64, filepath.Join(dir, fmt.Sprintf("node-%d", id)))
+		node, err := memnode.NewDurableParticipant(id, 64, filepath.Join(dir, fmt.Sprintf("node-%d", id)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -263,14 +263,14 @@ func runPhaseTwoCrashHelper(t *testing.T, dir string) {
 		n1.batchErr = errors.New("force individual commit fallback")
 		n2.batchErr = n1.batchErr
 	}
-	coord := NewCoordinator(map[uint32]MemNode{1: n1, 2: n2})
-	if result := coord.ExecAndCommit(ctx, "", nil, nil, phaseTwoWrites()); !result.Committed || result.UnknownOutcome {
+	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+	if result := coord.ExecuteAndCommit(ctx, "", nil, nil, phaseTwoWrites()); !result.Committed || result.UnknownOutcome {
 		t.Fatalf("result=%+v", result)
 	}
 	delivered := receivePhaseTwo(t, ctx, n1.delivered)
 	for _, node := range []*phaseTwoNode{n1, n2} {
-		if tid := receivePhaseTwo(t, ctx, node.prepared); tid != delivered.TID {
-			t.Fatalf("prepare=%+v, delivered=%+v", tid, delivered)
+		if txId := receivePhaseTwo(t, ctx, node.prepared); txId != delivered.TID {
+			t.Fatalf("prepare=%+v, delivered=%+v", txId, delivered)
 		}
 	}
 	for i, want := range []string{"A", "\x00"} {

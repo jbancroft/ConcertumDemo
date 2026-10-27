@@ -17,7 +17,7 @@ func (*domainTestBackend) Write(context.Context, uint32, uint64, []byte) error {
 
 func (*domainTestBackend) GetStats(uint32) (concertum.Stats, error) { return concertum.Stats{}, nil }
 
-func (*domainTestBackend) ExecAndCommit(context.Context, string, []concertum.CmpItem, []concertum.ReadItem, []concertum.WriteItem) concertum.ExecResult {
+func (*domainTestBackend) ExecuteAndCommit(context.Context, string, []concertum.CompareItem, []concertum.ReadItem, []concertum.WriteItem) concertum.ExecResult {
 	return concertum.ExecResult{}
 }
 

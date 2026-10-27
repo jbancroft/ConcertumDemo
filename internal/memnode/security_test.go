@@ -13,7 +13,7 @@ import (
 )
 
 func TestRecoveryDeniedForClientIdentity(t *testing.T) {
-	n := NewNodeWithID(1, 256)
+	n := NewParticipantWithId(1, 256)
 	n.ConfigureSafety(SafetyConfig{Authorizer: &auth.Authorizer{}})
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Name: "c", Role: auth.RoleClient})
 	_, err := n.RecoveryForceAbort(ctx, proto.RecoverForceAbortRequest{})
@@ -23,20 +23,20 @@ func TestRecoveryDeniedForClientIdentity(t *testing.T) {
 }
 
 func TestExecPrepareAllowedForClientIdentity(t *testing.T) {
-	n := NewNodeWithID(1, 256)
+	n := NewParticipantWithId(1, 256)
 	n.ConfigureSafety(SafetyConfig{Authorizer: &auth.Authorizer{}})
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Name: "c", Role: auth.RoleClient})
-	_, err := n.ExecPrepare(ctx, proto.ExecPrepareRequest{TID: proto.TransactionID{Epoch: 1}})
+	_, err := n.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: proto.TransactionID{Epoch: 1}})
 	if err != nil {
 		t.Fatalf("expected allowed, got %v", err)
 	}
 }
 
 func TestRateLimitRejectsGracefully(t *testing.T) {
-	n := NewNodeWithID(1, 256)
+	n := NewParticipantWithId(1, 256)
 	n.ConfigureSafety(SafetyConfig{PrepareRate: 1, Burst: 1})
-	_, err1 := n.ExecPrepare(context.Background(), proto.ExecPrepareRequest{TID: proto.TransactionID{Epoch: 1}})
-	_, err2 := n.ExecPrepare(context.Background(), proto.ExecPrepareRequest{TID: proto.TransactionID{Epoch: 1, Counter: 2}})
+	_, err1 := n.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: proto.TransactionID{Epoch: 1}})
+	_, err2 := n.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: proto.TransactionID{Epoch: 1, Counter: 2}})
 	if err1 != nil && err1 == ErrResourceExhausted {
 		t.Fatalf("first request should pass")
 	}
@@ -46,7 +46,7 @@ func TestRateLimitRejectsGracefully(t *testing.T) {
 }
 
 func TestDebugEndpointDeniedWithoutAdmin(t *testing.T) {
-	n := NewNodeWithID(1, 256)
+	n := NewParticipantWithId(1, 256)
 	a := &auth.Authorizer{Tokens: map[string]auth.Identity{"adm": {Name: "adm", Role: auth.RoleAdmin}}}
 	n.ConfigureSafety(SafetyConfig{EnableDebug: true, Authorizer: a})
 	s := httptest.NewServer(n.HTTPHandler(false))
@@ -61,7 +61,7 @@ func TestDebugEndpointDeniedWithoutAdmin(t *testing.T) {
 }
 
 func TestHTTPServerTLS(t *testing.T) {
-	n := NewNodeWithID(1, 256)
+	n := NewParticipantWithId(1, 256)
 	s := httptest.NewUnstartedServer(n.HTTPHandler(false))
 	s.StartTLS()
 	defer s.Close()
@@ -91,7 +91,7 @@ func (p *allowPolicy) EvaluatePolicy(actorID, tenantID, projectID, role, action,
 }
 
 func TestMemnodeControlPlaneUsesPolicyBeforeCoarseRole(t *testing.T) {
-	n := NewNodeWithID(1, 256)
+	n := NewParticipantWithId(1, 256)
 	n.ConfigureSafety(SafetyConfig{Authorizer: &auth.Authorizer{Policy: denyPolicy{}}})
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Name: "mgr", Role: auth.RoleManager})
 	_, err := n.ConfigureReplication(ctx, proto.ConfigureReplicationRequest{Role: proto.ReplicationRoleSingle})
@@ -102,7 +102,7 @@ func TestMemnodeControlPlaneUsesPolicyBeforeCoarseRole(t *testing.T) {
 
 func TestMemnodeControlPlaneReportsPolicyAction(t *testing.T) {
 	p := &allowPolicy{}
-	n := NewNodeWithID(1, 256)
+	n := NewParticipantWithId(1, 256)
 	n.ConfigureSafety(SafetyConfig{Authorizer: &auth.Authorizer{Policy: p}})
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Name: "mgr", Role: auth.RoleClient})
 	_, err := n.ConfigureReplication(ctx, proto.ConfigureReplicationRequest{Role: proto.ReplicationRoleSingle})

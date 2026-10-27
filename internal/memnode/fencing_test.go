@@ -71,7 +71,7 @@ func TestDurableNodeBoundsExistingFencingGenerationHistoryOnStartup(t *testing.T
 	if files, err := fencingGenerationFiles(dir); err != nil || len(files) != 5 {
 		t.Fatalf("seeded fencing generations = %d, err=%v, want 5", len(files), err)
 	}
-	node, err := NewDurableNode(1, 64, dir)
+	node, err := NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestFencingPublicationFailurePreservesFencingAcrossRestart(t *testing.T) {
 	for _, checkpoint := range fencingPublicationCheckpoints() {
 		t.Run(checkpoint, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "node")
-			node, err := NewDurableNode(1, 64, dir)
+			node, err := NewDurableParticipant(1, 64, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -206,7 +206,7 @@ func TestFencingPublicationFailurePreservesFencingAcrossRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			restarted, err := NewDurableNode(1, 64, dir)
+			restarted, err := NewDurableParticipant(1, 64, dir)
 			if err != nil {
 				t.Fatal(err)
 			}

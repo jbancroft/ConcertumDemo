@@ -18,13 +18,13 @@ const (
 	benchRangeSpanWide         = 512
 )
 
-func benchmarkIndex(b *testing.B) (*Index, context.Context) {
+func benchmarkIndex(b *testing.B) (*BTree, context.Context) {
 	b.Helper()
-	idx := New(newMemTxnClient(), Config{MemID: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
+	idx := NewBTree(newMemTxnClient(), Config{HostId: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
 	return idx, context.Background()
 }
 
-func preloadSequential(b *testing.B, idx *Index, ctx context.Context, n int) {
+func preloadSequential(b *testing.B, idx *BTree, ctx context.Context, n int) {
 	b.Helper()
 	for i := 0; i < n; i++ {
 		if err := idx.Insert(ctx, uint64(i), uint64(i)); err != nil {

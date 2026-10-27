@@ -17,7 +17,7 @@ import (
 func TestDurableDirectWriteRejectedWithoutLiveOrRestartMutation(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
-	n, err := memnode.NewDurableNode(1, 64, dir)
+	n, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestDurableDirectWriteRejectedWithoutLiveOrRestartMutation(t *testing.T) {
 	}
 	assertBytesAt(t, n, ctx, 4, []byte{0, 0, 0})
 
-	restarted, err := memnode.NewDurableNode(1, 64, dir)
+	restarted, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,15 +54,15 @@ func TestDurableDirectWriteRejectedWithoutLiveOrRestartMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Vote != proto.VoteOK {
-		t.Fatalf("transactional durable write vote = %v, want %v", resp.Vote, proto.VoteOK)
+	if resp.Vote != proto.VoteOk {
+		t.Fatalf("transactional durable write vote = %v, want %v", resp.Vote, proto.VoteOk)
 	}
 	assertBytesAt(t, restarted, ctx, 4, []byte("mtx"))
 	if err := restarted.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	restartedAgain, err := memnode.NewDurableNode(1, 64, dir)
+	restartedAgain, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestDurableDirectWriteRejectedWithoutLiveOrRestartMutation(t *testing.T) {
 
 func TestDurableDirectWritePreservesAuthorizationAndFencingPrecedence(t *testing.T) {
 	ctx := context.Background()
-	n, err := memnode.NewDurableNode(1, 64, filepath.Join(t.TempDir(), "node"))
+	n, err := memnode.NewDurableParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestDurableDirectWritePreservesAuthorizationAndFencingPrecedence(t *testing
 
 func TestInMemoryDirectWriteRemainsSupported(t *testing.T) {
 	ctx := context.Background()
-	n := memnode.NewNode(16)
+	n := memnode.NewParticipant(16)
 	if err := n.Write(ctx, 3, []byte("ram")); err != nil {
 		t.Fatal(err)
 	}
@@ -117,14 +117,14 @@ func TestInMemoryDirectWriteRemainsSupported(t *testing.T) {
 func TestDurableDirectWriteRejectedInEveryReplicationMode(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		configure func(*memnode.Node)
+		configure func(*memnode.Participant)
 	}{
-		{name: "single", configure: func(*memnode.Node) {}},
-		{name: "primary", configure: func(n *memnode.Node) { n.ConfigureAsPrimary(2, nil) }},
-		{name: "replica", configure: func(n *memnode.Node) { n.ConfigureAsReplica(2) }},
+		{name: "single", configure: func(*memnode.Participant) {}},
+		{name: "primary", configure: func(n *memnode.Participant) { n.ConfigureAsPrimary(2, nil) }},
+		{name: "replica", configure: func(n *memnode.Participant) { n.ConfigureAsReplica(2) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n, err := memnode.NewDurableNode(1, 16, filepath.Join(t.TempDir(), tc.name))
+			n, err := memnode.NewDurableParticipant(1, 16, filepath.Join(t.TempDir(), tc.name))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -143,7 +143,7 @@ func TestDurableDirectWriteRejectedInEveryReplicationMode(t *testing.T) {
 func TestDurableDirectWriteRPCSurfacesRejection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	n, err := memnode.NewDurableNode(1, 16, filepath.Join(t.TempDir(), "node"))
+	n, err := memnode.NewDurableParticipant(1, 16, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestDurableDirectWriteRPCSurfacesRejection(t *testing.T) {
 	if err := n.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	rpcNode := client.NewRPCMemNode(startMemnodeRPC(t, n), nil, time.Second)
+	rpcNode := client.NewRPCParticipant(startMemnodeRPC(t, n), nil, time.Second)
 
 	err = rpcNode.Write(ctx, 0, []byte("x"))
 	if err == nil || !strings.Contains(err.Error(), memnode.ErrDirectWriteRequiresMiniTransaction.Error()) {
@@ -160,7 +160,7 @@ func TestDurableDirectWriteRPCSurfacesRejection(t *testing.T) {
 	assertBytesAt(t, n, ctx, 0, []byte{0})
 }
 
-func assertBytesAt(t *testing.T, n *memnode.Node, ctx context.Context, addr uint64, want []byte) {
+func assertBytesAt(t *testing.T, n *memnode.Participant, ctx context.Context, addr uint64, want []byte) {
 	t.Helper()
 	got, err := n.Read(ctx, addr, uint32(len(want)))
 	if err != nil {

@@ -52,48 +52,48 @@ func NewDirectoryBackedCoordinator(ctx context.Context, dirAddr string, tlsConfi
 	return d, nil
 }
 
-func (d *DirectoryBackedCoordinator) Read(ctx context.Context, memID uint32, addr uint64, length uint32) ([]byte, error) {
+func (d *DirectoryBackedCoordinator) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
 	coord, err := d.current(ctx)
 	if err != nil {
 		return nil, err
 	}
-	data, err := coord.Read(ctx, memID, addr, length)
+	data, err := coord.Read(ctx, hostId, addr, length)
 	if isRoutingOrTransportError(err) {
 		d.markStale()
 	}
 	return data, err
 }
 
-func (d *DirectoryBackedCoordinator) Write(ctx context.Context, memID uint32, addr uint64, data []byte) error {
+func (d *DirectoryBackedCoordinator) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
 	coord, err := d.current(ctx)
 	if err != nil {
 		return err
 	}
-	err = coord.Write(ctx, memID, addr, data)
+	err = coord.Write(ctx, hostId, addr, data)
 	if isRoutingOrTransportError(err) {
 		d.markStale()
 	}
 	return err
 }
 
-func (d *DirectoryBackedCoordinator) GetStats(memID uint32) (memnode.StatsResponse, error) {
+func (d *DirectoryBackedCoordinator) GetStats(hostId uint32) (memnode.StatsResponse, error) {
 	coord, err := d.current(context.Background())
 	if err != nil {
 		return memnode.StatsResponse{}, err
 	}
-	stats, err := coord.GetStats(memID)
+	stats, err := coord.GetStats(hostId)
 	if isRoutingOrTransportError(err) {
 		d.markStale()
 	}
 	return stats, err
 }
 
-func (d *DirectoryBackedCoordinator) ExecAndCommit(ctx context.Context, class string, cmp []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
+func (d *DirectoryBackedCoordinator) ExecuteAndCommit(ctx context.Context, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
 	coord, err := d.current(ctx)
 	if err != nil {
 		return ExecResult{Committed: false, ReadResults: map[proto.ReadItem][]byte{}, Status: proto.VoteBadInternal, ParticipantVotes: map[uint32]proto.Vote{}, TransportErr: err}
 	}
-	res := coord.ExecAndCommit(ctx, class, cmp, reads, writes)
+	res := coord.ExecuteAndCommit(ctx, class, compares, reads, writes)
 	d.mu.Lock()
 	d.pendingSeq++
 	d.pending[coord] = d.pendingSeq
@@ -172,14 +172,14 @@ func (d *DirectoryBackedCoordinator) refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	nodes := map[uint32]MemNode{}
+	nodes := map[uint32]Participant{}
 	statsReaders := map[uint32]StatsReader{}
 	generations := map[uint32]uint64{}
-	for memID, entry := range entries {
-		nodes[memID] = NewRPCMemNodeWithGeneration(entry.Primary.RPC, d.tlsConfig, d.timeout, entry.Generation)
-		generations[memID] = entry.Generation
+	for hostId, entry := range entries {
+		nodes[hostId] = NewRPCParticipantWithGeneration(entry.Primary.RPC, d.tlsConfig, d.timeout, entry.Generation)
+		generations[hostId] = entry.Generation
 		if entry.Primary.HTTP != "" {
-			statsReaders[memID] = NewAdminHTTPClient(entry.Primary.HTTP, d.timeout)
+			statsReaders[hostId] = NewAdminHTTPClient(entry.Primary.HTTP, d.timeout)
 		}
 	}
 	coord := NewCoordinator(nodes)

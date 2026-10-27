@@ -28,7 +28,7 @@ func TestReplicationBaselineInstallCrashBoundariesRecoverOldState(t *testing.T) 
 		t.Run(phase, func(t *testing.T) {
 			ctx := context.Background()
 			dir := filepath.Join(t.TempDir(), "replica")
-			seed, err := memnode.NewDurableNode(1, 64, dir)
+			seed, err := memnode.NewDurableParticipant(1, 64, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -39,33 +39,33 @@ func TestReplicationBaselineInstallCrashBoundariesRecoverOldState(t *testing.T) 
 				t.Fatal(err)
 			}
 
-			tid := proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
+			txId := proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
 			redo, err := storage.OpenRedoLog(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := redo.AppendDurable(storage.RedoEntry{TID: tid, Participants: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
+			if err := redo.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
 				t.Fatal(err)
 			}
-			decided, err := storage.OpenDecidedStore(dir)
+			decided, err := storage.OpenDecidedTransactionLog(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := decided.Append(tid, true); err != nil {
+			if err := decided.AddItem(txId, true); err != nil {
 				t.Fatal(err)
 			}
-			forced, err := storage.OpenForcedAbortStore(dir)
+			forced, err := storage.OpenForcedAbortLog(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := forced.Add(tid); err != nil {
+			if err := forced.AddItem(txId); err != nil {
 				t.Fatal(err)
 			}
 			if err := storage.StoreProcessedPointer(dir, 1); err != nil {
 				t.Fatal(err)
 			}
 
-			replica, err := memnode.NewDurableNode(1, 64, dir)
+			replica, err := memnode.NewDurableParticipant(1, 64, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,7 +99,7 @@ func TestReplicationBaselineInstallCrashBoundariesRecoverOldState(t *testing.T) 
 				t.Fatal(err)
 			}
 
-			restarted, err := memnode.NewDurableNode(1, 64, dir)
+			restarted, err := memnode.NewDurableParticipant(1, 64, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,7 +114,7 @@ func TestReplicationBaselineInstallCrashBoundariesRecoverOldState(t *testing.T) 
 			if string(got) != "old\x00\x00\x00\x00\x00\x00\x00\x00\x00" {
 				t.Fatalf("recovered image = %q, want old baseline", string(got))
 			}
-			if restarted.RedoEntryCountForTest() != 1 || !restarted.HasDecidedForTest(tid) || !restarted.HasForcedAbortForTest(tid) {
+			if restarted.RedoEntryCountForTest() != 1 || !restarted.HasDecidedForTest(txId) || !restarted.HasForcedAbortForTest(txId) {
 				t.Fatal("rollback did not restore the complete old transaction metadata")
 			}
 		})
@@ -124,7 +124,7 @@ func TestReplicationBaselineInstallCrashBoundariesRecoverOldState(t *testing.T) 
 func TestReplicationBaselineReplayInstallCrashBoundaryRecoversOldState(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "replica")
-	seed, err := memnode.NewDurableNode(1, 64, dir)
+	seed, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestReplicationBaselineReplayInstallCrashBoundaryRecoversOldState(t *testin
 		t.Fatal(err)
 	}
 	oldTID := proto.TransactionID{CoordinatorID: 31, Counter: 1, Epoch: 1}
-	oldResponse := proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOK, ReadData: map[uint32][]byte{1: []byte("old")}}
+	oldResponse := proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOk, ReadData: map[uint32][]byte{1: []byte("old")}}
 	oldReplay, err := storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestReplicationBaselineReplayInstallCrashBoundaryRecoversOldState(t *testin
 		t.Fatal(err)
 	}
 
-	replica, err := memnode.NewDurableNode(1, 64, dir)
+	replica, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestReplicationBaselineReplayInstallCrashBoundaryRecoversOldState(t *testin
 	if err := replica.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := memnode.NewDurableNode(1, 64, dir)
+	restarted, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestReplicationBaselineInstallCrashSubprocess(t *testing.T) {
 	for _, testCase := range phases {
 		t.Run(testCase.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "replica")
-			tid := seedOldBaseline(t, dir)
+			txId := seedOldBaseline(t, dir)
 			cmd := exec.Command(os.Args[0], "-test.run=^TestReplicationBaselineInstallCrashHelper$", "--")
 			cmd.Env = append(os.Environ(),
 				"CONCERTUM_BASELINE_CRASH_HELPER=1",
@@ -275,7 +275,7 @@ func TestReplicationBaselineInstallCrashSubprocess(t *testing.T) {
 					t.Fatalf("crash helper error = %v, want exit 97", err)
 				}
 			}
-			restarted, err := memnode.NewDurableNode(1, 64, dir)
+			restarted, err := memnode.NewDurableParticipant(1, 64, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -293,7 +293,7 @@ func TestReplicationBaselineInstallCrashSubprocess(t *testing.T) {
 				if string(got) != string(want) {
 					t.Fatalf("post-commit crash image = %q, want new baseline", string(got))
 				}
-				if restarted.RedoEntryCountForTest() != 0 || restarted.HasDecidedForTest(tid) || restarted.HasForcedAbortForTest(tid) {
+				if restarted.RedoEntryCountForTest() != 0 || restarted.HasDecidedForTest(txId) || restarted.HasForcedAbortForTest(txId) {
 					t.Fatal("post-commit crash retained old transaction metadata")
 				}
 				return
@@ -302,7 +302,7 @@ func TestReplicationBaselineInstallCrashSubprocess(t *testing.T) {
 			if string(got) != string(want) {
 				t.Fatalf("pre-commit crash image = %q, want old baseline", string(got))
 			}
-			if restarted.RedoEntryCountForTest() != 1 || !restarted.HasDecidedForTest(tid) || !restarted.HasForcedAbortForTest(tid) {
+			if restarted.RedoEntryCountForTest() != 1 || !restarted.HasDecidedForTest(txId) || !restarted.HasForcedAbortForTest(txId) {
 				t.Fatal("pre-commit crash did not restore old transaction metadata")
 			}
 		})
@@ -315,7 +315,7 @@ func TestReplicationBaselineInstallCrashHelper(t *testing.T) {
 	}
 	dir := os.Getenv("CONCERTUM_BASELINE_CRASH_DIR")
 	phase := os.Getenv("CONCERTUM_BASELINE_CRASH_PHASE")
-	node, err := memnode.NewDurableNode(1, 64, dir)
+	node, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestReplicationBaselineInstallCrashHelper(t *testing.T) {
 
 func seedOldBaseline(t *testing.T, dir string) proto.TransactionID {
 	t.Helper()
-	node, err := memnode.NewDurableNode(1, 64, dir)
+	node, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,38 +352,38 @@ func seedOldBaseline(t *testing.T, dir string) proto.TransactionID {
 	if err := node.Close(); err != nil {
 		t.Fatal(err)
 	}
-	tid := proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
 	redo, err := storage.OpenRedoLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := redo.AppendDurable(storage.RedoEntry{TID: tid, Participants: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
+	if err := redo.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
 		t.Fatal(err)
 	}
-	decided, err := storage.OpenDecidedStore(dir)
+	decided, err := storage.OpenDecidedTransactionLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := decided.Append(tid, true); err != nil {
+	if err := decided.AddItem(txId, true); err != nil {
 		t.Fatal(err)
 	}
-	forced, err := storage.OpenForcedAbortStore(dir)
+	forced, err := storage.OpenForcedAbortLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := forced.Add(tid); err != nil {
+	if err := forced.AddItem(txId); err != nil {
 		t.Fatal(err)
 	}
 	if err := storage.StoreProcessedPointer(dir, 1); err != nil {
 		t.Fatal(err)
 	}
-	return tid
+	return txId
 }
 
 func TestReplicationBaselineChunkChecksumMismatchDoesNotTouchLiveState(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "replica")
-	node, err := memnode.NewDurableNode(1, 64, dir)
+	node, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestReplicationBaselineChunkChecksumMismatchDoesNotTouchLiveState(t *testin
 func TestReplicationBaselineRejectsLiveIngressUntilCommit(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "replica")
-	node, err := memnode.NewDurableNode(1, 64, dir)
+	node, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,16 +464,16 @@ func TestReplicationBaselineRejectsLiveIngressUntilCommit(t *testing.T) {
 		t.Fatalf("write response = %+v, err = %v", written, err)
 	}
 
-	tid := proto.TransactionID{CoordinatorID: 71, Counter: 1, Epoch: 1}
+	txId := proto.TransactionID{CoordinatorID: 71, Counter: 1, Epoch: 1}
 	entry := proto.RedoEntryPayload{
-		TID:          tid,
+		TID:          txId,
 		Participants: []uint32{1},
 		WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 32, Data: []byte("live")}},
 	}
 	if response, err := node.ReplicateRedoEntry(ctx, proto.ReplicateRedoEntryRequest{Entry: entry}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
 		t.Fatalf("redo during staged baseline = %+v, err = %v", response, err)
 	}
-	if response, err := node.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: tid, ActionCommit: true}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
+	if response, err := node.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
 		t.Fatalf("decision during staged baseline = %+v, err = %v", response, err)
 	}
 	replayTID := proto.TransactionID{CoordinatorID: 71, Counter: 2, Epoch: 1}
@@ -492,7 +492,7 @@ func TestReplicationBaselineRejectsLiveIngressUntilCommit(t *testing.T) {
 	if response, err := node.ReplicateReplayRecord(ctx, proto.ReplicateReplayRecordRequest{TID: replayTID, Kind: proto.ReplayRecordOnePC, OnePC: &replay}); err != nil || !response.Ack {
 		t.Fatalf("replay after baseline commit = %+v, err = %v", response, err)
 	}
-	if response, err := node.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: tid, ActionCommit: true}); err != nil || !response.Ack {
+	if response, err := node.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); err != nil || !response.Ack {
 		t.Fatalf("decision after baseline commit = %+v, err = %v", response, err)
 	}
 	node.UnlockAllOwned(owner)
@@ -500,7 +500,7 @@ func TestReplicationBaselineRejectsLiveIngressUntilCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableNode(1, 64, dir)
+	restarted, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +527,7 @@ func TestReplicationBaselineRejectsLiveIngressUntilCommit(t *testing.T) {
 func TestReplicationBaselineFailedInstallRejectsIngressUntilRestartRecovery(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "replica")
-	node, err := memnode.NewDurableNode(1, 64, dir)
+	node, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,14 +576,14 @@ func TestReplicationBaselineFailedInstallRejectsIngressUntilRestartRecovery(t *t
 		t.Fatalf("active rollback journal: %v", err)
 	}
 
-	tid := proto.TransactionID{CoordinatorID: 72, Counter: 1, Epoch: 1}
-	entry := proto.RedoEntryPayload{TID: tid, Participants: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 24, Data: []byte("live")}}}
+	txId := proto.TransactionID{CoordinatorID: 72, Counter: 1, Epoch: 1}
+	entry := proto.RedoEntryPayload{TID: txId, Participants: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 24, Data: []byte("live")}}}
 	replayTID := proto.TransactionID{CoordinatorID: 72, Counter: 2, Epoch: 1}
 	replay := proto.ExecCommit1PCResponse{RequestID: "original", Vote: proto.VoteBadCmp, ReadData: map[uint32][]byte{4: []byte("retry")}}
 	if response, err := node.ReplicateRedoEntry(ctx, proto.ReplicateRedoEntryRequest{Entry: entry}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
 		t.Fatalf("redo with active rollback journal = %+v, err = %v", response, err)
 	}
-	if response, err := node.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: tid, ActionCommit: true}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
+	if response, err := node.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
 		t.Fatalf("decision with active rollback journal = %+v, err = %v", response, err)
 	}
 	if response, err := node.ReplicateReplayRecord(ctx, proto.ReplicateReplayRecordRequest{TID: replayTID, Kind: proto.ReplayRecordOnePC, OnePC: &replay}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
@@ -594,7 +594,7 @@ func TestReplicationBaselineFailedInstallRejectsIngressUntilRestartRecovery(t *t
 	if err := node.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := memnode.NewDurableNode(1, 64, dir)
+	restarted, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,14 +608,14 @@ func TestReplicationBaselineFailedInstallRejectsIngressUntilRestartRecovery(t *t
 	if response, err := restarted.ReplicateReplayRecord(ctx, proto.ReplicateReplayRecordRequest{TID: replayTID, Kind: proto.ReplayRecordOnePC, OnePC: &replay}); err != nil || !response.Ack {
 		t.Fatalf("replay after restart recovery = %+v, err = %v", response, err)
 	}
-	if response, err := restarted.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: tid, ActionCommit: true}); err != nil || !response.Ack {
+	if response, err := restarted.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); err != nil || !response.Ack {
 		t.Fatalf("decision after restart recovery = %+v, err = %v", response, err)
 	}
 	if err := restarted.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	recoveredRetry, err := memnode.NewDurableNode(1, 64, dir)
+	recoveredRetry, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}

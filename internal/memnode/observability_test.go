@@ -34,7 +34,7 @@ func FuzzParseTIDQueryNeverPanics(f *testing.F) {
 	f.Fuzz(func(t *testing.T, coord, counter, epoch string) {
 		query := url.Values{"coord": {coord}, "counter": {counter}, "epoch": {epoch}}
 		req := httptest.NewRequest(http.MethodGet, "/debug/txn_timeline?"+query.Encode(), nil)
-		tid, err := parseTIDQuery(req)
+		txId, err := parseTIDQuery(req)
 		if err != nil {
 			return
 		}
@@ -44,14 +44,14 @@ func FuzzParseTIDQueryNeverPanics(f *testing.F) {
 		if coordErr != nil || counterErr != nil || epochErr != nil {
 			t.Fatal("query parser accepted a value rejected by strconv")
 		}
-		if tid.CoordinatorID != wantCoord || tid.Counter != wantCounter || tid.Epoch != wantEpoch {
-			t.Fatalf("transaction ID = %+v, want coord=%d counter=%d epoch=%d", tid, wantCoord, wantCounter, wantEpoch)
+		if txId.CoordinatorID != wantCoord || txId.Counter != wantCounter || txId.Epoch != wantEpoch {
+			t.Fatalf("transaction ID = %+v, want coord=%d counter=%d epoch=%d", txId, wantCoord, wantCounter, wantEpoch)
 		}
 	})
 }
 
 func TestPublicObservabilityEndpointsRequireGET(t *testing.T) {
-	n := NewNode(32)
+	n := NewParticipant(32)
 	handler := n.HTTPHandler(true)
 	for _, path := range []string{"/health", "/ready", "/stats", "/metrics"} {
 		t.Run(path, func(t *testing.T) {
@@ -74,9 +74,9 @@ func TestPublicObservabilityEndpointsRequireGET(t *testing.T) {
 }
 
 func TestMetricsCommitAbortAndRetry(t *testing.T) {
-	n := NewNode(32)
+	n := NewParticipant(32)
 	tid1 := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	_, err := n.ExecPrepare(context.Background(), proto.ExecPrepareRequest{TID: tid1, Participants: []uint32{1}, Class: "payments", WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("a")}}})
+	_, err := n.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: tid1, Participants: []uint32{1}, Class: "payments", WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("a")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestMetricsCommitAbortAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	tid2 := proto.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 1}
-	_, err = n.ExecPrepare(context.Background(), proto.ExecPrepareRequest{TID: tid2, Participants: []uint32{1}, Class: "payments", WriteItems: []proto.WriteItem{{MemID: 1, Addr: 1, Data: []byte("b")}}})
+	_, err = n.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: tid2, Participants: []uint32{1}, Class: "payments", WriteItems: []proto.WriteItem{{MemID: 1, Addr: 1, Data: []byte("b")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestMetricsCommitAbortAndRetry(t *testing.T) {
 }
 
 func TestStatsSnapshotRateWindows(t *testing.T) {
-	n := NewNode(32)
+	n := NewParticipant(32)
 	base := time.Date(2026, 4, 13, 0, 0, 0, 0, time.UTC)
 	now := base
 	n.nowFn = func() time.Time { return now }
@@ -163,17 +163,17 @@ func TestStatsSnapshotRateWindows(t *testing.T) {
 }
 
 func TestBadLockIncludesConflictContext(t *testing.T) {
-	n := NewNode(64)
+	n := NewParticipant(64)
 	ctx := context.Background()
 	tid1 := proto.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
 	tid2 := proto.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: 1}
-	if resp, err := n.ExecPrepare(ctx, proto.ExecPrepareRequest{
+	if resp, err := n.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
 		TID: tid1, CorrelationID: tid1.CorrelationID(), Participants: []uint32{1},
 		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("abc")}},
-	}); err != nil || resp.Vote != proto.VoteOK {
+	}); err != nil || resp.Vote != proto.VoteOk {
 		t.Fatalf("first prepare vote=%v err=%v", resp.Vote, err)
 	}
-	resp, err := n.ExecPrepare(ctx, proto.ExecPrepareRequest{
+	resp, err := n.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
 		TID: tid2, CorrelationID: tid2.CorrelationID(), Participants: []uint32{1},
 		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("z")}},
 	})
@@ -190,20 +190,20 @@ func TestBadLockIncludesConflictContext(t *testing.T) {
 
 func TestDebugTimelineAndRedoInspectEndpoints(t *testing.T) {
 	root := t.TempDir()
-	n, err := NewDurableNode(1, 64, filepath.Join(root, "n1"))
+	n, err := NewDurableParticipant(1, 64, filepath.Join(root, "n1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer n.Close()
 	n.enableDebugEndpoints = true
-	tid := proto.TransactionID{CoordinatorID: 9, Counter: 5, Epoch: 3}
-	if resp, err := n.ExecPrepare(context.Background(), proto.ExecPrepareRequest{
-		TID: tid, CorrelationID: tid.CorrelationID(), Participants: []uint32{1},
+	txId := proto.TransactionID{CoordinatorID: 9, Counter: 5, Epoch: 3}
+	if resp, err := n.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{
+		TID: txId, CorrelationID: txId.CorrelationID(), Participants: []uint32{1},
 		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 1, Data: []byte("q")}},
-	}); err != nil || resp.Vote != proto.VoteOK {
+	}); err != nil || resp.Vote != proto.VoteOk {
 		t.Fatalf("prepare vote=%v err=%v", resp.Vote, err)
 	}
-	if _, err := n.Commit(context.Background(), proto.CommitRequest{TID: tid, CorrelationID: tid.CorrelationID(), ActionCommit: true}); err != nil {
+	if _, err := n.Commit(context.Background(), proto.CommitRequest{TID: txId, CorrelationID: txId.CorrelationID(), ActionCommit: true}); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(n.HTTPHandler(false))
@@ -229,7 +229,7 @@ func TestDebugTimelineAndRedoInspectEndpoints(t *testing.T) {
 }
 
 func TestClassAttributionFallbackAndCardinalityCap(t *testing.T) {
-	n := NewNode(16)
+	n := NewParticipant(16)
 	for i := 0; i < maxTxnClasses+10; i++ {
 		class := "class-" + strconv.Itoa(i)
 		n.metrics.ObserveClassDecision(class, true, time.Now())
@@ -251,12 +251,12 @@ func TestClassAttributionFallbackAndCardinalityCap(t *testing.T) {
 
 func TestFsyncHistogramAndReplicationLag(t *testing.T) {
 	dir := t.TempDir()
-	primary, err := NewDurableNode(1, 64, filepath.Join(dir, "p"))
+	primary, err := NewDurableParticipant(1, 64, filepath.Join(dir, "p"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = primary.Close() })
-	replica, err := NewDurableNode(2, 64, filepath.Join(dir, "r"))
+	replica, err := NewDurableParticipant(2, 64, filepath.Join(dir, "r"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,12 +264,12 @@ func TestFsyncHistogramAndReplicationLag(t *testing.T) {
 	replica.ConfigureAsReplica(1)
 
 	primary.ConfigureAsPrimary(2, replica)
-	tid := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	_, err = primary.ExecPrepare(context.Background(), proto.ExecPrepareRequest{TID: tid, Participants: []uint32{1, 2}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("x")}}})
+	txId := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	_, err = primary.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: txId, Participants: []uint32{1, 2}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("x")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := primary.Commit(context.Background(), proto.CommitRequest{TID: tid, ActionCommit: true}); err != nil {
+	if _, err := primary.Commit(context.Background(), proto.CommitRequest{TID: txId, ActionCommit: true}); err != nil {
 		t.Fatal(err)
 	}
 	if primary.metrics.fsyncLatency.total.Load() == 0 {
@@ -287,7 +287,7 @@ func TestFsyncHistogramAndReplicationLag(t *testing.T) {
 }
 
 func TestHealthAndReadyEndpoints(t *testing.T) {
-	n := NewNode(16)
+	n := NewParticipant(16)
 	srv := httptest.NewServer(n.HTTPHandler(true))
 	defer srv.Close()
 

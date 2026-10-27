@@ -11,7 +11,7 @@ import (
 func TestExecCommit1PCRejectsExpiredCompareDeadline(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
-	n := NewNode(8)
+	n := NewParticipant(8)
 	n.SetEpochSourceForTest(time.Hour, func() time.Time { return now })
 	if err := n.Write(ctx, 0, []byte("A")); err != nil {
 		t.Fatal(err)
@@ -37,18 +37,18 @@ func TestExecCommit1PCRejectsExpiredCompareDeadline(t *testing.T) {
 }
 
 func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testing.T) {
-	n := NewNode(8)
-	tid := proto.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
-	req := proto.ExecCommit1PCRequest{TID: tid, RequestID: "first", ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
+	n := NewParticipant(8)
+	txId := proto.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
+	req := proto.ExecCommit1PCRequest{TID: txId, RequestID: "first", ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
 	resp, err := n.ExecCommit1PC(context.Background(), req)
-	if err != nil || resp.Vote != proto.VoteOK || string(resp.ReadData[0]) != "\x00" {
+	if err != nil || resp.Vote != proto.VoteOk || string(resp.ReadData[0]) != "\x00" {
 		t.Fatalf("first 1pc resp=%+v err=%v", resp, err)
 	}
 	retry := req
 	retry.RequestID = "retry"
 	retry.WriteItems[0].Data = []byte("B")
 	resp, err = n.ExecCommit1PC(context.Background(), retry)
-	if err != nil || resp.Vote != proto.VoteOK || resp.RequestID != "retry" || string(resp.ReadData[0]) != "\x00" {
+	if err != nil || resp.Vote != proto.VoteOk || resp.RequestID != "retry" || string(resp.ReadData[0]) != "\x00" {
 		t.Fatalf("retry 1pc should return original outcome, resp=%+v err=%v", resp, err)
 	}
 	got, _ := n.Read(context.Background(), 0, 1)
@@ -58,20 +58,20 @@ func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testin
 }
 
 func TestPrepareAndCommitDuplicateTIDReturnOriginalOutcomeAfterResponseLoss(t *testing.T) {
-	n := NewNode(8)
-	tid := proto.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: 1}
-	prep := proto.ExecPrepareRequest{TID: tid, RequestID: "prepare-1", Participants: []uint32{1}, ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
-	resp, err := n.ExecPrepare(context.Background(), prep)
-	if err != nil || resp.Vote != proto.VoteOK || string(resp.ReadData[0]) != "\x00" {
+	n := NewParticipant(8)
+	txId := proto.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: 1}
+	prep := proto.ExecPrepareRequest{TID: txId, RequestID: "prepare-1", Participants: []uint32{1}, ReadItems: []proto.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
+	resp, err := n.ExecAndPrepare(context.Background(), prep)
+	if err != nil || resp.Vote != proto.VoteOk || string(resp.ReadData[0]) != "\x00" {
 		t.Fatalf("prepare resp=%+v err=%v", resp, err)
 	}
 	prep.RequestID = "prepare-retry"
 	prep.WriteItems[0].Data = []byte("B")
-	resp, err = n.ExecPrepare(context.Background(), prep)
-	if err != nil || resp.Vote != proto.VoteOK || resp.RequestID != "prepare-retry" || string(resp.ReadData[0]) != "\x00" {
+	resp, err = n.ExecAndPrepare(context.Background(), prep)
+	if err != nil || resp.Vote != proto.VoteOk || resp.RequestID != "prepare-retry" || string(resp.ReadData[0]) != "\x00" {
 		t.Fatalf("prepare retry resp=%+v err=%v", resp, err)
 	}
-	commit := proto.CommitRequest{TID: tid, RequestID: "commit-1", ActionCommit: true}
+	commit := proto.CommitRequest{TID: txId, RequestID: "commit-1", ActionCommit: true}
 	cresp, err := n.Commit(context.Background(), commit)
 	if err != nil || !cresp.Ack {
 		t.Fatalf("commit resp=%+v err=%v", cresp, err)

@@ -1,0 +1,222 @@
+{
+  "source_repository": "https://github.com/jbancroft/gofonia",
+  "source_branch": "master",
+  "source_revision": "8e9284b78fa5e1a7032f09eafbd072d0b596bc29",
+  "integration_date": "2026-10-27",
+  "concertum2_base_revision": "19414d45e1f92558b1c3f157d51b22e703f94b13",
+  "scope": "Selected code adaptations, test cases, and naming provenance. Target hashes describe this integration snapshot; naming-only entries do not claim algorithm reuse.",
+  "files": [
+    {
+      "source_path": "mini_transaction/mini_transaction.go",
+      "source_sha256": "d5e105a436de2568608ab0428c60dd9475a3799704c3a22981cd707e83cdbcf5",
+      "reuse": "adapted",
+      "targets": [
+        {
+          "path": "mini_transaction/mini_transaction.go",
+          "sha256": "0a6cbd1c820412cd9dc2883f483b20e69296e277139b521843319522698ce9f3"
+        },
+        {
+          "path": "internal/client/coordinator.go",
+          "sha256": "305cbfaa6e0dbb0f1c3328d6a7f4b062e2a49def3051b2525f62c6e01c9d69d7"
+        }
+      ],
+      "notes": "Builder, per-host projections, host membership, and ExecuteAndCommit vocabulary; pointer receivers, owned data, explicit executor, context, and fresh coordinator attempt IDs."
+    },
+    {
+      "source_path": "mini_transaction/compare_item.go",
+      "source_sha256": "c63c767cc56c9035f26c9c2de18ccbf268443f87254328d71e3928d4358cf86f",
+      "reuse": "adapted",
+      "targets": [
+        {
+          "path": "mini_transaction/items.go",
+          "sha256": "8e221eb52a4259a803b6e3905b190588292aa7c687245d739f6848eda77138d2"
+        }
+      ],
+      "notes": "CompareItem, HostId, Address, Offset, and Size; unsigned widths and inferred payload size retained."
+    },
+    {
+      "source_path": "mini_transaction/read_item.go",
+      "source_sha256": "af0ad37744d3b8bae7633501dd141390a63db976b7ef956cd2009d6c056c1b75",
+      "reuse": "adapted",
+      "targets": [
+        {
+          "path": "mini_transaction/items.go",
+          "sha256": "8e221eb52a4259a803b6e3905b190588292aa7c687245d739f6848eda77138d2"
+        }
+      ],
+      "notes": "ReadItem, HostId, Address, Length, Offset, and Size; unsigned widths retained."
+    },
+    {
+      "source_path": "mini_transaction/write_item.go",
+      "source_sha256": "6d1cbda24a1806cfaeb44f08357c3426217726ea26454d3549c705519709e7c9",
+      "reuse": "adapted",
+      "targets": [
+        {
+          "path": "mini_transaction/items.go",
+          "sha256": "8e221eb52a4259a803b6e3905b190588292aa7c687245d739f6848eda77138d2"
+        }
+      ],
+      "notes": "WriteItem, HostId, Address, Offset, and Size; payload determines length."
+    },
+    {
+      "source_path": "mini_transaction/int64_set.go",
+      "source_sha256": "5b9f01ebe044d3551cb905055d1c96d21a78cf8ea497ffc7f5f1d112e7dc9035",
+      "reuse": "retained implementation",
+      "targets": [
+        {
+          "path": "mini_transaction/int64_set.go",
+          "sha256": "c23a7ac97201b1e1ee60ab29ef4b8509b47fd55bc4a189077d6f0a066db77df4"
+        },
+        {
+          "path": "internal/client/coordinator.go",
+          "sha256": "305cbfaa6e0dbb0f1c3328d6a7f4b062e2a49def3051b2525f62c6e01c9d69d7"
+        }
+      ],
+      "notes": "Original map-based set methods, now used for participant discovery and detached transaction host sets."
+    },
+    {
+      "source_path": "mini_transaction/int64_set_test.go",
+      "source_sha256": "3709282841158e7f757ca227f7832cce12b16801fb008c6cefad1503bc40d563",
+      "reuse": "adapted test cases",
+      "targets": [
+        {
+          "path": "mini_transaction/int64_set_test.go",
+          "sha256": "fe9c86f7f44aa35eece9cf40dda4ff5fc2b6e041ac7497295e5474d7f336de21"
+        }
+      ],
+      "notes": "Sequential membership cases retained; unsafe concurrent benchmark excluded; iteration and ID-boundary checks added."
+    },
+    {
+      "source_path": "mini_transaction/vote.go",
+      "source_sha256": "d16b9e6c74ee95d45a6b660fc0064134187760f92671dfc3b92f12e14fbdb9c6",
+      "reuse": "adapted",
+      "targets": [
+        {
+          "path": "mini_transaction/vote.go",
+          "sha256": "14232045d798449c0b57429820a894eefcdaf1f9241d9c23428500abfb100a2b"
+        },
+        {
+          "path": "internal/proto/types.go",
+          "sha256": "2e511ede552a2384c3f8c6ed9133358109e74b1e1dfc6304206a1567475dc973"
+        }
+      ],
+      "notes": "VoteOk spelling and String labels; existing Concertum2 integer wire values retained, with VoteUnknown=-1."
+    },
+    {
+      "source_path": "mutex/range_lock.go",
+      "source_sha256": "2e437b2b0d3c0a6e38427f9975496f80bdaf89a15e4940a9cd2c2f29b86d51df",
+      "reuse": "adapted predicate",
+      "targets": [
+        {
+          "path": "internal/memnode/participant.go",
+          "sha256": "29bff865aa56818885deb76dc9b42e32b985948eb0558ed313e83e4cefdb6039"
+        }
+      ],
+      "notes": "RangeLock.OverlapsWith on existing half-open endpoints; empty ranges are disjoint."
+    },
+    {
+      "source_path": "mutex/range_lock_test.go",
+      "source_sha256": "0c62684602ac7da50e3de2d50af7e61eb93ceb0222eb05a8d867089e6af6bd1d",
+      "reuse": "adapted test cases",
+      "targets": [
+        {
+          "path": "internal/memnode/range_lock_test.go",
+          "sha256": "c10cf8e14041da83b89fcffe769baf5369cbef6d6f6811bbc28456809620ba39"
+        }
+      ],
+      "notes": "Original overlap cases, symmetric checks, empty/adjacent cases, and a nested-reader locking regression."
+    },
+    {
+      "source_path": "client/coordinator.go",
+      "source_sha256": "f4e0416ec1a774773eb2baac009d3249793ba6a324e8dbe2a38115fed0329f78",
+      "reuse": "naming",
+      "targets": [
+        {
+          "path": "internal/client/coordinator.go",
+          "sha256": "305cbfaa6e0dbb0f1c3328d6a7f4b062e2a49def3051b2525f62c6e01c9d69d7"
+        }
+      ],
+      "notes": "ExecuteAndCommit vocabulary; current coordinator execution and recovery semantics retained."
+    },
+    {
+      "source_path": "server/participant.go",
+      "source_sha256": "1eb72af0e5499d575e978bbd70e3c842fea693e4b99c53d303d0e8b895c9cfbc",
+      "reuse": "naming",
+      "targets": [
+        {
+          "path": "internal/memnode/participant.go",
+          "sha256": "29bff865aa56818885deb76dc9b42e32b985948eb0558ed313e83e4cefdb6039"
+        },
+        {
+          "path": "internal/memnode/rpc.go",
+          "sha256": "a45eb3ff04ad89f53aca7a63f0323d22603b815d139cb6b20d34fc0c89b940a4"
+        }
+      ],
+      "notes": "Participant and ExecAndPrepare; current participant implementation and legacy wire request types retained."
+    },
+    {
+      "source_path": "server/in_doubt.go",
+      "source_sha256": "b842d87090c9da7c26c0c95f99125488b3971400b7bdcfa5e5d25dd804b0a2c0",
+      "reuse": "naming",
+      "targets": [
+        {
+          "path": "internal/memnode/participant.go",
+          "sha256": "29bff865aa56818885deb76dc9b42e32b985948eb0558ed313e83e4cefdb6039"
+        }
+      ],
+      "notes": "inDoubtTx, createdAt, and hostIds; current transaction lookup, locks, and recovery state retained."
+    },
+    {
+      "source_path": "server/redo_log/redo_log.go",
+      "source_sha256": "2c321a5c72e511f796e547bc6ec3eb242d466717651094feb61cf55f15cbdd98",
+      "reuse": "naming",
+      "targets": [
+        {
+          "path": "internal/storage/logmode.go",
+          "sha256": "808b808d4e414f5834f53814d70caf7a4d018c0dbae53cc699eaf703394f2af3"
+        }
+      ],
+      "notes": "RedoLogItem and AddItem; existing durable storage implementation and JSON field names retained."
+    },
+    {
+      "source_path": "server/decided_transactions/decided_transaction_log.go",
+      "source_sha256": "24cb96c7e7a9c785a36c7e94dcd59fb9cc7507a49d60b637d735cfcbcabe982d",
+      "reuse": "naming",
+      "targets": [
+        {
+          "path": "internal/storage/logmode.go",
+          "sha256": "808b808d4e414f5834f53814d70caf7a4d018c0dbae53cc699eaf703394f2af3"
+        }
+      ],
+      "notes": "DecidedTransactionLog and AddItem; original log framing implementation not imported."
+    },
+    {
+      "source_path": "server/forced_aborts/forced_abort.go",
+      "source_sha256": "2e3ce86f505231fe7fce5be7733556cbe2d0d297c802c0d1567b75871566e904",
+      "reuse": "naming",
+      "targets": [
+        {
+          "path": "internal/storage/logmode.go",
+          "sha256": "808b808d4e414f5834f53814d70caf7a4d018c0dbae53cc699eaf703394f2af3"
+        }
+      ],
+      "notes": "ForcedAbortLog, IsForcedAbort, and AddItem; existing durable index and I/O retained."
+    },
+    {
+      "source_path": "minuet/btree.go",
+      "source_sha256": "6badeeb2e5e53da6cc3deea14fe7b6262bb8cb27b35f159120f41569c1f08859",
+      "reuse": "naming",
+      "targets": [
+        {
+          "path": "minuet-index/btree.go",
+          "sha256": "9b229f31ddf8cb95ae709f1345a87c8fa3ca287755861851be01e62aefd00050"
+        },
+        {
+          "path": "minuet-sql/engine.go",
+          "sha256": "d94c59edfbb8b428b8984aa2791bb0372aba01c5c9072dc4e93e8d1e20179279"
+        }
+      ],
+      "notes": "BTree, BTreeNode, NewBTree, isLeaf, keys, and children; current persistent unsigned-key B+tree retained."
+    }
+  ]
+}

@@ -11,20 +11,20 @@ import (
 
 func TestCoordinatorLogsReadOnlyProjectionWhenTransactionHasWrites(t *testing.T) {
 	root := t.TempDir()
-	n1, err := memnode.NewDurableNode(1, 64, filepath.Join(root, "n1"))
+	n1, err := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "n1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = n1.Close() })
-	n2, err := memnode.NewDurableNode(2, 64, filepath.Join(root, "n2"))
+	n2, err := memnode.NewDurableParticipant(2, 64, filepath.Join(root, "n2"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = n2.Close() })
 
-	coord := NewCoordinator(map[uint32]MemNode{1: n1, 2: n2})
+	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 	ctx := context.Background()
-	result := coord.ExecAndCommit(
+	result := coord.ExecuteAndCommit(
 		ctx,
 		"",
 		nil,

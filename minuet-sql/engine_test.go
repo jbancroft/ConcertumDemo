@@ -34,16 +34,16 @@ func (m *memTxnClient) Write(_ context.Context, _ uint32, addr uint64, data []by
 	return nil
 }
 
-func (m *memTxnClient) ExecAndCommit(_ context.Context, _ string, cmp []sinfoniaclient.CmpItem, _ []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
+func (m *memTxnClient) ExecuteAndCommit(_ context.Context, _ string, compares []sinfoniaclient.CompareItem, _ []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, c := range cmp {
-		if string(m.ram[int(c.Addr):int(c.Addr)+len(c.Data)]) != string(c.Data) {
+	for _, c := range compares {
+		if string(m.ram[int(c.Address):int(c.Address)+len(c.Data)]) != string(c.Data) {
 			return sinfoniaclient.ExecResult{Committed: false, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 		}
 	}
 	for _, w := range writes {
-		copy(m.ram[int(w.Addr):int(w.Addr)+len(w.Data)], w.Data)
+		copy(m.ram[int(w.Address):int(w.Address)+len(w.Data)], w.Data)
 	}
 	return sinfoniaclient.ExecResult{Committed: true, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 }
@@ -54,31 +54,31 @@ type conflictInjectingClient struct {
 	calls        int32
 }
 
-func (c *conflictInjectingClient) Read(ctx context.Context, memID uint32, addr uint64, length uint32) ([]byte, error) {
-	return c.base.Read(ctx, memID, addr, length)
+func (c *conflictInjectingClient) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
+	return c.base.Read(ctx, hostId, addr, length)
 }
 
-func (c *conflictInjectingClient) Write(ctx context.Context, memID uint32, addr uint64, data []byte) error {
-	return c.base.Write(ctx, memID, addr, data)
+func (c *conflictInjectingClient) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
+	return c.base.Write(ctx, hostId, addr, data)
 }
 
-func (c *conflictInjectingClient) ExecAndCommit(ctx context.Context, class string, cmp []sinfoniaclient.CmpItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
+func (c *conflictInjectingClient) ExecuteAndCommit(ctx context.Context, class string, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
 	_ = class
 	_ = reads
 	call := atomic.AddInt32(&c.calls, 1)
 	if call <= atomic.LoadInt32(&c.rejectFirstN) {
 		return sinfoniaclient.ExecResult{Committed: false, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 	}
-	return c.base.ExecAndCommit(ctx, class, cmp, reads, writes)
+	return c.base.ExecuteAndCommit(ctx, class, compares, reads, writes)
 }
 
 func newTestEngineWithClient(t *testing.T, client *memTxnClient) *Engine {
 	t.Helper()
 	e, err := NewEngine(Config{
-		MemID:     1,
+		HostId:    1,
 		TxnClient: client,
-		IndexFactory: func(memID uint32, baseAddr uint64) *minuetindex.Index {
-			return minuetindex.New(client, minuetindex.Config{MemID: memID, BaseAddr: baseAddr, MaxRetries: 8, RetryBackoff: time.Microsecond})
+		BTreeFactory: func(hostId uint32, baseAddr uint64) *minuetindex.BTree {
+			return minuetindex.NewBTree(client, minuetindex.Config{HostId: hostId, BaseAddress: baseAddr, MaxRetries: 8, RetryBackoff: time.Microsecond})
 		},
 	})
 	if err != nil {
@@ -271,11 +271,11 @@ func TestEngineConflictRetryBudgetMapsToErrBusy(t *testing.T) {
 	ctx := context.Background()
 	client := &conflictInjectingClient{base: newMemTxnClient(), rejectFirstN: 0}
 	e, err := NewEngine(Config{
-		MemID:      1,
+		HostId:     1,
 		TxnClient:  client,
 		MaxRetries: 8,
-		IndexFactory: func(memID uint32, baseAddr uint64) *minuetindex.Index {
-			return minuetindex.New(client, minuetindex.Config{MemID: memID, BaseAddr: baseAddr, MaxRetries: 2, RetryBackoff: time.Microsecond})
+		BTreeFactory: func(hostId uint32, baseAddr uint64) *minuetindex.BTree {
+			return minuetindex.NewBTree(client, minuetindex.Config{HostId: hostId, BaseAddress: baseAddr, MaxRetries: 2, RetryBackoff: time.Microsecond})
 		},
 	})
 	if err != nil {

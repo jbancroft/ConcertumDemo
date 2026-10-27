@@ -26,3 +26,25 @@ Both durable participants are reopened to verify recovery completes the writes.
 Comparison deadlines are checked at fixed times before, at, and after expiry.
 The source-hash comparison above describes the initial extraction snapshot;
 subsequent changes are recorded in [extraction.md](extraction.md).
+
+## 2026-10-27: Gofonia integration
+
+Validated with Go 1.26.6 on macOS/arm64 after adopting the original gofonia
+transaction vocabulary and helpers.
+
+| Check | Result |
+| --- | --- |
+| `make check` | Passed; formatting, vet, build, and all package tests |
+| `make race` | Passed; all package tests with race detection |
+| `make demo` | Passed; TCP transfer/abort, B+tree, SQL, and durable reopen |
+| `make bench` | Passed; one iteration per deterministic index benchmark |
+| Compatibility fixtures | Passed; pre-integration gob prepare frame and JSON redo record |
+| Adapted-code regression tests | Passed; builder ownership/projections, ID sets, vote values, range overlap, nested-reader locking |
+| Gofonia provenance | Selected source and destination hashes verified; original source revision unchanged |
+| Documentation links and targeted privacy scan | Passed; no contact addresses, home paths, private keys, or known credential-token patterns found |
+
+The source-level interface names changed. RPC method strings and registrations,
+stored record keys, numeric votes, and binary page layouts remain compatible.
+The benchmarks remain smoke checks rather than performance claims. The original
+gofonia server was not run or modified; its comparison was based on the source
+snapshot described in [gofonia-lineage.md](gofonia-lineage.md).

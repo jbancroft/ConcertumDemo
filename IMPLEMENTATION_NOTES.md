@@ -1,5 +1,19 @@
 # Implementation notes
 
+## 2026-10-27: Original gofonia vocabulary and helpers
+
+Adapted the original transaction builder, host projections, `RangeItem`,
+`Int64Set`, vote names, and range-overlap checks from gofonia. Restored names
+including `MiniTransaction`, `CompareItem`, `HostId`, `Address`, `Participant`,
+`inDoubtTx`, `RedoLogItem`, `DecidedTransactionLog`, `ForcedAbortLog`, and `BTree`.
+The public client and SDK share the `mini_transaction` item definitions.
+
+The working transaction, recovery, replication, and B+tree algorithms remain
+derived from Concertum. The overlap scan now checks earlier long read locks
+past intervening shorter readers. Existing gob registrations, protocol field
+names, numeric vote values, JSON log keys, and binary page layouts are retained.
+The analysis and selective reuse manifest are linked from the README.
+
 ## 2026-10-26: Coordinator test controls
 
 Removed the coordinator's phase-two diagnostic state, pinned transaction IDs,

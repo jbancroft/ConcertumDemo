@@ -55,18 +55,18 @@ func run(ctx context.Context, dir string, out io.Writer) (err error) {
 	defer func() { err = errors.Join(err, c.close()) }()
 	fmt.Fprintln(out, "Two durable participants listening on loopback TCP")
 
-	if err := commit(ctx, c.api, c.api.NewMTx().
+	if err := commit(ctx, c.api, c.api.NewMiniTransaction().
 		Write(1, balanceAddr, number(100)).Write(2, balanceAddr, number(100))); err != nil {
 		return err
 	}
-	if err := commit(ctx, c.api, c.api.NewMTx().
-		Cmp(1, balanceAddr, number(100)).Cmp(2, balanceAddr, number(100)).
+	if err := commit(ctx, c.api, c.api.NewMiniTransaction().
+		Compare(1, balanceAddr, number(100)).Compare(2, balanceAddr, number(100)).
 		Write(1, balanceAddr, number(75)).Write(2, balanceAddr, number(125))); err != nil {
 		return err
 	}
 	// A stale compare must abort without applying either participant's write.
-	ok, _, status := c.api.NewMTx().Cmp(1, balanceAddr, number(100)).
-		Write(1, balanceAddr, number(0)).Write(2, balanceAddr, number(0)).ExecAndCommit(ctx)
+	ok, _, status := c.api.NewMiniTransaction().Compare(1, balanceAddr, number(100)).
+		Write(1, balanceAddr, number(0)).Write(2, balanceAddr, number(0)).ExecuteAndCommit(ctx)
 	if ok || status != concertum.StatusAborted {
 		return fmt.Errorf("stale compare: committed=%t status=%d", ok, status)
 	}
@@ -139,8 +139,8 @@ func number(n uint64) []byte {
 	return binary.BigEndian.AppendUint64(nil, n)
 }
 
-func commit(ctx context.Context, api *concertum.Client, tx *concertum.MTx) error {
-	ok, _, status := tx.ExecAndCommit(ctx)
+func commit(ctx context.Context, api *concertum.Client, tx *concertum.MiniTransaction) error {
+	ok, _, status := tx.ExecuteAndCommit(ctx)
 	if !ok {
 		return fmt.Errorf("transaction did not commit: status=%d", status)
 	}
@@ -161,12 +161,12 @@ func checkBalances(ctx context.Context, api *concertum.Client) error {
 	return nil
 }
 
-func newIndex(api *concertum.Client) *minuetindex.Index {
-	return minuetindex.New(sinfoniaclient.NewFromConcertumClient(api),
-		minuetindex.Config{MemID: 1, BaseAddr: 64 * 1024})
+func newIndex(api *concertum.Client) *minuetindex.BTree {
+	return minuetindex.NewBTree(sinfoniaclient.NewFromConcertumClient(api),
+		minuetindex.Config{HostId: 1, BaseAddress: 64 * 1024})
 }
 
-func checkIndex(ctx context.Context, index *minuetindex.Index) error {
+func checkIndex(ctx context.Context, index *minuetindex.BTree) error {
 	it, err := index.RangeScan(ctx, 0, 100)
 	if err != nil {
 		return err
@@ -189,9 +189,9 @@ func checkIndex(ctx context.Context, index *minuetindex.Index) error {
 
 func newSQL(api *concertum.Client) (*minuetsql.Engine, error) {
 	sdk := sinfoniaclient.NewFromConcertumClient(api)
-	return minuetsql.NewEngine(minuetsql.Config{MemID: 2, TxnClient: sdk,
-		IndexFactory: func(id uint32, base uint64) *minuetindex.Index {
-			return minuetindex.New(sdk, minuetindex.Config{MemID: id, BaseAddr: base})
+	return minuetsql.NewEngine(minuetsql.Config{HostId: 2, TxnClient: sdk,
+		BTreeFactory: func(id uint32, base uint64) *minuetindex.BTree {
+			return minuetindex.NewBTree(sdk, minuetindex.Config{HostId: id, BaseAddress: base})
 		}})
 }
 
@@ -208,7 +208,7 @@ func checkSQL(ctx context.Context, engine *minuetsql.Engine) error {
 }
 
 type cluster struct {
-	nodes     []*memnode.Node
+	nodes     []*memnode.Participant
 	listeners []*closingListener
 	servers   []chan error
 	api       *concertum.Client
@@ -221,9 +221,9 @@ func openCluster(ctx context.Context, dir string) (_ *cluster, err error) {
 			err = errors.Join(err, c.close())
 		}
 	}()
-	participants := map[uint32]client.MemNode{}
+	participants := map[uint32]client.Participant{}
 	for id := uint32(1); id <= 2; id++ {
-		node, err := memnode.NewDurableNode(id, 2<<20, filepath.Join(dir, fmt.Sprint(id)))
+		node, err := memnode.NewDurableParticipant(id, 2<<20, filepath.Join(dir, fmt.Sprint(id)))
 		if err != nil {
 			return nil, err
 		}
@@ -237,7 +237,7 @@ func openCluster(ctx context.Context, dir string) (_ *cluster, err error) {
 		finished := make(chan error, 1)
 		c.servers = append(c.servers, finished)
 		go func() { finished <- node.RPCServer().Serve(tracked) }()
-		participants[id] = client.NewRPCMemNode(listener.Addr().String(), nil, 5*time.Second)
+		participants[id] = client.NewRPCParticipant(listener.Addr().String(), nil, 5*time.Second)
 	}
 	// Peer recovery calls are local; coordinator data operations use loopback RPC.
 	c.nodes[0].SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: c.nodes[1]})

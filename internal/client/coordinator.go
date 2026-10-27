@@ -17,17 +17,18 @@ import (
 	"github.com/jbancroft/concertum2/internal/memnode"
 	"github.com/jbancroft/concertum2/internal/proto"
 	"github.com/jbancroft/concertum2/internal/rpcwire"
+	"github.com/jbancroft/concertum2/mini_transaction"
 )
 
 var coordinatorIDFallback atomic.Uint64
 
 var ErrDeadlineDecisionProtocolUpgradeRequired = errors.New("deadline decision protocol upgrade required")
 
-// MemNode defines the minimal participant operations used by the coordinator scaffold.
-type MemNode interface {
+// Participant defines the minimal participant operations used by the coordinator scaffold.
+type Participant interface {
 	Read(ctx context.Context, addr uint64, length uint32) ([]byte, error)
 	Write(ctx context.Context, addr uint64, data []byte) error
-	ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error)
+	ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error)
 	ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error)
 	Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error)
 	CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error)
@@ -78,7 +79,7 @@ func (b RandomBackoff) Wait(ctx context.Context, attempt int) {
 
 // Coordinator routes client operations to registered memory nodes.
 type Coordinator struct {
-	nodes       map[uint32]MemNode
+	nodes       map[uint32]Participant
 	primaryFor  map[uint32]uint32
 	generations map[uint32]uint64
 	genMu       sync.Mutex
@@ -92,8 +93,8 @@ type Coordinator struct {
 	stats       map[uint32]StatsReader
 }
 
-func NewCoordinator(nodes map[uint32]MemNode) *Coordinator {
-	cpy := make(map[uint32]MemNode, len(nodes))
+func NewCoordinator(nodes map[uint32]Participant) *Coordinator {
+	cpy := make(map[uint32]Participant, len(nodes))
 	for id, node := range nodes {
 		cpy[id] = node
 	}
@@ -135,27 +136,27 @@ func (c *Coordinator) SetPrimaryMapping(logicalToPrimary map[uint32]uint32) {
 
 func (c *Coordinator) SetGenerations(generations map[uint32]uint64) {
 	c.generations = map[uint32]uint64{}
-	for memID, generation := range generations {
-		c.generations[memID] = generation
+	for hostId, generation := range generations {
+		c.generations[hostId] = generation
 	}
 }
 
 func (c *Coordinator) SetStatsReaders(readers map[uint32]StatsReader) {
 	c.stats = map[uint32]StatsReader{}
-	for memID, reader := range readers {
-		c.stats[memID] = reader
+	for hostId, reader := range readers {
+		c.stats[hostId] = reader
 	}
 }
 
-func (c *Coordinator) resolveMemID(memID uint32) uint32 {
-	if primary, ok := c.primaryFor[memID]; ok {
+func (c *Coordinator) resolveHostId(hostId uint32) uint32 {
+	if primary, ok := c.primaryFor[hostId]; ok {
 		return primary
 	}
-	return memID
+	return hostId
 }
 
-func (c *Coordinator) generationFor(memID uint32) uint64 {
-	return c.generations[memID]
+func (c *Coordinator) generationFor(hostId uint32) uint64 {
+	return c.generations[hostId]
 }
 
 func (c *Coordinator) SetBackoffForTest(backoff BackoffStrategy) {
@@ -166,16 +167,16 @@ func (c *Coordinator) SetMaxRetriesForTest(max int) {
 	c.maxRetries = max
 }
 
-func (c *Coordinator) Read(ctx context.Context, memID uint32, addr uint64, length uint32) ([]byte, error) {
-	node, ok := c.nodes[c.resolveMemID(memID)]
+func (c *Coordinator) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
+	node, ok := c.nodes[c.resolveHostId(hostId)]
 	if !ok {
 		return nil, ErrUnknownMemNode
 	}
-	return node.Read(proto.WithGeneration(ctx, c.generationFor(c.resolveMemID(memID))), addr, length)
+	return node.Read(proto.WithGeneration(ctx, c.generationFor(c.resolveHostId(hostId))), addr, length)
 }
 
-func (c *Coordinator) GetStats(memID uint32) (memnode.StatsResponse, error) {
-	physical := c.resolveMemID(memID)
+func (c *Coordinator) GetStats(hostId uint32) (memnode.StatsResponse, error) {
+	physical := c.resolveHostId(hostId)
 	if reader, ok := c.stats[physical]; ok && reader != nil {
 		return reader.GetStats()
 	}
@@ -188,12 +189,12 @@ func (c *Coordinator) GetStats(memID uint32) (memnode.StatsResponse, error) {
 	return memnode.StatsResponse{}, ErrUnknownMemNode
 }
 
-func (c *Coordinator) Write(ctx context.Context, memID uint32, addr uint64, data []byte) error {
-	node, ok := c.nodes[c.resolveMemID(memID)]
+func (c *Coordinator) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
+	node, ok := c.nodes[c.resolveHostId(hostId)]
 	if !ok {
 		return ErrUnknownMemNode
 	}
-	return node.Write(proto.WithGeneration(ctx, c.generationFor(c.resolveMemID(memID))), addr, data)
+	return node.Write(proto.WithGeneration(ctx, c.generationFor(c.resolveHostId(hostId))), addr, data)
 }
 
 func (c *Coordinator) nextTID() proto.TransactionID {
@@ -238,26 +239,27 @@ func (c *Coordinator) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff tim
 	return nil
 }
 
-func (c *Coordinator) ExecAndCommit(ctx context.Context, class string, cmp []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
-	participantsMap := map[uint32]struct{}{}
-	for _, i := range cmp {
-		participantsMap[c.resolveMemID(i.MemID)] = struct{}{}
+func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
+	uniqueHostIds := mini_transaction.NewInt64Set()
+	for _, i := range compares {
+		uniqueHostIds.Add(int64(c.resolveHostId(i.MemID)))
 	}
 	for _, i := range reads {
-		participantsMap[c.resolveMemID(i.MemID)] = struct{}{}
+		uniqueHostIds.Add(int64(c.resolveHostId(i.MemID)))
 	}
 	for _, i := range writes {
-		participantsMap[c.resolveMemID(i.MemID)] = struct{}{}
+		uniqueHostIds.Add(int64(c.resolveHostId(i.MemID)))
 	}
-	participants := make([]uint32, 0, len(participantsMap))
-	for memID := range participantsMap {
-		participants = append(participants, memID)
-	}
+	hostIds := make([]uint32, 0, uniqueHostIds.Len())
+	uniqueHostIds.Each(func(hostId int64) bool {
+		hostIds = append(hostIds, uint32(hostId))
+		return true
+	})
 
 	attempt := 0
 	for {
-		tid := c.nextTID()
-		res, badLock := c.execAttempt(ctx, tid, participants, class, cmp, reads, writes)
+		txId := c.nextTID()
+		res, badLock := c.execAttempt(ctx, txId, hostIds, class, compares, reads, writes)
 		if !badLock {
 			return res
 		}
@@ -265,9 +267,9 @@ func (c *Coordinator) ExecAndCommit(ctx context.Context, class string, cmp []pro
 			return res
 		}
 		c.backoff.Wait(ctx, attempt)
-		for _, memID := range participants {
-			if node, ok := c.nodes[memID]; ok {
-				if mn, ok2 := node.(*memnode.Node); ok2 {
+		for _, hostId := range hostIds {
+			if node, ok := c.nodes[hostId]; ok {
+				if mn, ok2 := node.(*memnode.Participant); ok2 {
 					mn.RecordRetryForClass(class)
 				}
 			}
@@ -277,7 +279,7 @@ func (c *Coordinator) ExecAndCommit(ctx context.Context, class string, cmp []pro
 }
 
 type prepareResult struct {
-	memID    uint32
+	hostId   uint32
 	resp     proto.ExecPrepareResponse
 	err      error
 	readData map[proto.ReadItem][]byte
@@ -295,8 +297,8 @@ type commitDispatch struct {
 }
 
 type rpcWorker struct {
-	memID      uint32
-	node       MemNode
+	hostId     uint32
+	node       Participant
 	prepareCh  chan prepareCall
 	commitCh   chan commitDispatch
 	batchDelay time.Duration
@@ -304,7 +306,7 @@ type rpcWorker struct {
 }
 
 // FlushPendingCommits waits for asynchronous phase-two decisions from completed
-// ExecAndCommit calls to be delivered. Write decisions are recoverable from
+// ExecuteAndCommit calls to be delivered. Write decisions are recoverable from
 // participant vote/deadline state at return; deadline-bearing commits also
 // synchronously retain one decision witness. This barrier provides immediate
 // visibility and reports delivery failures.
@@ -337,8 +339,8 @@ type prepareCall struct {
 	respC chan prepareResult
 }
 
-func newRPCWorker(memID uint32, node MemNode) *rpcWorker {
-	w := &rpcWorker{memID: memID, node: node, prepareCh: make(chan prepareCall, 256), commitCh: make(chan commitDispatch, 1024), batchDelay: 2 * time.Millisecond, batchMax: 64}
+func newRPCWorker(hostId uint32, node Participant) *rpcWorker {
+	w := &rpcWorker{hostId: hostId, node: node, prepareCh: make(chan prepareCall, 256), commitCh: make(chan commitDispatch, 1024), batchDelay: 2 * time.Millisecond, batchMax: 64}
 	go w.runPrepare()
 	go w.runCommitBatcher()
 	return w
@@ -346,14 +348,14 @@ func newRPCWorker(memID uint32, node MemNode) *rpcWorker {
 
 func (w *rpcWorker) runPrepare() {
 	for req := range w.prepareCh {
-		resp, err := w.node.ExecPrepare(req.ctx, req.req)
+		resp, err := w.node.ExecAndPrepare(req.ctx, req.req)
 		mappedReads := make(map[proto.ReadItem][]byte, len(req.req.ReadItems))
 		for idx, item := range req.req.ReadItems {
 			if data, ok := resp.ReadData[uint32(idx)]; ok {
 				mappedReads[item] = data
 			}
 		}
-		req.respC <- prepareResult{memID: w.memID, resp: resp, err: err, readData: mappedReads}
+		req.respC <- prepareResult{hostId: w.hostId, resp: resp, err: err, readData: mappedReads}
 	}
 }
 
@@ -396,12 +398,12 @@ func (w *rpcWorker) runCommitBatcher() {
 			for _, d := range batch {
 				commitResp, err2 := w.node.Commit(context.Background(), proto.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation, DeadlineDecisionProtocolVersion: d.deadlineDecisionProtocolVersion})
 				if err2 != nil {
-					log.Printf("commit rpc failed for memnode %d tid=%+v: %v", w.memID, d.tid, err2)
+					log.Printf("commit rpc failed for memnode %d tid=%+v: %v", w.hostId, d.tid, err2)
 					if firstErr == nil {
 						firstErr = err2
 					}
 				} else if !commitResp.Ack {
-					log.Printf("commit not acknowledged for memnode %d tid=%+v", w.memID, d.tid)
+					log.Printf("commit not acknowledged for memnode %d tid=%+v", w.hostId, d.tid)
 					if firstErr == nil {
 						firstErr = errors.New("commit not acknowledged")
 					}
@@ -413,7 +415,7 @@ func (w *rpcWorker) runCommitBatcher() {
 			}
 			for i, ack := range resp.Acks {
 				if !ack && i < len(batch) {
-					log.Printf("batched commit not acknowledged for memnode %d tid=%+v", w.memID, batch[i].tid)
+					log.Printf("batched commit not acknowledged for memnode %d tid=%+v", w.hostId, batch[i].tid)
 					if firstErr == nil {
 						firstErr = errors.New("batched commit not acknowledged")
 					}
@@ -467,65 +469,65 @@ func (w *rpcWorker) flushPending(ctx context.Context) error {
 	}
 }
 
-func (c *Coordinator) execAttempt(ctx context.Context, tid proto.TransactionID, participants []uint32, class string, cmp []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) (ExecResult, bool) {
-	decisionDeadlineNanos := earliestDecisionDeadlineNanos(cmp)
+func (c *Coordinator) execAttempt(ctx context.Context, txId proto.TransactionID, hostIds []uint32, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) (ExecResult, bool) {
+	decisionDeadlineNanos := earliestDecisionDeadlineNanos(compares)
 	if decisionDeadlineNanos != 0 {
-		if err := c.requireDeadlineDecisionProtocol(ctx, participants); err != nil {
+		if err := c.requireDeadlineDecisionProtocol(ctx, hostIds); err != nil {
 			return ExecResult{Committed: false, ReadResults: map[proto.ReadItem][]byte{}, Status: proto.VoteBadInternal, TransportErr: err}, false
 		}
 	}
-	if len(participants) == 1 {
-		return c.execSingleParticipant1PC(ctx, tid, participants[0], class, cmp, reads, writes), false
+	if len(hostIds) == 1 {
+		return c.execSingleParticipant1PC(ctx, txId, hostIds[0], class, compares, reads, writes), false
 	}
 
-	results := make(chan prepareResult, len(participants))
-	for _, memID := range participants {
-		go func(memID uint32) {
+	results := make(chan prepareResult, len(hostIds))
+	for _, hostId := range hostIds {
+		go func(hostId uint32) {
 			c.workersMu.Lock()
-			worker, ok := c.workers[memID]
+			worker, ok := c.workers[hostId]
 			c.workersMu.Unlock()
 			if !ok {
-				results <- prepareResult{memID: memID, err: ErrUnknownMemNode}
+				results <- prepareResult{hostId: hostId, err: ErrUnknownMemNode}
 				return
 			}
-			reqReads := filterReads(memID, reads, c.resolveMemID)
+			reqReads := readItemsForHost(hostId, reads, c.resolveHostId)
 			worker.prepareCh <- prepareCall{ctx: ctx, req: proto.ExecPrepareRequest{
-				TID:                             tid,
-				RequestID:                       proto.RequestID(tid.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(memID), 10)),
-				CorrelationID:                   tid.CorrelationID(),
-				Participants:                    append([]uint32(nil), participants...),
+				TID:                             txId,
+				RequestID:                       proto.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
+				CorrelationID:                   txId.CorrelationID(),
+				Participants:                    append([]uint32(nil), hostIds...),
 				HasWrites:                       len(writes) > 0,
 				DecisionDeadlineNanos:           decisionDeadlineNanos,
 				DeadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion,
-				CmpItems:                        filterCmp(memID, cmp, c.resolveMemID),
+				CmpItems:                        compareItemsForHost(hostId, compares, c.resolveHostId),
 				ReadItems:                       reqReads,
-				WriteItems:                      filterWrites(memID, writes, c.resolveMemID),
-				Epoch:                           tid.Epoch,
+				WriteItems:                      writeItemsForHost(hostId, writes, c.resolveHostId),
+				Epoch:                           txId.Epoch,
 				Class:                           class,
-				Generation:                      c.generationFor(memID),
+				Generation:                      c.generationFor(hostId),
 			}, respC: results}
-		}(memID)
+		}(hostId)
 	}
 
 	decideCommit := true
-	status := proto.VoteOK
+	status := proto.VoteOk
 	badLock := false
 	aggregatedReads := map[proto.ReadItem][]byte{}
 	participantVotes := map[uint32]proto.Vote{}
-	for range participants {
+	for range hostIds {
 		r := <-results
 		if r.err != nil {
 			decideCommit = false
 			status = proto.VoteBadInternal
-			participantVotes[r.memID] = proto.VoteBadInternal
+			participantVotes[r.hostId] = proto.VoteBadInternal
 			var remoteErr *rpcwire.RemoteError
 			if !errors.As(r.err, &remoteErr) {
 				return ExecResult{Committed: false, UnknownOutcome: true, ReadResults: map[proto.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes, TransportErr: r.err}, false
 			}
 			continue
 		}
-		participantVotes[r.memID] = r.resp.Vote
-		if r.resp.Vote != proto.VoteOK {
+		participantVotes[r.hostId] = r.resp.Vote
+		if r.resp.Vote != proto.VoteOk {
 			c.observeEpoch(r.resp.CurrentEpoch)
 			decideCommit = false
 			status = r.resp.Vote
@@ -539,38 +541,38 @@ func (c *Coordinator) execAttempt(ctx context.Context, tid proto.TransactionID, 
 		}
 		c.observeEpoch(r.resp.CurrentEpoch)
 	}
-	if decideCommit && !comparisonsValidAt(cmp, time.Now()) {
+	if decideCommit && !comparisonsValidAt(compares, time.Now()) {
 		decideCommit = false
 		status = proto.VoteBadCmp
 	}
 	decisionWitness := uint32(0)
-	if decisionDeadlineNanos != 0 && len(writes) > 0 && allVotesOK(participantVotes, participants) {
+	if decisionDeadlineNanos != 0 && len(writes) > 0 && allVotesOK(participantVotes, hostIds) {
 		var err error
-		decisionWitness, err = c.persistConditionalDecision(ctx, tid, participants, decideCommit)
+		decisionWitness, err = c.persistConditionalDecision(ctx, txId, hostIds, decideCommit)
 		if err != nil {
 			return ExecResult{Committed: false, UnknownOutcome: true, ReadResults: map[proto.ReadItem][]byte{}, Status: proto.VoteBadInternal, ParticipantVotes: participantVotes, TransportErr: err}, false
 		}
 	}
-	for _, memID := range participants {
-		if memID == decisionWitness {
+	for _, hostId := range hostIds {
+		if hostId == decisionWitness {
 			continue
 		}
 		c.workersMu.Lock()
-		worker := c.workers[memID]
+		worker := c.workers[hostId]
 		c.workersMu.Unlock()
 		if worker != nil {
-			worker.commitCh <- commitDispatch{tid: tid, requestID: proto.RequestID(tid.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(memID), 10)), correlationID: tid.CorrelationID(), actionCommit: decideCommit, generation: c.generationFor(memID), deadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion}
+			worker.commitCh <- commitDispatch{tid: txId, requestID: proto.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(hostId), 10)), correlationID: txId.CorrelationID(), actionCommit: decideCommit, generation: c.generationFor(hostId), deadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion}
 		}
 	}
 
 	if !decideCommit {
 		return ExecResult{Committed: false, ReadResults: map[proto.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes}, badLock
 	}
-	return ExecResult{Committed: true, ReadResults: aggregatedReads, Status: proto.VoteOK, ParticipantVotes: participantVotes}, false
+	return ExecResult{Committed: true, ReadResults: aggregatedReads, Status: proto.VoteOk, ParticipantVotes: participantVotes}, false
 }
 
-func (c *Coordinator) persistConditionalDecision(ctx context.Context, tid proto.TransactionID, participants []uint32, actionCommit bool) (uint32, error) {
-	ordered := append([]uint32(nil), participants...)
+func (c *Coordinator) persistConditionalDecision(ctx context.Context, txId proto.TransactionID, hostIds []uint32, actionCommit bool) (uint32, error) {
+	ordered := append([]uint32(nil), hostIds...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
 	if len(ordered) == 0 {
 		return 0, ErrUnknownMemNode
@@ -583,8 +585,8 @@ func (c *Coordinator) persistConditionalDecision(ctx context.Context, tid proto.
 		return 0, ErrUnknownMemNode
 	}
 	resp, err := worker.node.Commit(ctx, proto.CommitRequest{
-		TID: tid, RequestID: proto.RequestID(tid.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(witness), 10)),
-		CorrelationID: tid.CorrelationID(), ActionCommit: actionCommit, Generation: c.generationFor(witness),
+		TID: txId, RequestID: proto.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(witness), 10)),
+		CorrelationID: txId.CorrelationID(), ActionCommit: actionCommit, Generation: c.generationFor(witness),
 		DeadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion,
 	})
 	if err != nil {
@@ -596,31 +598,31 @@ func (c *Coordinator) persistConditionalDecision(ctx context.Context, tid proto.
 	return witness, nil
 }
 
-func allVotesOK(votes map[uint32]proto.Vote, participants []uint32) bool {
-	for _, participant := range participants {
+func allVotesOK(votes map[uint32]proto.Vote, hostIds []uint32) bool {
+	for _, participant := range hostIds {
 		vote, ok := votes[participant]
-		if !ok || vote != proto.VoteOK {
+		if !ok || vote != proto.VoteOk {
 			return false
 		}
 	}
 	return true
 }
 
-func (c *Coordinator) requireDeadlineDecisionProtocol(ctx context.Context, participants []uint32) error {
-	ordered := append([]uint32(nil), participants...)
+func (c *Coordinator) requireDeadlineDecisionProtocol(ctx context.Context, hostIds []uint32) error {
+	ordered := append([]uint32(nil), hostIds...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
-	for _, memID := range ordered {
-		node := c.nodes[memID]
+	for _, hostId := range ordered {
+		node := c.nodes[hostId]
 		capable, ok := node.(deadlineDecisionCapable)
 		if !ok {
-			return fmt.Errorf("%w: memnode %d does not report capabilities", ErrDeadlineDecisionProtocolUpgradeRequired, memID)
+			return fmt.Errorf("%w: memnode %d does not report capabilities", ErrDeadlineDecisionProtocolUpgradeRequired, hostId)
 		}
 		resp, err := capable.DescribeTransactionCapabilities(ctx, proto.DescribeTransactionCapabilitiesRequest{})
 		if err != nil {
-			return fmt.Errorf("%w: memnode %d: %v", ErrDeadlineDecisionProtocolUpgradeRequired, memID, err)
+			return fmt.Errorf("%w: memnode %d: %v", ErrDeadlineDecisionProtocolUpgradeRequired, hostId, err)
 		}
 		if resp.DeadlineDecisionProtocolVersion < proto.DeadlineDecisionProtocolVersion {
-			return fmt.Errorf("%w: memnode %d reports version %d", ErrDeadlineDecisionProtocolUpgradeRequired, memID, resp.DeadlineDecisionProtocolVersion)
+			return fmt.Errorf("%w: memnode %d reports version %d", ErrDeadlineDecisionProtocolUpgradeRequired, hostId, resp.DeadlineDecisionProtocolVersion)
 		}
 	}
 	return nil
@@ -649,27 +651,27 @@ func comparisonsValidAt(items []proto.CmpItem, now time.Time) bool {
 	return true
 }
 
-func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, tid proto.TransactionID, memID uint32, class string, cmp []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
-	node, ok := c.nodes[memID]
+func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId proto.TransactionID, hostId uint32, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
+	node, ok := c.nodes[hostId]
 	if !ok {
-		return ExecResult{Committed: false, Status: proto.VoteBadInternal, ReadResults: map[proto.ReadItem][]byte{}, ParticipantVotes: map[uint32]proto.Vote{memID: proto.VoteBadInternal}}
+		return ExecResult{Committed: false, Status: proto.VoteBadInternal, ReadResults: map[proto.ReadItem][]byte{}, ParticipantVotes: map[uint32]proto.Vote{hostId: proto.VoteBadInternal}}
 	}
-	reqReads := filterReads(memID, reads, c.resolveMemID)
+	reqReads := readItemsForHost(hostId, reads, c.resolveHostId)
 	resp, err := node.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{
-		TID:                             tid,
-		RequestID:                       proto.RequestID(tid.CorrelationID() + ":1pc:" + strconv.FormatUint(uint64(memID), 10)),
-		CorrelationID:                   tid.CorrelationID(),
-		CmpItems:                        filterCmp(memID, cmp, c.resolveMemID),
+		TID:                             txId,
+		RequestID:                       proto.RequestID(txId.CorrelationID() + ":1pc:" + strconv.FormatUint(uint64(hostId), 10)),
+		CorrelationID:                   txId.CorrelationID(),
+		CmpItems:                        compareItemsForHost(hostId, compares, c.resolveHostId),
 		ReadItems:                       reqReads,
-		WriteItems:                      filterWrites(memID, writes, c.resolveMemID),
-		Epoch:                           tid.Epoch,
+		WriteItems:                      writeItemsForHost(hostId, writes, c.resolveHostId),
+		Epoch:                           txId.Epoch,
 		Class:                           class,
-		Generation:                      c.generationFor(memID),
+		Generation:                      c.generationFor(hostId),
 		DeadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion,
 	})
 	if err != nil {
 		var remoteErr *rpcwire.RemoteError
-		res := ExecResult{Committed: false, Status: proto.VoteBadInternal, ReadResults: map[proto.ReadItem][]byte{}, ParticipantVotes: map[uint32]proto.Vote{memID: proto.VoteBadInternal}}
+		res := ExecResult{Committed: false, Status: proto.VoteBadInternal, ReadResults: map[proto.ReadItem][]byte{}, ParticipantVotes: map[uint32]proto.Vote{hostId: proto.VoteBadInternal}}
 		if !errors.As(err, &remoteErr) {
 			res.TransportErr = err
 			res.UnknownOutcome = true
@@ -677,8 +679,8 @@ func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, tid proto.Tr
 		return res
 	}
 	c.observeEpoch(resp.CurrentEpoch)
-	if resp.Vote != proto.VoteOK {
-		return ExecResult{Committed: false, Status: resp.Vote, ReadResults: map[proto.ReadItem][]byte{}, ParticipantVotes: map[uint32]proto.Vote{memID: resp.Vote}}
+	if resp.Vote != proto.VoteOk {
+		return ExecResult{Committed: false, Status: resp.Vote, ReadResults: map[proto.ReadItem][]byte{}, ParticipantVotes: map[uint32]proto.Vote{hostId: resp.Vote}}
 	}
 	mappedReads := make(map[proto.ReadItem][]byte, len(reqReads))
 	for idx, item := range reqReads {
@@ -686,33 +688,33 @@ func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, tid proto.Tr
 			mappedReads[item] = append([]byte(nil), data...)
 		}
 	}
-	return ExecResult{Committed: true, Status: proto.VoteOK, ReadResults: mappedReads, ParticipantVotes: map[uint32]proto.Vote{memID: proto.VoteOK}}
+	return ExecResult{Committed: true, Status: proto.VoteOk, ReadResults: mappedReads, ParticipantVotes: map[uint32]proto.Vote{hostId: proto.VoteOk}}
 }
 
-func filterCmp(memID uint32, items []proto.CmpItem, resolve func(uint32) uint32) []proto.CmpItem {
+func compareItemsForHost(hostId uint32, items []proto.CmpItem, resolve func(uint32) uint32) []proto.CmpItem {
 	out := make([]proto.CmpItem, 0)
 	for _, i := range items {
-		if resolve(i.MemID) == memID {
+		if resolve(i.MemID) == hostId {
 			out = append(out, i)
 		}
 	}
 	return out
 }
 
-func filterReads(memID uint32, items []proto.ReadItem, resolve func(uint32) uint32) []proto.ReadItem {
+func readItemsForHost(hostId uint32, items []proto.ReadItem, resolve func(uint32) uint32) []proto.ReadItem {
 	out := make([]proto.ReadItem, 0)
 	for _, i := range items {
-		if resolve(i.MemID) == memID {
+		if resolve(i.MemID) == hostId {
 			out = append(out, i)
 		}
 	}
 	return out
 }
 
-func filterWrites(memID uint32, items []proto.WriteItem, resolve func(uint32) uint32) []proto.WriteItem {
+func writeItemsForHost(hostId uint32, items []proto.WriteItem, resolve func(uint32) uint32) []proto.WriteItem {
 	out := make([]proto.WriteItem, 0)
 	for _, i := range items {
-		if resolve(i.MemID) == memID {
+		if resolve(i.MemID) == hostId {
 			out = append(out, i)
 		}
 	}

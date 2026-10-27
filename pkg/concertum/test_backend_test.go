@@ -11,10 +11,10 @@ import (
 
 type coordinatorBackend struct {
 	coord interface {
-		Read(ctx context.Context, memID uint32, addr uint64, length uint32) ([]byte, error)
-		Write(ctx context.Context, memID uint32, addr uint64, data []byte) error
-		GetStats(memID uint32) (memnode.StatsResponse, error)
-		ExecAndCommit(ctx context.Context, class string, cmp []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) client.ExecResult
+		Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error)
+		Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
+		GetStats(hostId uint32) (memnode.StatsResponse, error)
+		ExecuteAndCommit(ctx context.Context, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) client.ExecResult
 	}
 }
 
@@ -22,16 +22,16 @@ func newCoordinatorBackend(coord *client.Coordinator) concertum.Backend {
 	return &coordinatorBackend{coord: coord}
 }
 
-func (b *coordinatorBackend) Read(ctx context.Context, memID uint32, addr uint64, length uint32) ([]byte, error) {
-	return b.coord.Read(ctx, memID, addr, length)
+func (b *coordinatorBackend) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
+	return b.coord.Read(ctx, hostId, addr, length)
 }
 
-func (b *coordinatorBackend) Write(ctx context.Context, memID uint32, addr uint64, data []byte) error {
-	return b.coord.Write(ctx, memID, addr, data)
+func (b *coordinatorBackend) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
+	return b.coord.Write(ctx, hostId, addr, data)
 }
 
-func (b *coordinatorBackend) GetStats(memID uint32) (concertum.Stats, error) {
-	stats, err := b.coord.GetStats(memID)
+func (b *coordinatorBackend) GetStats(hostId uint32) (concertum.Stats, error) {
+	stats, err := b.coord.GetStats(hostId)
 	if err != nil {
 		return concertum.Stats{}, err
 	}
@@ -51,23 +51,23 @@ func (b *coordinatorBackend) GetStats(memID uint32) (concertum.Stats, error) {
 	return out, nil
 }
 
-func (b *coordinatorBackend) ExecAndCommit(ctx context.Context, class string, cmp []concertum.CmpItem, reads []concertum.ReadItem, writes []concertum.WriteItem) concertum.ExecResult {
-	internalCmp := make([]proto.CmpItem, 0, len(cmp))
-	for _, item := range cmp {
-		internalCmp = append(internalCmp, proto.CmpItem{MemID: item.MemID, Addr: item.Addr, Data: append([]byte(nil), item.Data...), ValidUntil: item.ValidUntil})
+func (b *coordinatorBackend) ExecuteAndCommit(ctx context.Context, class string, compares []concertum.CompareItem, reads []concertum.ReadItem, writes []concertum.WriteItem) concertum.ExecResult {
+	internalCmp := make([]proto.CmpItem, 0, len(compares))
+	for _, item := range compares {
+		internalCmp = append(internalCmp, proto.CmpItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...), ValidUntil: item.ValidUntil})
 	}
 	internalReads := make([]proto.ReadItem, 0, len(reads))
 	for _, item := range reads {
-		internalReads = append(internalReads, proto.ReadItem{MemID: item.MemID, Addr: item.Addr, Len: item.Len})
+		internalReads = append(internalReads, proto.ReadItem{MemID: item.HostId, Addr: item.Address, Len: item.Length})
 	}
 	internalWrites := make([]proto.WriteItem, 0, len(writes))
 	for _, item := range writes {
-		internalWrites = append(internalWrites, proto.WriteItem{MemID: item.MemID, Addr: item.Addr, Data: append([]byte(nil), item.Data...)})
+		internalWrites = append(internalWrites, proto.WriteItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
 	}
-	res := b.coord.ExecAndCommit(ctx, class, internalCmp, internalReads, internalWrites)
+	res := b.coord.ExecuteAndCommit(ctx, class, internalCmp, internalReads, internalWrites)
 	readsOut := make(map[concertum.ReadKey][]byte, len(res.ReadResults))
 	for k, v := range res.ReadResults {
-		readsOut[concertum.ReadKey{MemID: k.MemID, Addr: k.Addr, Len: k.Len}] = append([]byte(nil), v...)
+		readsOut[concertum.ReadKey{HostId: k.MemID, Address: k.Addr, Length: k.Len}] = append([]byte(nil), v...)
 	}
 	if res.UnknownOutcome {
 		return concertum.ExecResult{Committed: false, UnknownOutcome: true, ReadResults: map[concertum.ReadKey][]byte{}, Status: concertum.StatusUnknown}

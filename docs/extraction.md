@@ -68,6 +68,14 @@ timestamps. The former diagnostic test file was replaced by
 The source manifest records the original extraction snapshot and hashes, before
 these changes; it is not a hash inventory of the current working tree.
 
+On 2026-10-27, transaction helpers and naming were adapted from the separate
+private gofonia repository, without changing that repository. The current
+participant and B+tree implementations are in `internal/memnode/participant.go`
+and `minuet-index/btree.go`. The original extraction manifest retains their old
+filenames as historical evidence. See [gofonia-lineage.md](gofonia-lineage.md)
+and [gofonia-source-manifest.json](gofonia-source-manifest.json) for the exact
+source revision, reused code, renames, and compatibility decisions.
+
 ## Interview use
 
 The demo and reading guide make this a smaller entry point into existing work.

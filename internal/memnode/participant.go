@@ -17,6 +17,7 @@ import (
 	"github.com/jbancroft/concertum2/internal/proto"
 	"github.com/jbancroft/concertum2/internal/ratelimit"
 	"github.com/jbancroft/concertum2/internal/storage"
+	"github.com/jbancroft/concertum2/mini_transaction"
 )
 
 var ErrOutOfBounds = errors.New("out of bounds")
@@ -47,10 +48,23 @@ const (
 	maxBaselineBytes             = uint64(1) << 40
 )
 
-type heldLock struct {
+type RangeLock struct {
 	start uint64
 	end   uint64
 	write bool
+}
+
+// OverlapsWith follows gofonia's half-open range comparison, expressed using
+// the participant's existing start/end representation.
+func (rl RangeLock) OverlapsWith(other RangeLock) bool {
+	if rl.start >= rl.end || other.start >= other.end {
+		return false
+	}
+	minEnd, maxOffset := rl.end, other.start
+	if rl.start > other.start {
+		minEnd, maxOffset = other.end, rl.start
+	}
+	return minEnd > maxOffset
 }
 
 type prepareOutcome struct {
@@ -78,20 +92,20 @@ type commitOutcome struct {
 	actionCommit bool
 }
 
-type preparedTxn struct {
+type inDoubtTx struct {
 	writes                []proto.WriteItem
 	readData              map[uint32][]byte
-	heldLocks             []heldLock
-	preparedAt            time.Time
-	participants          []uint32
+	heldLocks             []RangeLock
+	createdAt             time.Time
+	hostIds               []uint32
 	decisionDeadlineNanos int64
 	redoLoggedTid         bool
 	class                 string
 	correlationID         string
 }
 
-type rangeLockManager struct {
-	locks                 []heldLock
+type LockManager struct {
+	locks                 []RangeLock
 	globalWriteLock       bool
 	globalLockedAt        time.Time
 	globalOwner           string
@@ -116,12 +130,12 @@ type baselineTransfer struct {
 	boundary         proto.TransactionID
 }
 
-func (m *rangeLockManager) tryLock(start, end uint64, write bool) bool {
+func (m *LockManager) tryLock(start, end uint64, write bool) bool {
 	ok, _ := m.tryLockWithConflict(start, end, write)
 	return ok
 }
 
-func (m *rangeLockManager) tryLockWithConflict(start, end uint64, write bool) (bool, *proto.LockConflict) {
+func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, *proto.LockConflict) {
 	if m.globalWriteLock {
 		return false, &proto.LockConflict{Reason: "global_write_lock", RequestedStart: start, RequestedEnd: end, RequestedWrite: write}
 	}
@@ -145,7 +159,7 @@ func (m *rangeLockManager) tryLockWithConflict(start, end uint64, write bool) (b
 	for i := idx - 1; i >= 0; i-- {
 		l := m.locks[i]
 		if l.end <= start {
-			break
+			continue
 		}
 		if rangesOverlap(start, end, l.start, l.end) && (write || l.write) {
 			return false, &proto.LockConflict{
@@ -155,14 +169,14 @@ func (m *rangeLockManager) tryLockWithConflict(start, end uint64, write bool) (b
 			}
 		}
 	}
-	newLock := heldLock{start: start, end: end, write: write}
-	m.locks = append(m.locks, heldLock{})
+	newLock := RangeLock{start: start, end: end, write: write}
+	m.locks = append(m.locks, RangeLock{})
 	copy(m.locks[idx+1:], m.locks[idx:])
 	m.locks[idx] = newLock
 	return true, nil
 }
 
-func lowerBoundLock(locks []heldLock, start uint64) int {
+func lowerBoundLock(locks []RangeLock, start uint64) int {
 	lo, hi := 0, len(locks)
 	for lo < hi {
 		mid := lo + (hi-lo)/2
@@ -175,7 +189,7 @@ func lowerBoundLock(locks []heldLock, start uint64) int {
 	return lo
 }
 
-func (m *rangeLockManager) unlock(target heldLock) {
+func (m *LockManager) unlock(target RangeLock) {
 	for i := range m.locks {
 		l := m.locks[i]
 		if l.start == target.start && l.end == target.end && l.write == target.write {
@@ -186,13 +200,13 @@ func (m *rangeLockManager) unlock(target heldLock) {
 }
 
 func rangesOverlap(aStart, aEnd, bStart, bEnd uint64) bool {
-	return aStart < bEnd && bStart < aEnd
+	return (RangeLock{start: aStart, end: aEnd}).OverlapsWith(RangeLock{start: bStart, end: bEnd})
 }
 
-func overlapsAnyWrite(addr uint64, length uint32, writes []proto.WriteItem) bool {
-	start, end := addr, addr+uint64(length)
+func overlapsAnyWrite(item mini_transaction.RangeItem, writes []proto.WriteItem) bool {
+	start, end := item.Offset(), item.Offset()+item.Size()
 	for _, w := range writes {
-		wStart, wEnd := w.Addr, w.Addr+uint64(len(w.Data))
+		wStart, wEnd := w.Offset(), w.Offset()+w.Size()
 		if rangesOverlap(start, end, wStart, wEnd) {
 			return true
 		}
@@ -235,22 +249,22 @@ type PrimarySyncPeer interface {
 	ListRedoEntries(ctx context.Context, req proto.ListRedoEntriesRequest) (proto.ListRedoEntriesResponse, error)
 }
 
-type Node struct {
+type Participant struct {
 	mu            sync.Mutex
 	cond          *sync.Cond
-	memID         uint32
+	hostId        uint32
 	memory        []byte
 	storageDir    string
 	durable       bool
 	diskImage     *storage.DiskImage
-	redoLog       *storage.RedoLog
-	decided       *storage.DecidedStore
-	forcedAbort   *storage.ForcedAbortStore
+	redo          *storage.RedoLog
+	decided       *storage.DecidedTransactionLog
+	forcedAborts  *storage.ForcedAbortLog
 	replay        *storage.ReplayStore
-	inDoubt       map[proto.TransactionID]*preparedTxn
-	locks         rangeLockManager
+	inDoubt       map[proto.TransactionID]*inDoubtTx
+	locks         LockManager
 	epoch         uint64
-	allLogTIDs    map[proto.TransactionID]struct{}
+	allLogTxIds   map[proto.TransactionID]struct{}
 	participants  map[uint32]RecoveryPeer
 	epochDuration time.Duration
 	nowFn         func() time.Time
@@ -259,7 +273,7 @@ type Node struct {
 	appliedLocal    map[proto.TransactionID]bool
 	appliedRemote   map[proto.TransactionID]map[uint32]bool
 	pendingNotify   map[uint32]map[proto.TransactionID]struct{}
-	logParticipants map[proto.TransactionID][]uint32
+	logHostIds      map[proto.TransactionID][]uint32
 	timelines       map[proto.TransactionID][]proto.TxnTimelineEvent
 	prepareOutcomes map[proto.TransactionID]prepareOutcome
 	onePCOutcomes   map[proto.TransactionID]onePCOutcome
@@ -306,14 +320,14 @@ type Node struct {
 	debugLimiter                *ratelimit.KeyedLimiter
 	authorizer                  *auth.Authorizer
 	enableDebugEndpoints        bool
-	recoverBoundaryHook         func(phase string, tid proto.TransactionID) error
-	outcomeReplayBoundaryHook   func(phase string, tid proto.TransactionID) error
+	recoverBoundaryHook         func(phase string, txId proto.TransactionID) error
+	outcomeReplayBoundaryHook   func(phase string, txId proto.TransactionID) error
 	baselineInstallBoundaryHook func(phase string) error
 	fencingPublicationHook      func(point string) error
 	writeApplyFaultHook         func(addr uint64, data []byte) error
 }
 
-func (n *Node) DescribeTransactionCapabilities(ctx context.Context, _ proto.DescribeTransactionCapabilitiesRequest) (proto.DescribeTransactionCapabilitiesResponse, error) {
+func (n *Participant) DescribeTransactionCapabilities(ctx context.Context, _ proto.DescribeTransactionCapabilitiesRequest) (proto.DescribeTransactionCapabilitiesResponse, error) {
 	if err := n.authorize(ctx, auth.RoleClient, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.DescribeTransactionCapabilitiesResponse{}, err
 	}
@@ -334,7 +348,7 @@ func (n *Node) DescribeTransactionCapabilities(ctx context.Context, _ proto.Desc
 	return proto.DescribeTransactionCapabilitiesResponse{DeadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion}, nil
 }
 
-func (n *Node) initSafetyDefaults() {
+func (n *Participant) initSafetyDefaults() {
 	n.maxInFlightPrepare = 256
 	n.maxInDoubtSoft = 0
 	n.maxInDoubtHard = 0
@@ -345,9 +359,9 @@ func (n *Node) initSafetyDefaults() {
 	n.prepareSlots = make(chan struct{}, n.maxInFlightPrepare)
 }
 
-func NewNode(size int) *Node {
+func NewParticipant(size int) *Participant {
 	now := time.Now()
-	n := &Node{memory: make([]byte, size), inDoubt: make(map[proto.TransactionID]*preparedTxn), epoch: 1, allLogTIDs: map[proto.TransactionID]struct{}{}, epochDuration: time.Minute, nowFn: time.Now, epochBase: now, participants: map[uint32]RecoveryPeer{}, appliedLocal: map[proto.TransactionID]bool{}, appliedRemote: map[proto.TransactionID]map[uint32]bool{}, pendingNotify: map[uint32]map[proto.TransactionID]struct{}{}, logParticipants: map[proto.TransactionID][]uint32{}, timelines: map[proto.TransactionID][]proto.TxnTimelineEvent{}, prepareOutcomes: map[proto.TransactionID]prepareOutcome{}, onePCOutcomes: map[proto.TransactionID]onePCOutcome{}, commitOutcomes: map[proto.TransactionID]commitOutcome{}, prepareFlights: map[proto.TransactionID]*prepareFlight{}, onePCFlights: map[proto.TransactionID]*onePCFlight{}}
+	n := &Participant{memory: make([]byte, size), inDoubt: make(map[proto.TransactionID]*inDoubtTx), epoch: 1, allLogTxIds: map[proto.TransactionID]struct{}{}, epochDuration: time.Minute, nowFn: time.Now, epochBase: now, participants: map[uint32]RecoveryPeer{}, appliedLocal: map[proto.TransactionID]bool{}, appliedRemote: map[proto.TransactionID]map[uint32]bool{}, pendingNotify: map[uint32]map[proto.TransactionID]struct{}{}, logHostIds: map[proto.TransactionID][]uint32{}, timelines: map[proto.TransactionID][]proto.TxnTimelineEvent{}, prepareOutcomes: map[proto.TransactionID]prepareOutcome{}, onePCOutcomes: map[proto.TransactionID]onePCOutcome{}, commitOutcomes: map[proto.TransactionID]commitOutcome{}, prepareFlights: map[proto.TransactionID]*prepareFlight{}, onePCFlights: map[proto.TransactionID]*onePCFlight{}}
 	n.mode = ModeSingle
 	n.metrics = newNodeMetrics()
 	n.recoveryComplete = true
@@ -367,13 +381,13 @@ func NewNode(size int) *Node {
 	return n
 }
 
-func NewNodeWithID(memID uint32, size int) *Node {
-	n := NewNode(size)
-	n.memID = memID
+func NewParticipantWithId(hostId uint32, size int) *Participant {
+	n := NewParticipant(size)
+	n.hostId = hostId
 	return n
 }
 
-func NewDurableNode(memID uint32, size int, dir string) (*Node, error) {
+func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -395,11 +409,11 @@ func NewDurableNode(memID uint32, size int, dir string) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	decided, err := storage.OpenDecidedStore(dir)
+	decided, err := storage.OpenDecidedTransactionLog(dir)
 	if err != nil {
 		return nil, err
 	}
-	forcedAbort, err := storage.OpenForcedAbortStore(dir)
+	forcedAbort, err := storage.OpenForcedAbortLog(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -408,18 +422,18 @@ func NewDurableNode(memID uint32, size int, dir string) (*Node, error) {
 		return nil, err
 	}
 	now := time.Now()
-	n := &Node{
-		memID:            memID,
+	n := &Participant{
+		hostId:           hostId,
 		memory:           mem,
 		storageDir:       dir,
 		durable:          true,
 		diskImage:        disk,
-		redoLog:          redo,
+		redo:             redo,
 		decided:          decided,
-		forcedAbort:      forcedAbort,
-		inDoubt:          make(map[proto.TransactionID]*preparedTxn),
+		forcedAborts:     forcedAbort,
+		inDoubt:          make(map[proto.TransactionID]*inDoubtTx),
 		epoch:            1,
-		allLogTIDs:       map[proto.TransactionID]struct{}{},
+		allLogTxIds:      map[proto.TransactionID]struct{}{},
 		participants:     map[uint32]RecoveryPeer{},
 		replay:           replay,
 		epochDuration:    time.Minute,
@@ -428,7 +442,7 @@ func NewDurableNode(memID uint32, size int, dir string) (*Node, error) {
 		appliedLocal:     map[proto.TransactionID]bool{},
 		appliedRemote:    map[proto.TransactionID]map[uint32]bool{},
 		pendingNotify:    map[uint32]map[proto.TransactionID]struct{}{},
-		logParticipants:  map[proto.TransactionID][]uint32{},
+		logHostIds:       map[proto.TransactionID][]uint32{},
 		timelines:        map[proto.TransactionID][]proto.TxnTimelineEvent{},
 		prepareOutcomes:  map[proto.TransactionID]prepareOutcome{},
 		onePCOutcomes:    map[proto.TransactionID]onePCOutcome{},
@@ -456,22 +470,22 @@ func NewDurableNode(memID uint32, size int, dir string) (*Node, error) {
 	})
 	n.metrics.diskImageSizeBytes.Set(int64(size))
 	for _, e := range redo.Entries() {
-		n.allLogTIDs[e.TID] = struct{}{}
-		n.logParticipants[e.TID] = append([]uint32(nil), e.Participants...)
-		if committed, ok := decided.Get(e.TID); ok {
-			n.commitOutcomes[e.TID] = commitOutcome{resp: proto.CommitResponse{Ack: true}, actionCommit: committed}
+		n.allLogTxIds[e.TransactionId] = struct{}{}
+		n.logHostIds[e.TransactionId] = append([]uint32(nil), e.HostIds...)
+		if committed, ok := decided.Get(e.TransactionId); ok {
+			n.commitOutcomes[e.TransactionId] = commitOutcome{resp: proto.CommitResponse{Ack: true}, actionCommit: committed}
 			if committed {
-				n.appliedLocal[e.TID] = true
-				n.enqueueAppliedNotificationsLocked(e.TID, e.Participants)
+				n.appliedLocal[e.TransactionId] = true
+				n.enqueueAppliedNotificationsLocked(e.TransactionId, e.HostIds)
 			}
 		} else {
-			n.inDoubt[e.TID] = &preparedTxn{
+			n.inDoubt[e.TransactionId] = &inDoubtTx{
 				writes:                cloneWrites(e.WriteItems),
-				participants:          append([]uint32(nil), e.Participants...),
+				hostIds:               append([]uint32(nil), e.HostIds...),
 				decisionDeadlineNanos: e.DecisionDeadlineNanos,
 				redoLoggedTid:         true,
-				preparedAt:            now,
-				correlationID:         e.TID.CorrelationID(),
+				createdAt:             now,
+				correlationID:         e.TransactionId.CorrelationID(),
 			}
 		}
 	}
@@ -479,7 +493,7 @@ func NewDurableNode(memID uint32, size int, dir string) (*Node, error) {
 	return n, nil
 }
 
-func (n *Node) Close() error {
+func (n *Participant) Close() error {
 	n.mu.Lock()
 	disk := n.diskImage
 	transfer := n.baselineTransfer
@@ -498,7 +512,7 @@ func (n *Node) Close() error {
 	return disk.Close()
 }
 
-func (n *Node) SetEpochSourceForTest(epochDuration time.Duration, nowFn func() time.Time) {
+func (n *Participant) SetEpochSourceForTest(epochDuration time.Duration, nowFn func() time.Time) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if epochDuration > 0 {
@@ -510,29 +524,29 @@ func (n *Node) SetEpochSourceForTest(epochDuration time.Duration, nowFn func() t
 	}
 }
 
-func (n *Node) SetRedoBatchingForTest(window time.Duration, max int) {
+func (n *Participant) SetRedoBatchingForTest(window time.Duration, max int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.redoLog != nil {
-		n.redoLog.ConfigureBatchingForTest(window, max)
+	if n.redo != nil {
+		n.redo.ConfigureBatchingForTest(window, max)
 	}
 }
 
-func (n *Node) SetRedoFsyncHookForTest(fn func(*os.File) error) {
+func (n *Participant) SetRedoFsyncHookForTest(fn func(*os.File) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.redoLog != nil {
-		n.redoLog.SetFsyncHookForTest(fn)
+	if n.redo != nil {
+		n.redo.SetFsyncHookForTest(fn)
 	}
 }
 
-func (n *Node) SetRecoverBoundaryHookForTest(fn func(phase string, tid proto.TransactionID) error) {
+func (n *Participant) SetRecoverBoundaryHookForTest(fn func(phase string, txId proto.TransactionID) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.recoverBoundaryHook = fn
 }
 
-func (n *Node) SetOutcomeReplayBoundaryHookForTest(fn func(phase string, tid proto.TransactionID) error) {
+func (n *Participant) SetOutcomeReplayBoundaryHookForTest(fn func(phase string, txId proto.TransactionID) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.outcomeReplayBoundaryHook = fn
@@ -541,22 +555,22 @@ func (n *Node) SetOutcomeReplayBoundaryHookForTest(fn func(phase string, tid pro
 // SetWriteApplyFaultForTest injects a failure after memory apply and before the
 // durable disk image accepts a write. It is intended only for deterministic
 // recovery tests.
-func (n *Node) SetWriteApplyFaultForTest(fn func(addr uint64, data []byte) error) {
+func (n *Participant) SetWriteApplyFaultForTest(fn func(addr uint64, data []byte) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.writeApplyFaultHook = fn
 }
 
-func (n *Node) RedoFsyncCountForTest() uint64 {
+func (n *Participant) RedoFsyncCountForTest() uint64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.redoLog == nil {
+	if n.redo == nil {
 		return 0
 	}
-	return n.redoLog.FsyncCallCount()
+	return n.redo.FsyncCallCount()
 }
 
-func (n *Node) currentEpochLocked() uint64 {
+func (n *Participant) currentEpochLocked() uint64 {
 	if n.epochDuration <= 0 {
 		n.epochDuration = time.Minute
 	}
@@ -581,7 +595,7 @@ func (n *Node) currentEpochLocked() uint64 {
 	return n.epoch
 }
 
-func (n *Node) SetRecoveryPeers(peers map[uint32]RecoveryPeer) {
+func (n *Participant) SetRecoveryPeers(peers map[uint32]RecoveryPeer) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.participants = make(map[uint32]RecoveryPeer, len(peers))
@@ -590,7 +604,7 @@ func (n *Node) SetRecoveryPeers(peers map[uint32]RecoveryPeer) {
 	}
 }
 
-func (n *Node) SetPeerDialer(tlsConfig *tls.Config, timeout time.Duration) {
+func (n *Participant) SetPeerDialer(tlsConfig *tls.Config, timeout time.Duration) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.peerTLS = tlsConfig
@@ -599,19 +613,19 @@ func (n *Node) SetPeerDialer(tlsConfig *tls.Config, timeout time.Duration) {
 	}
 }
 
-func (n *Node) Generation() uint64 {
+func (n *Participant) Generation() uint64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.generation
 }
 
-func (n *Node) SetGenerationForTest(generation uint64) {
+func (n *Participant) SetGenerationForTest(generation uint64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.generation = generation
 }
 
-func (n *Node) checkGenerationLocked(generation uint64) error {
+func (n *Participant) checkGenerationLocked(generation uint64) error {
 	if n.generation == 0 {
 		return nil
 	}
@@ -628,7 +642,7 @@ func generationFromContext(ctx context.Context) uint64 {
 	return 0
 }
 
-func (n *Node) replicationRoleLocked() proto.ReplicationRole {
+func (n *Participant) replicationRoleLocked() proto.ReplicationRole {
 	switch n.mode {
 	case ModeReplPrimary:
 		return proto.ReplicationRolePrimary
@@ -639,7 +653,7 @@ func (n *Node) replicationRoleLocked() proto.ReplicationRole {
 	}
 }
 
-func (n *Node) setReplicationErrorLocked(err error) {
+func (n *Participant) setReplicationErrorLocked(err error) {
 	if err == nil {
 		n.lastReplicationError = ""
 		return
@@ -647,11 +661,11 @@ func (n *Node) setReplicationErrorLocked(err error) {
 	n.lastReplicationError = err.Error()
 }
 
-func (n *Node) newRPCPeerLocked(addr string) *RPCPeer {
+func (n *Participant) newRPCPeerLocked(addr string) *RPCPeer {
 	return NewRPCPeer(addr, n.peerTLS, n.peerTimeout)
 }
 
-func (n *Node) configureAsPrimaryLocked(replicaID uint32, replica ReplicaPeer) {
+func (n *Participant) configureAsPrimaryLocked(replicaID uint32, replica ReplicaPeer) {
 	n.mode = ModeReplPrimary
 	n.replicaID = replicaID
 	n.replica = replica
@@ -660,13 +674,13 @@ func (n *Node) configureAsPrimaryLocked(replicaID uint32, replica ReplicaPeer) {
 	n.metrics.replicaLagEntries.Set(0)
 }
 
-func (n *Node) ConfigureAsPrimary(replicaID uint32, replica ReplicaPeer) {
+func (n *Participant) ConfigureAsPrimary(replicaID uint32, replica ReplicaPeer) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.configureAsPrimaryLocked(replicaID, replica)
 }
 
-func (n *Node) configureAsReplicaLocked(primaryID uint32) {
+func (n *Participant) configureAsReplicaLocked(primaryID uint32) {
 	n.mode = ModeReplReplica
 	n.primaryID = primaryID
 	n.replica = nil
@@ -675,26 +689,26 @@ func (n *Node) configureAsReplicaLocked(primaryID uint32) {
 	n.metrics.replicaLagEntries.Set(1)
 }
 
-func (n *Node) ConfigureAsReplica(primaryID uint32) {
+func (n *Participant) ConfigureAsReplica(primaryID uint32) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.configureAsReplicaLocked(primaryID)
 }
 
-func (n *Node) PromoteToPrimary(replicaID uint32, replica ReplicaPeer) {
+func (n *Participant) PromoteToPrimary(replicaID uint32, replica ReplicaPeer) {
 	n.ConfigureAsPrimary(replicaID, replica)
 	n.mu.Lock()
 	n.replicaSynced = true
 	n.mu.Unlock()
 }
 
-func (n *Node) RecordPrimaryHeartbeat() {
+func (n *Participant) RecordPrimaryHeartbeat() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.heartbeat = time.Now()
 }
 
-func (n *Node) PrimaryLikelyDown(timeout time.Duration) bool {
+func (n *Participant) PrimaryLikelyDown(timeout time.Duration) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplReplica || timeout <= 0 {
@@ -706,7 +720,7 @@ func (n *Node) PrimaryLikelyDown(timeout time.Duration) bool {
 	return time.Since(n.heartbeat) > timeout
 }
 
-func (n *Node) ConfigureReplication(ctx context.Context, req proto.ConfigureReplicationRequest) (proto.ConfigureReplicationResponse, error) {
+func (n *Participant) ConfigureReplication(ctx context.Context, req proto.ConfigureReplicationRequest) (proto.ConfigureReplicationResponse, error) {
 	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ConfigureReplicationResponse{Ack: false}, err
 	}
@@ -717,14 +731,14 @@ func (n *Node) ConfigureReplication(ctx context.Context, req proto.ConfigureRepl
 	switch req.Role {
 	case proto.ReplicationRoleSingle:
 	case proto.ReplicationRolePrimary:
-		if n.redoLog == nil {
+		if n.redo == nil {
 			return proto.ConfigureReplicationResponse{Ack: false}, ErrReplicationRequiresDurability
 		}
 		if req.PartnerRPC == "" {
 			return proto.ConfigureReplicationResponse{Ack: false}, errors.New("primary replication requires partner_rpc")
 		}
 	case proto.ReplicationRoleReplica:
-		if n.redoLog == nil {
+		if n.redo == nil {
 			return proto.ConfigureReplicationResponse{Ack: false}, ErrReplicationRequiresDurability
 		}
 		if req.PartnerRPC == "" {
@@ -779,7 +793,7 @@ func (n *Node) ConfigureReplication(ctx context.Context, req proto.ConfigureRepl
 	return proto.ConfigureReplicationResponse{Ack: true, Generation: n.generation}, nil
 }
 
-func (n *Node) ReplicationStatus(ctx context.Context, _ proto.ReplicationStatusRequest) (proto.ReplicationStatusResponse, error) {
+func (n *Participant) ReplicationStatus(ctx context.Context, _ proto.ReplicationStatusRequest) (proto.ReplicationStatusResponse, error) {
 	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ReplicationStatusResponse{}, err
 	}
@@ -796,7 +810,7 @@ func (n *Node) ReplicationStatus(ctx context.Context, _ proto.ReplicationStatusR
 	}, nil
 }
 
-func (n *Node) Read(ctx context.Context, addr uint64, length uint32) ([]byte, error) {
+func (n *Participant) Read(ctx context.Context, addr uint64, length uint32) ([]byte, error) {
 	if err := n.authorize(ctx, auth.RoleClient, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return nil, err
 	}
@@ -808,7 +822,7 @@ func (n *Node) Read(ctx context.Context, addr uint64, length uint32) ([]byte, er
 	return n.read(addr, length)
 }
 
-func (n *Node) read(addr uint64, length uint32) ([]byte, error) {
+func (n *Participant) read(addr uint64, length uint32) ([]byte, error) {
 	end := addr + uint64(length)
 	if end > uint64(len(n.memory)) {
 		return nil, ErrOutOfBounds
@@ -818,7 +832,7 @@ func (n *Node) read(addr uint64, length uint32) ([]byte, error) {
 	return data, nil
 }
 
-func (n *Node) Write(ctx context.Context, addr uint64, data []byte) error {
+func (n *Participant) Write(ctx context.Context, addr uint64, data []byte) error {
 	if err := n.authorize(ctx, auth.RoleClient, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return err
 	}
@@ -833,7 +847,7 @@ func (n *Node) Write(ctx context.Context, addr uint64, data []byte) error {
 	return n.write(addr, data)
 }
 
-func (n *Node) write(addr uint64, data []byte) error {
+func (n *Participant) write(addr uint64, data []byte) error {
 	end := addr + uint64(len(data))
 	if end > uint64(len(n.memory)) {
 		return ErrOutOfBounds
@@ -846,7 +860,7 @@ func (n *Node) write(addr uint64, data []byte) error {
 	}
 	if n.diskImage != nil {
 		if n.backupMode {
-			n.pendingDiskWrites = append(n.pendingDiskWrites, proto.WriteItem{MemID: n.memID, Addr: addr, Data: append([]byte(nil), data...)})
+			n.pendingDiskWrites = append(n.pendingDiskWrites, proto.WriteItem{MemID: n.hostId, Addr: addr, Data: append([]byte(nil), data...)})
 			return nil
 		}
 		if err := n.diskImage.ApplyWrite(addr, data); err != nil {
@@ -885,33 +899,33 @@ func clone1PCResponse(resp proto.ExecCommit1PCResponse) proto.ExecCommit1PCRespo
 	return resp
 }
 
-func (n *Node) hasDurableTransactionLocked(tid proto.TransactionID) bool {
-	if _, ok := n.allLogTIDs[tid]; ok {
+func (n *Participant) hasDurableTransactionLocked(txId proto.TransactionID) bool {
+	if _, ok := n.allLogTxIds[txId]; ok {
 		return true
 	}
 	if n.decided != nil {
-		_, ok := n.decided.Get(tid)
+		_, ok := n.decided.Get(txId)
 		return ok
 	}
 	return false
 }
 
-func (n *Node) callOutcomeReplayBoundaryHookLocked(phase string, tid proto.TransactionID) error {
+func (n *Participant) callOutcomeReplayBoundaryHookLocked(phase string, txId proto.TransactionID) error {
 	if n.outcomeReplayBoundaryHook == nil {
 		return nil
 	}
-	return n.outcomeReplayBoundaryHook(phase, tid)
+	return n.outcomeReplayBoundaryHook(phase, txId)
 }
 
 // replicateReplayRecordLocked publishes a terminal participant response to
 // the live replica before the primary returns it to its caller. The primary
 // mutex is released during the RPC, matching redo/decision replication and
 // allowing the replica to acquire its own node mutex without deadlock.
-func (n *Node) replicateReplayRecordLocked(tid proto.TransactionID, kind proto.ReplayRecordKind, prepare *proto.ExecPrepareResponse, onePC *proto.ExecCommit1PCResponse) error {
+func (n *Participant) replicateReplayRecordLocked(txId proto.TransactionID, kind proto.ReplayRecordKind, prepare *proto.ExecPrepareResponse, onePC *proto.ExecCommit1PCResponse) error {
 	if n.mode != ModeReplPrimary || n.replica == nil {
 		return nil
 	}
-	req := proto.ReplicateReplayRecordRequest{TID: tid, Kind: kind}
+	req := proto.ReplicateReplayRecordRequest{TID: txId, Kind: kind}
 	if prepare != nil {
 		cloned := clonePrepareResponse(*prepare)
 		req.Prepare = &cloned
@@ -940,35 +954,35 @@ func (n *Node) replicateReplayRecordLocked(tid proto.TransactionID, kind proto.R
 	return nil
 }
 
-func (n *Node) rememberPrepareOutcomeLocked(tid proto.TransactionID, resp proto.ExecPrepareResponse) (proto.ExecPrepareResponse, error) {
+func (n *Participant) rememberPrepareOutcomeLocked(txId proto.TransactionID, resp proto.ExecPrepareResponse) (proto.ExecPrepareResponse, error) {
 	if n.replay != nil {
-		if err := n.replay.AppendPrepare(tid, resp); err != nil {
+		if err := n.replay.AppendPrepare(txId, resp); err != nil {
 			return proto.ExecPrepareResponse{RequestID: resp.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 		}
 	}
-	if err := n.replicateReplayRecordLocked(tid, proto.ReplayRecordPrepare, &resp, nil); err != nil {
+	if err := n.replicateReplayRecordLocked(txId, proto.ReplayRecordPrepare, &resp, nil); err != nil {
 		return proto.ExecPrepareResponse{RequestID: resp.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 	}
-	n.prepareOutcomes[tid] = prepareOutcome{resp: clonePrepareResponse(resp)}
+	n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(resp)}
 	return resp, nil
 }
 
-func (n *Node) replayPrepareOutcomeLocked(tid proto.TransactionID, requestID proto.RequestID, currentEpoch uint64) (proto.ExecPrepareResponse, bool, error) {
+func (n *Participant) replayPrepareOutcomeLocked(txId proto.TransactionID, requestID proto.RequestID, currentEpoch uint64) (proto.ExecPrepareResponse, bool, error) {
 	var original proto.ExecPrepareResponse
-	if out, ok := n.prepareOutcomes[tid]; ok {
+	if out, ok := n.prepareOutcomes[txId]; ok {
 		original = clonePrepareResponse(out.resp)
 	} else {
 		if n.replay == nil {
 			return proto.ExecPrepareResponse{}, false, nil
 		}
 		var ok bool
-		original, ok = n.replay.GetPrepare(tid)
+		original, ok = n.replay.GetPrepare(txId)
 		if !ok {
 			return proto.ExecPrepareResponse{}, false, nil
 		}
-		n.prepareOutcomes[tid] = prepareOutcome{resp: clonePrepareResponse(original)}
+		n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(original)}
 	}
-	if err := n.replicateReplayRecordLocked(tid, proto.ReplayRecordPrepare, &original, nil); err != nil {
+	if err := n.replicateReplayRecordLocked(txId, proto.ReplayRecordPrepare, &original, nil); err != nil {
 		return proto.ExecPrepareResponse{RequestID: requestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, false, err
 	}
 	resp := original
@@ -977,35 +991,35 @@ func (n *Node) replayPrepareOutcomeLocked(tid proto.TransactionID, requestID pro
 	return resp, true, nil
 }
 
-func (n *Node) prepareVotedOKLocked(tid proto.TransactionID) bool {
-	if out, ok := n.prepareOutcomes[tid]; ok {
-		return out.resp.Vote == proto.VoteOK
+func (n *Participant) prepareVotedOKLocked(txId proto.TransactionID) bool {
+	if out, ok := n.prepareOutcomes[txId]; ok {
+		return out.resp.Vote == proto.VoteOk
 	}
 	if n.replay == nil {
 		return false
 	}
-	resp, ok := n.replay.GetPrepare(tid)
+	resp, ok := n.replay.GetPrepare(txId)
 	if !ok {
 		return false
 	}
-	n.prepareOutcomes[tid] = prepareOutcome{resp: clonePrepareResponse(resp)}
-	return resp.Vote == proto.VoteOK
+	n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(resp)}
+	return resp.Vote == proto.VoteOk
 }
 
-func (n *Node) rememberOnePCOutcomeLocked(tid proto.TransactionID, resp proto.ExecCommit1PCResponse) (proto.ExecCommit1PCResponse, error) {
+func (n *Participant) rememberOnePCOutcomeLocked(txId proto.TransactionID, resp proto.ExecCommit1PCResponse) (proto.ExecCommit1PCResponse, error) {
 	if n.replay != nil {
-		if err := n.replay.AppendOnePC(tid, resp); err != nil {
+		if err := n.replay.AppendOnePC(txId, resp); err != nil {
 			return proto.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 		}
 	}
-	if err := n.replicateReplayRecordLocked(tid, proto.ReplayRecordOnePC, nil, &resp); err != nil {
+	if err := n.replicateReplayRecordLocked(txId, proto.ReplayRecordOnePC, nil, &resp); err != nil {
 		return proto.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 	}
-	n.onePCOutcomes[tid] = onePCOutcome{resp: clone1PCResponse(resp)}
+	n.onePCOutcomes[txId] = onePCOutcome{resp: clone1PCResponse(resp)}
 	return resp, nil
 }
 
-func (n *Node) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (resp proto.ExecPrepareResponse, err error) {
+func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (resp proto.ExecPrepareResponse, err error) {
 	if !n.allowRate(n.prepareLimiter, "prepare") {
 		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrResourceExhausted
 	}
@@ -1083,14 +1097,14 @@ func (n *Node) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (r
 	if (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
 		return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
 	}
-	if n.forcedAbort != nil && n.forcedAbort.Has(req.TID) {
+	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
 		return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 	if out, ok := n.commitOutcomes[req.TID]; ok && !out.actionCommit {
 		return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 	if txn, ok := n.inDoubt[req.TID]; ok {
-		resp := proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteOK, ReadData: cloneReadData(txn.readData), CurrentEpoch: currentEpoch}
+		resp := proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteOk, ReadData: cloneReadData(txn.readData), CurrentEpoch: currentEpoch}
 		return resp, nil
 	}
 
@@ -1112,16 +1126,16 @@ func (n *Node) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (r
 		}
 		decisionDeadlineNanos = deadline
 	}
-	n.inDoubt[req.TID] = &preparedTxn{preparedAt: n.nowFn(), participants: append([]uint32(nil), req.Participants...), decisionDeadlineNanos: decisionDeadlineNanos, class: req.Class, correlationID: correlationID}
+	n.inDoubt[req.TID] = &inDoubtTx{createdAt: n.nowFn(), hostIds: append([]uint32(nil), req.Participants...), decisionDeadlineNanos: decisionDeadlineNanos, class: req.Class, correlationID: correlationID}
 	txn := n.inDoubt[req.TID]
 	n.recordTimelineLocked(req.TID, correlationID, "prepare_received", "")
-	acquired := make([]heldLock, 0, len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems))
+	acquired := make([]RangeLock, 0, len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems))
 
-	lockRead := func(addr uint64, length uint32) (bool, *proto.LockConflict) {
-		if length == 0 {
+	lockRead := func(item mini_transaction.RangeItem) (bool, *proto.LockConflict) {
+		if item.Size() == 0 {
 			return true, nil
 		}
-		l := heldLock{start: addr, end: addr + uint64(length), write: false}
+		l := RangeLock{start: item.Offset(), end: item.Offset() + item.Size(), write: false}
 		ok, conflict := n.locks.tryLockWithConflict(l.start, l.end, false)
 		if !ok {
 			return false, conflict
@@ -1129,11 +1143,11 @@ func (n *Node) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (r
 		acquired = append(acquired, l)
 		return true, nil
 	}
-	lockWrite := func(addr uint64, length uint32) (bool, *proto.LockConflict) {
-		if length == 0 {
+	lockWrite := func(item mini_transaction.RangeItem) (bool, *proto.LockConflict) {
+		if item.Size() == 0 {
 			return true, nil
 		}
-		l := heldLock{start: addr, end: addr + uint64(length), write: true}
+		l := RangeLock{start: item.Offset(), end: item.Offset() + item.Size(), write: true}
 		ok, conflict := n.locks.tryLockWithConflict(l.start, l.end, true)
 		if !ok {
 			return false, conflict
@@ -1143,7 +1157,7 @@ func (n *Node) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (r
 	}
 
 	for _, item := range req.WriteItems {
-		if ok, conflict := lockWrite(item.Addr, uint32(len(item.Data))); !ok {
+		if ok, conflict := lockWrite(item); !ok {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
 			n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", "write-lock conflict")
@@ -1151,10 +1165,10 @@ func (n *Node) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (r
 		}
 	}
 	for _, item := range req.CmpItems {
-		if overlapsAnyWrite(item.Addr, uint32(len(item.Data)), req.WriteItems) {
+		if overlapsAnyWrite(item, req.WriteItems) {
 			continue
 		}
-		if ok, conflict := lockRead(item.Addr, uint32(len(item.Data))); !ok {
+		if ok, conflict := lockRead(item); !ok {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
 			n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", "cmp-lock conflict")
@@ -1162,10 +1176,10 @@ func (n *Node) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (r
 		}
 	}
 	for _, item := range req.ReadItems {
-		if overlapsAnyWrite(item.Addr, item.Len, req.WriteItems) {
+		if overlapsAnyWrite(item, req.WriteItems) {
 			continue
 		}
-		if ok, conflict := lockRead(item.Addr, item.Len); !ok {
+		if ok, conflict := lockRead(item); !ok {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
 			n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", "read-lock conflict")
@@ -1201,10 +1215,10 @@ func (n *Node) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (r
 	// Sinfonia logs every OK participant vote when the transaction has any
 	// writes. A participant with a read-only local projection still needs an
 	// empty redo entry so recovery can derive the all-OK commit decision.
-	if n.redoLog != nil && (req.HasWrites || len(req.WriteItems) > 0) {
+	if n.redo != nil && (req.HasWrites || len(req.WriteItems) > 0) {
 		participants := append([]uint32(nil), req.Participants...)
 		clonedWrites := cloneWrites(req.WriteItems)
-		if err := n.redoLog.AppendDurable(storage.RedoEntry{TID: req.TID, Participants: participants, DecisionDeadlineNanos: decisionDeadlineNanos, WriteItems: clonedWrites}); err != nil {
+		if err := n.redo.AddItem(storage.RedoLogItem{TransactionId: req.TID, HostIds: participants, DecisionDeadlineNanos: decisionDeadlineNanos, WriteItems: clonedWrites}); err != nil {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
 			return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
@@ -1229,8 +1243,8 @@ func (n *Node) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (r
 			}
 			n.setReplicationErrorLocked(nil)
 		}
-		n.allLogTIDs[req.TID] = struct{}{}
-		n.logParticipants[req.TID] = participants
+		n.allLogTxIds[req.TID] = struct{}{}
+		n.logHostIds[req.TID] = participants
 		txn.redoLoggedTid = true
 	}
 
@@ -1240,17 +1254,17 @@ func (n *Node) ExecPrepare(ctx context.Context, req proto.ExecPrepareRequest) (r
 
 	n.metrics.prepareLatency.Observe(time.Since(start))
 	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
-	n.log(slog.LevelInfo, "ExecPrepare received", "tid", req.TID, "epoch", req.TID.Epoch)
-	n.log(slog.LevelInfo, "Vote decision", "tid", req.TID, "epoch", req.TID.Epoch, "vote", proto.VoteOK)
+	n.log(slog.LevelInfo, "ExecAndPrepare received", "tid", req.TID, "epoch", req.TID.Epoch)
+	n.log(slog.LevelInfo, "Vote decision", "tid", req.TID, "epoch", req.TID.Epoch, "vote", proto.VoteOk)
 	n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_ok", "")
-	resp = proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteOK, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
+	resp = proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
 	if err := n.callOutcomeReplayBoundaryHookLocked("prepare-before-response", req.TID); err != nil {
 		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
 	return n.rememberPrepareOutcomeLocked(req.TID, resp)
 }
 
-func (n *Node) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (resp proto.ExecCommit1PCResponse, err error) {
+func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (resp proto.ExecCommit1PCResponse, err error) {
 	if err := n.authorize(ctx, auth.RoleClient, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, err
 	}
@@ -1321,19 +1335,19 @@ func (n *Node) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest
 	if (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
 		return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
 	}
-	if n.forcedAbort != nil && n.forcedAbort.Has(req.TID) {
+	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
 		return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 
 	if err := n.validateWriteRangesLocked(req.WriteItems); err != nil {
 		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
-	acquired := make([]heldLock, 0, len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems))
-	lockRead := func(addr uint64, length uint32) (bool, *proto.LockConflict) {
-		if length == 0 {
+	acquired := make([]RangeLock, 0, len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems))
+	lockRead := func(item mini_transaction.RangeItem) (bool, *proto.LockConflict) {
+		if item.Size() == 0 {
 			return true, nil
 		}
-		l := heldLock{start: addr, end: addr + uint64(length), write: false}
+		l := RangeLock{start: item.Offset(), end: item.Offset() + item.Size(), write: false}
 		ok, conflict := n.locks.tryLockWithConflict(l.start, l.end, false)
 		if !ok {
 			return false, conflict
@@ -1341,11 +1355,11 @@ func (n *Node) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest
 		acquired = append(acquired, l)
 		return true, nil
 	}
-	lockWrite := func(addr uint64, length uint32) (bool, *proto.LockConflict) {
-		if length == 0 {
+	lockWrite := func(item mini_transaction.RangeItem) (bool, *proto.LockConflict) {
+		if item.Size() == 0 {
 			return true, nil
 		}
-		l := heldLock{start: addr, end: addr + uint64(length), write: true}
+		l := RangeLock{start: item.Offset(), end: item.Offset() + item.Size(), write: true}
 		ok, conflict := n.locks.tryLockWithConflict(l.start, l.end, true)
 		if !ok {
 			return false, conflict
@@ -1355,27 +1369,27 @@ func (n *Node) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest
 	}
 
 	for _, item := range req.WriteItems {
-		if ok, conflict := lockWrite(item.Addr, uint32(len(item.Data))); !ok {
+		if ok, conflict := lockWrite(item); !ok {
 			n.releaseLocks(acquired)
 			n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_bad_lock", "write-lock conflict")
 			return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 		}
 	}
 	for _, item := range req.CmpItems {
-		if overlapsAnyWrite(item.Addr, uint32(len(item.Data)), req.WriteItems) {
+		if overlapsAnyWrite(item, req.WriteItems) {
 			continue
 		}
-		if ok, conflict := lockRead(item.Addr, uint32(len(item.Data))); !ok {
+		if ok, conflict := lockRead(item); !ok {
 			n.releaseLocks(acquired)
 			n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_bad_lock", "cmp-lock conflict")
 			return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 		}
 	}
 	for _, item := range req.ReadItems {
-		if overlapsAnyWrite(item.Addr, item.Len, req.WriteItems) {
+		if overlapsAnyWrite(item, req.WriteItems) {
 			continue
 		}
-		if ok, conflict := lockRead(item.Addr, item.Len); !ok {
+		if ok, conflict := lockRead(item); !ok {
 			n.releaseLocks(acquired)
 			n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_bad_lock", "read-lock conflict")
 			return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
@@ -1404,10 +1418,10 @@ func (n *Node) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest
 		readData[uint32(idx)] = data
 	}
 
-	if n.redoLog != nil && len(req.WriteItems) > 0 {
+	if n.redo != nil && len(req.WriteItems) > 0 {
 		writes := cloneWrites(req.WriteItems)
-		entry := storage.RedoEntry{TID: req.TID, Participants: []uint32{n.memID}, WriteItems: writes}
-		if err := n.redoLog.AppendDurable(entry); err != nil {
+		entry := storage.RedoLogItem{TransactionId: req.TID, HostIds: []uint32{n.hostId}, WriteItems: writes}
+		if err := n.redo.AddItem(entry); err != nil {
 			n.releaseLocks(acquired)
 			return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
 		}
@@ -1415,7 +1429,7 @@ func (n *Node) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest
 			n.mu.Unlock()
 			replStart := time.Now()
 			replResp, replErr := n.replica.ReplicateRedoEntry(context.Background(), proto.ReplicateRedoEntryRequest{
-				Entry: proto.RedoEntryPayload{TID: req.TID, Participants: append([]uint32(nil), entry.Participants...), WriteItems: writes},
+				Entry: proto.RedoEntryPayload{TID: req.TID, Participants: append([]uint32(nil), entry.HostIds...), WriteItems: writes},
 			})
 			n.metrics.replicationRoundtripLatency.Observe(time.Since(replStart))
 			n.metrics.replicationEntriesSent.Inc()
@@ -1446,12 +1460,12 @@ func (n *Node) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest
 			}
 			n.setReplicationErrorLocked(nil)
 		}
-		n.allLogTIDs[req.TID] = struct{}{}
-		n.logParticipants[req.TID] = []uint32{n.memID}
+		n.allLogTxIds[req.TID] = struct{}{}
+		n.logHostIds[req.TID] = []uint32{n.hostId}
 	}
 	if n.decided != nil {
 		if _, known := n.decided.Get(req.TID); !known {
-			if err := n.decided.Append(req.TID, true); err != nil {
+			if err := n.decided.AddItem(req.TID, true); err != nil {
 				n.releaseLocks(acquired)
 				return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
 			}
@@ -1461,7 +1475,7 @@ func (n *Node) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest
 		n.releaseLocks(acquired)
 		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
-	resp = proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteOK, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
+	resp = proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
 	for _, item := range req.WriteItems {
 		if err := n.write(item.Addr, item.Data); err != nil {
 			n.recoveryComplete = false
@@ -1475,9 +1489,9 @@ func (n *Node) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest
 	if replayErr != nil {
 		return resp, replayErr
 	}
-	if _, ok := n.allLogTIDs[req.TID]; ok {
+	if _, ok := n.allLogTxIds[req.TID]; ok {
 		n.appliedLocal[req.TID] = true
-		n.enqueueAppliedNotificationsLocked(req.TID, []uint32{n.memID})
+		n.enqueueAppliedNotificationsLocked(req.TID, []uint32{n.hostId})
 	}
 	n.metrics.minitransactionsTotal.Inc()
 	n.metrics.minitransactionsCommitted.Inc()
@@ -1495,7 +1509,7 @@ func cloneWrites(items []proto.WriteItem) []proto.WriteItem {
 	return out
 }
 
-func (n *Node) validateWriteRangesLocked(items []proto.WriteItem) error {
+func (n *Participant) validateWriteRangesLocked(items []proto.WriteItem) error {
 	for _, item := range items {
 		end := item.Addr + uint64(len(item.Data))
 		if end < item.Addr || end > uint64(len(n.memory)) {
@@ -1505,18 +1519,18 @@ func (n *Node) validateWriteRangesLocked(items []proto.WriteItem) error {
 	return nil
 }
 
-func (n *Node) releaseLocks(locks []heldLock) {
+func (n *Participant) releaseLocks(locks []RangeLock) {
 	for i := len(locks) - 1; i >= 0; i-- {
 		n.locks.unlock(locks[i])
 	}
 	n.cond.Broadcast()
 }
 
-func (n *Node) Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error) {
+func (n *Participant) Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error) {
 	return n.commit(ctx, req, false)
 }
 
-func (n *Node) commit(ctx context.Context, req proto.CommitRequest, recoveryDecision bool) (proto.CommitResponse, error) {
+func (n *Participant) commit(ctx context.Context, req proto.CommitRequest, recoveryDecision bool) (proto.CommitResponse, error) {
 	if !n.allowRate(n.commitLimiter, "commit") {
 		return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, ErrResourceExhausted
 	}
@@ -1546,7 +1560,7 @@ func (n *Node) commit(ctx context.Context, req proto.CommitRequest, recoveryDeci
 	logged := false
 	knownDecision := false
 	if n.decided != nil {
-		_, logged = n.allLogTIDs[req.TID]
+		_, logged = n.allLogTxIds[req.TID]
 		if durableAction, ok := n.decided.Get(req.TID); ok {
 			// A durable decision is immutable even when redo GC or a prior
 			// application/recovery attempt removed the other live state.
@@ -1554,11 +1568,11 @@ func (n *Node) commit(ctx context.Context, req proto.CommitRequest, recoveryDeci
 			knownDecision = true
 		}
 	}
-	if !recoveryDecision && !knownDecision && req.ActionCommit && n.forcedAbort != nil && n.forcedAbort.Has(req.TID) {
+	if !recoveryDecision && !knownDecision && req.ActionCommit && n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
 		return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, nil
 	}
 	if logged && !knownDecision {
-		if err := n.decided.Append(req.TID, req.ActionCommit); err != nil {
+		if err := n.decided.AddItem(req.TID, req.ActionCommit); err != nil {
 			return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, err
 		}
 	}
@@ -1608,25 +1622,25 @@ func (n *Node) commit(ctx context.Context, req proto.CommitRequest, recoveryDeci
 	return resp, err
 }
 
-func (n *Node) classForTIDLocked(tid proto.TransactionID) string {
-	if txn, ok := n.inDoubt[tid]; ok {
+func (n *Participant) classForTIDLocked(txId proto.TransactionID) string {
+	if txn, ok := n.inDoubt[txId]; ok {
 		return txn.class
 	}
 	return ""
 }
 
-func (n *Node) correlationForTIDLocked(tid proto.TransactionID) string {
-	if txn, ok := n.inDoubt[tid]; ok && txn.correlationID != "" {
+func (n *Participant) correlationForTIDLocked(txId proto.TransactionID) string {
+	if txn, ok := n.inDoubt[txId]; ok && txn.correlationID != "" {
 		return txn.correlationID
 	}
-	return tid.CorrelationID()
+	return txId.CorrelationID()
 }
 
-func (n *Node) recordTimelineLocked(tid proto.TransactionID, correlationID, event, details string) {
+func (n *Participant) recordTimelineLocked(txId proto.TransactionID, correlationID, event, details string) {
 	if correlationID == "" {
-		correlationID = tid.CorrelationID()
+		correlationID = txId.CorrelationID()
 	}
-	n.timelines[tid] = append(n.timelines[tid], proto.TxnTimelineEvent{
+	n.timelines[txId] = append(n.timelines[txId], proto.TxnTimelineEvent{
 		AtNanos:       n.nowFn().UnixNano(),
 		Component:     "memnode",
 		Event:         event,
@@ -1635,7 +1649,7 @@ func (n *Node) recordTimelineLocked(tid proto.TransactionID, correlationID, even
 	})
 }
 
-func (n *Node) CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
+func (n *Participant) CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
 	acks := make([]bool, len(req.Decisions))
 	for i, d := range req.Decisions {
 		resp, err := n.Commit(ctx, d)
@@ -1647,14 +1661,14 @@ func (n *Node) CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (p
 	return proto.CommitBatchResponse{Acks: acks}, nil
 }
 
-func (n *Node) commitLocked(req proto.CommitRequest) (proto.CommitResponse, error) {
+func (n *Participant) commitLocked(req proto.CommitRequest) (proto.CommitResponse, error) {
 
 	if n.decided != nil {
-		if _, ok := n.allLogTIDs[req.TID]; ok {
+		if _, ok := n.allLogTxIds[req.TID]; ok {
 			if durableAction, decided := n.decided.Get(req.TID); decided {
 				req.ActionCommit = durableAction
 			} else {
-				if err := n.decided.Append(req.TID, req.ActionCommit); err != nil {
+				if err := n.decided.AddItem(req.TID, req.ActionCommit); err != nil {
 					return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, err
 				}
 			}
@@ -1676,7 +1690,7 @@ func (n *Node) commitLocked(req proto.CommitRequest) (proto.CommitResponse, erro
 		}
 		if txn.redoLoggedTid {
 			n.appliedLocal[req.TID] = true
-			n.enqueueAppliedNotificationsLocked(req.TID, txn.participants)
+			n.enqueueAppliedNotificationsLocked(req.TID, txn.hostIds)
 			flushNotify = true
 		}
 	}
@@ -1690,7 +1704,7 @@ func (n *Node) commitLocked(req proto.CommitRequest) (proto.CommitResponse, erro
 	return proto.CommitResponse{RequestID: req.RequestID, Ack: true}, nil
 }
 
-func (n *Node) ReplicateRedoEntry(ctx context.Context, req proto.ReplicateRedoEntryRequest) (proto.ReplicateRedoEntryResponse, error) {
+func (n *Participant) ReplicateRedoEntry(ctx context.Context, req proto.ReplicateRedoEntryRequest) (proto.ReplicateRedoEntryResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ReplicateRedoEntryResponse{Ack: false}, err
 	}
@@ -1702,21 +1716,21 @@ func (n *Node) ReplicateRedoEntry(ctx context.Context, req proto.ReplicateRedoEn
 	if n.replicationBaselineIngressBlockedLocked() {
 		return proto.ReplicateRedoEntryResponse{Ack: false}, ErrReplicationBaselineInProgress
 	}
-	if n.redoLog == nil {
+	if n.redo == nil {
 		return proto.ReplicateRedoEntryResponse{Ack: false}, errors.New("redo log unavailable")
 	}
-	if err := n.redoLog.AppendDurable(storage.RedoEntry{TID: req.Entry.TID, Participants: append([]uint32(nil), req.Entry.Participants...), DecisionDeadlineNanos: req.Entry.DecisionDeadlineNanos, WriteItems: cloneWrites(req.Entry.WriteItems)}); err != nil {
+	if err := n.redo.AddItem(storage.RedoLogItem{TransactionId: req.Entry.TID, HostIds: append([]uint32(nil), req.Entry.Participants...), DecisionDeadlineNanos: req.Entry.DecisionDeadlineNanos, WriteItems: cloneWrites(req.Entry.WriteItems)}); err != nil {
 		return proto.ReplicateRedoEntryResponse{Ack: false}, err
 	}
-	n.allLogTIDs[req.Entry.TID] = struct{}{}
-	n.logParticipants[req.Entry.TID] = append([]uint32(nil), req.Entry.Participants...)
+	n.allLogTxIds[req.Entry.TID] = struct{}{}
+	n.logHostIds[req.Entry.TID] = append([]uint32(nil), req.Entry.Participants...)
 	correlationID := req.Entry.TID.CorrelationID()
-	n.inDoubt[req.Entry.TID] = &preparedTxn{writes: cloneWrites(req.Entry.WriteItems), participants: append([]uint32(nil), req.Entry.Participants...), decisionDeadlineNanos: req.Entry.DecisionDeadlineNanos, redoLoggedTid: true, preparedAt: n.nowFn(), correlationID: correlationID}
+	n.inDoubt[req.Entry.TID] = &inDoubtTx{writes: cloneWrites(req.Entry.WriteItems), hostIds: append([]uint32(nil), req.Entry.Participants...), decisionDeadlineNanos: req.Entry.DecisionDeadlineNanos, redoLoggedTid: true, createdAt: n.nowFn(), correlationID: correlationID}
 	n.recordTimelineLocked(req.Entry.TID, correlationID, "replicated_prepare", "")
 	return proto.ReplicateRedoEntryResponse{Ack: true}, nil
 }
 
-func (n *Node) ReplicateCommitDecision(ctx context.Context, req proto.ReplicateCommitDecisionRequest) (proto.ReplicateCommitDecisionResponse, error) {
+func (n *Participant) ReplicateCommitDecision(ctx context.Context, req proto.ReplicateCommitDecisionRequest) (proto.ReplicateCommitDecisionResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ReplicateCommitDecisionResponse{Ack: false}, err
 	}
@@ -1738,7 +1752,7 @@ func (n *Node) ReplicateCommitDecision(ctx context.Context, req proto.ReplicateC
 // ReplicateReplayRecord durably installs one terminal participant response on
 // a replica. It deliberately does not execute the request or alter data; the
 // record is only used to answer a later same-TID retry after promotion.
-func (n *Node) ReplicateReplayRecord(ctx context.Context, req proto.ReplicateReplayRecordRequest) (proto.ReplicateReplayRecordResponse, error) {
+func (n *Participant) ReplicateReplayRecord(ctx context.Context, req proto.ReplicateReplayRecordRequest) (proto.ReplicateReplayRecordResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ReplicateReplayRecordResponse{Ack: false}, err
 	}
@@ -1776,36 +1790,36 @@ func (n *Node) ReplicateReplayRecord(ctx context.Context, req proto.ReplicateRep
 	return proto.ReplicateReplayRecordResponse{Ack: true}, nil
 }
 
-func (n *Node) ListCommittedTIDs(ctx context.Context, _ proto.ListCommittedTIDsRequest) (proto.ListCommittedTIDsResponse, error) {
+func (n *Participant) ListCommittedTIDs(ctx context.Context, _ proto.ListCommittedTIDsRequest) (proto.ListCommittedTIDsResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ListCommittedTIDsResponse{}, err
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	resp := proto.ListCommittedTIDsResponse{}
-	if n.decided == nil || n.redoLog == nil {
+	if n.decided == nil || n.redo == nil {
 		return resp, nil
 	}
-	for _, entry := range n.redoLog.Entries() {
-		if c, ok := n.decided.Get(entry.TID); ok && c {
-			resp.TIDs = append(resp.TIDs, entry.TID)
+	for _, entry := range n.redo.Entries() {
+		if c, ok := n.decided.Get(entry.TransactionId); ok && c {
+			resp.TIDs = append(resp.TIDs, entry.TransactionId)
 		}
 	}
 	return resp, nil
 }
 
-func (n *Node) ListRedoEntries(ctx context.Context, _ proto.ListRedoEntriesRequest) (proto.ListRedoEntriesResponse, error) {
+func (n *Participant) ListRedoEntries(ctx context.Context, _ proto.ListRedoEntriesRequest) (proto.ListRedoEntriesResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ListRedoEntriesResponse{}, err
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	resp := proto.ListRedoEntriesResponse{}
-	if n.redoLog == nil {
+	if n.redo == nil {
 		return resp, nil
 	}
-	for _, entry := range n.redoLog.Entries() {
-		resp.Entries = append(resp.Entries, proto.RedoEntryPayload{TID: entry.TID, Participants: append([]uint32(nil), entry.Participants...), DecisionDeadlineNanos: entry.DecisionDeadlineNanos, WriteItems: cloneWrites(entry.WriteItems)})
+	for _, entry := range n.redo.Entries() {
+		resp.Entries = append(resp.Entries, proto.RedoEntryPayload{TID: entry.TransactionId, Participants: append([]uint32(nil), entry.HostIds...), DecisionDeadlineNanos: entry.DecisionDeadlineNanos, WriteItems: cloneWrites(entry.WriteItems)})
 	}
 	return resp, nil
 }
@@ -1814,7 +1828,7 @@ func (n *Node) ListRedoEntries(ctx context.Context, _ proto.ListRedoEntriesReque
 // ReplicationManager holds the global write barrier before calling this method;
 // requiring that barrier here prevents a caller from accidentally publishing a
 // snapshot with an uncoordinated live-update race.
-func (n *Node) ExportReplicationBaseline(ctx context.Context, req proto.ExportReplicationBaselineRequest) (proto.ExportReplicationBaselineResponse, error) {
+func (n *Participant) ExportReplicationBaseline(ctx context.Context, req proto.ExportReplicationBaselineRequest) (proto.ExportReplicationBaselineResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ExportReplicationBaselineResponse{Ack: false}, err
 	}
@@ -1841,8 +1855,8 @@ func (n *Node) ExportReplicationBaseline(ctx context.Context, req proto.ExportRe
 	}
 	checksum := sha256.Sum256(image)
 	boundary := proto.TransactionID{}
-	if n.redoLog != nil {
-		boundary = n.redoLog.LastTID()
+	if n.redo != nil {
+		boundary = n.redo.LastTID()
 	}
 	return proto.ExportReplicationBaselineResponse{Ack: true, Image: image, SHA256: checksum[:], BoundaryTID: boundary}, nil
 }
@@ -1851,7 +1865,7 @@ func (n *Node) ExportReplicationBaseline(ctx context.Context, req proto.ExportRe
 // transaction state while the manager holds the replica's global write lock.
 // Exact participant response replay is intentionally retained as node-local
 // metadata; transferring that metadata is a separate failover contract.
-func (n *Node) InstallReplicationBaseline(ctx context.Context, req proto.InstallReplicationBaselineRequest) (proto.InstallReplicationBaselineResponse, error) {
+func (n *Participant) InstallReplicationBaseline(ctx context.Context, req proto.InstallReplicationBaselineRequest) (proto.InstallReplicationBaselineResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.InstallReplicationBaselineResponse{Ack: false}, err
 	}
@@ -1875,7 +1889,7 @@ func (n *Node) InstallReplicationBaseline(ctx context.Context, req proto.Install
 	return n.installReplicationBaselineBytesLocked(req.BarrierOwner, req.Image, req.SHA256, req.BoundaryTID)
 }
 
-func (n *Node) SyncFromPrimary(ctx context.Context, primary PrimarySyncPeer) error {
+func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPeer) error {
 	if primary == nil {
 		return errors.New("primary peer required")
 	}
@@ -1976,7 +1990,7 @@ func (n *Node) SyncFromPrimary(ctx context.Context, primary PrimarySyncPeer) err
 	return nil
 }
 
-func syncBaselineArtifact(ctx context.Context, primary PrimarySyncPeer, replica *Node, owner, sessionID, artifact string, first proto.ExportReplicationBaselineChunkResponse, total uint64, checksum []byte) error {
+func syncBaselineArtifact(ctx context.Context, primary PrimarySyncPeer, replica *Participant, owner, sessionID, artifact string, first proto.ExportReplicationBaselineChunkResponse, total uint64, checksum []byte) error {
 	if total == 0 {
 		if first.Ack && first.TotalSize == 0 && len(first.Data) == 0 && len(first.SHA256) == sha256.Size && equalBytes(first.SHA256, checksum) {
 			return nil
@@ -2014,68 +2028,68 @@ func syncBaselineArtifact(ctx context.Context, primary PrimarySyncPeer, replica 
 	}
 }
 
-func (n *Node) NotifyApplied(ctx context.Context, req proto.NotifyAppliedRequest) (proto.NotifyAppliedResponse, error) {
+func (n *Participant) NotifyApplied(ctx context.Context, req proto.NotifyAppliedRequest) (proto.NotifyAppliedResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.NotifyAppliedResponse{Ack: false}, err
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for _, tid := range req.TIDs {
-		if _, ok := n.allLogTIDs[tid]; !ok {
+	for _, txId := range req.TIDs {
+		if _, ok := n.allLogTxIds[txId]; !ok {
 			continue
 		}
-		if _, ok := n.appliedRemote[tid]; !ok {
-			n.appliedRemote[tid] = map[uint32]bool{}
+		if _, ok := n.appliedRemote[txId]; !ok {
+			n.appliedRemote[txId] = map[uint32]bool{}
 		}
-		n.appliedRemote[tid][req.FromMemID] = true
+		n.appliedRemote[txId][req.FromMemID] = true
 	}
 	return proto.NotifyAppliedResponse{Ack: true}, nil
 }
 
-func (n *Node) enqueueAppliedNotificationsLocked(tid proto.TransactionID, participants []uint32) {
+func (n *Participant) enqueueAppliedNotificationsLocked(txId proto.TransactionID, participants []uint32) {
 	for _, pid := range participants {
-		if pid == n.memID {
+		if pid == n.hostId {
 			continue
 		}
 		if _, ok := n.pendingNotify[pid]; !ok {
 			n.pendingNotify[pid] = map[proto.TransactionID]struct{}{}
 		}
-		n.pendingNotify[pid][tid] = struct{}{}
+		n.pendingNotify[pid][txId] = struct{}{}
 	}
 }
 
-func (n *Node) FlushAppliedNotifications(ctx context.Context) {
+func (n *Participant) FlushAppliedNotifications(ctx context.Context) {
 	n.mu.Lock()
 	peers := make(map[uint32]RecoveryPeer, len(n.participants))
 	for pid, p := range n.participants {
 		peers[pid] = p
 	}
 	pending := make(map[uint32][]proto.TransactionID, len(n.pendingNotify))
-	for pid, tids := range n.pendingNotify {
-		list := make([]proto.TransactionID, 0, len(tids))
-		for tid := range tids {
-			list = append(list, tid)
+	for pid, txIds := range n.pendingNotify {
+		list := make([]proto.TransactionID, 0, len(txIds))
+		for txId := range txIds {
+			list = append(list, txId)
 		}
 		pending[pid] = list
 	}
 	n.mu.Unlock()
 
-	for pid, tids := range pending {
-		if len(tids) == 0 {
+	for pid, txIds := range pending {
+		if len(txIds) == 0 {
 			continue
 		}
 		peer := peers[pid]
 		if peer == nil {
 			continue
 		}
-		resp, err := peer.NotifyApplied(ctx, proto.NotifyAppliedRequest{FromMemID: n.memID, TIDs: tids})
+		resp, err := peer.NotifyApplied(ctx, proto.NotifyAppliedRequest{FromMemID: n.hostId, TIDs: txIds})
 		if err != nil || !resp.Ack {
 			continue
 		}
 		n.mu.Lock()
 		if existing, ok := n.pendingNotify[pid]; ok {
-			for _, tid := range tids {
-				delete(existing, tid)
+			for _, txId := range txIds {
+				delete(existing, txId)
 			}
 			if len(existing) == 0 {
 				delete(n.pendingNotify, pid)
@@ -2085,21 +2099,21 @@ func (n *Node) FlushAppliedNotifications(ctx context.Context) {
 	}
 }
 
-func (n *Node) RunRedoLogGC(ctx context.Context) error {
+func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 	n.metrics.logGCRuns.Inc()
 	n.log(slog.LevelInfo, "GC truncation", "epoch", n.epoch)
 	n.FlushAppliedNotifications(ctx)
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.redoLog == nil {
+	if n.redo == nil {
 		return nil
 	}
-	entries := n.redoLog.Entries()
+	entries := n.redo.Entries()
 	truncateCount := 0
 	for _, entry := range entries {
 		committed, known := false, false
 		if n.decided != nil {
-			committed, known = n.decided.Get(entry.TID)
+			committed, known = n.decided.Get(entry.TransactionId)
 		}
 		if !known {
 			break
@@ -2108,15 +2122,15 @@ func (n *Node) RunRedoLogGC(ctx context.Context) error {
 			truncateCount++
 			continue
 		}
-		if !n.appliedLocal[entry.TID] {
+		if !n.appliedLocal[entry.TransactionId] {
 			break
 		}
 		allApplied := true
-		for _, pid := range entry.Participants {
-			if pid == n.memID {
+		for _, pid := range entry.HostIds {
+			if pid == n.hostId {
 				continue
 			}
-			if !n.appliedRemote[entry.TID][pid] {
+			if !n.appliedRemote[entry.TransactionId][pid] {
 				allApplied = false
 				break
 			}
@@ -2134,40 +2148,40 @@ func (n *Node) RunRedoLogGC(ctx context.Context) error {
 		if entry.DecisionDeadlineNanos == 0 {
 			continue
 		}
-		committed, known := n.decided.Get(entry.TID)
+		committed, known := n.decided.Get(entry.TransactionId)
 		if !known || committed {
 			continue
 		}
-		if n.forcedAbort == nil {
+		if n.forcedAborts == nil {
 			return errors.New("deadline abort GC requires forced-abort storage")
 		}
 		// Redo GC removes the field that identifies the deadline protocol.
 		// Preserve the abort under the protocol's epoch-based safe-GC rule first.
-		if err := n.forcedAbort.Add(entry.TID); err != nil {
+		if err := n.forcedAborts.AddItem(entry.TransactionId); err != nil {
 			return err
 		}
 	}
-	if err := n.redoLog.TruncateHead(truncateCount); err != nil {
+	if err := n.redo.TruncateHead(truncateCount); err != nil {
 		return err
 	}
 	for _, entry := range removed {
-		delete(n.allLogTIDs, entry.TID)
-		delete(n.inDoubt, entry.TID)
-		delete(n.appliedLocal, entry.TID)
-		delete(n.appliedRemote, entry.TID)
-		delete(n.logParticipants, entry.TID)
-		for pid, tids := range n.pendingNotify {
-			delete(tids, entry.TID)
-			if len(tids) == 0 {
+		delete(n.allLogTxIds, entry.TransactionId)
+		delete(n.inDoubt, entry.TransactionId)
+		delete(n.appliedLocal, entry.TransactionId)
+		delete(n.appliedRemote, entry.TransactionId)
+		delete(n.logHostIds, entry.TransactionId)
+		for pid, txIds := range n.pendingNotify {
+			delete(txIds, entry.TransactionId)
+			if len(txIds) == 0 {
 				delete(n.pendingNotify, pid)
 			}
 		}
 		if n.decided != nil {
-			committed, known := n.decided.Get(entry.TID)
+			committed, known := n.decided.Get(entry.TransactionId)
 			if entry.DecisionDeadlineNanos != 0 && known && !committed {
 				continue
 			}
-			if err := n.decided.Remove(entry.TID); err != nil {
+			if err := n.decided.Remove(entry.TransactionId); err != nil {
 				return err
 			}
 		}
@@ -2175,7 +2189,7 @@ func (n *Node) RunRedoLogGC(ctx context.Context) error {
 	return nil
 }
 
-func (n *Node) RunRedoLogGCRPC(ctx context.Context, _ proto.RunRedoLogGCRequest) (proto.RunRedoLogGCResponse, error) {
+func (n *Participant) RunRedoLogGCRPC(ctx context.Context, _ proto.RunRedoLogGCRequest) (proto.RunRedoLogGCResponse, error) {
 	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.RunRedoLogGCResponse{Ack: false}, err
 	}
@@ -2183,27 +2197,27 @@ func (n *Node) RunRedoLogGCRPC(ctx context.Context, _ proto.RunRedoLogGCRequest)
 	return proto.RunRedoLogGCResponse{Ack: err == nil}, err
 }
 
-func (n *Node) RunForcedAbortGC() error {
+func (n *Participant) RunForcedAbortGC() error {
 	n.log(slog.LevelInfo, "GC truncation", "epoch", n.epoch)
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.forcedAbort == nil {
+	if n.forcedAborts == nil {
 		return nil
 	}
 	current := n.currentEpochLocked()
-	removed, err := n.forcedAbort.GCByEpoch(current)
+	removed, err := n.forcedAborts.GCByEpoch(current)
 	if err != nil {
 		return err
 	}
 	// Deadline-abort redo GC retains the final abort beside its forced marker.
 	// Remove that decision only after the epoch marker is durably reclaimed.
-	for _, tid := range removed {
+	for _, txId := range removed {
 		if n.decided == nil {
 			continue
 		}
-		committed, known := n.decided.Get(tid)
-		if _, logged := n.allLogTIDs[tid]; !logged && known && !committed {
-			if err := n.decided.Remove(tid); err != nil {
+		committed, known := n.decided.Get(txId)
+		if _, logged := n.allLogTxIds[txId]; !logged && known && !committed {
+			if err := n.decided.Remove(txId); err != nil {
 				return err
 			}
 		}
@@ -2211,7 +2225,7 @@ func (n *Node) RunForcedAbortGC() error {
 	return nil
 }
 
-func (n *Node) RunForcedAbortGCRPC(ctx context.Context, _ proto.RunForcedAbortGCRequest) (proto.RunForcedAbortGCResponse, error) {
+func (n *Participant) RunForcedAbortGCRPC(ctx context.Context, _ proto.RunForcedAbortGCRequest) (proto.RunForcedAbortGCResponse, error) {
 	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.RunForcedAbortGCResponse{Ack: false}, err
 	}
@@ -2219,7 +2233,7 @@ func (n *Node) RunForcedAbortGCRPC(ctx context.Context, _ proto.RunForcedAbortGC
 	return proto.RunForcedAbortGCResponse{Ack: err == nil}, err
 }
 
-func (n *Node) QueryTidStatus(ctx context.Context, req proto.QueryTidStatusRequest) (proto.QueryTidStatusResponse, error) {
+func (n *Participant) QueryTidStatus(ctx context.Context, req proto.QueryTidStatusRequest) (proto.QueryTidStatusResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.QueryTidStatusResponse{}, err
 	}
@@ -2239,17 +2253,17 @@ func (n *Node) QueryTidStatus(ctx context.Context, req proto.QueryTidStatusReque
 			return proto.QueryTidStatusResponse{KnownDecision: true, Outcome: proto.TidOutcomeAbort, VotedOK: false}, nil
 		}
 	}
-	if n.forcedAbort != nil && n.forcedAbort.Has(req.TID) {
+	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
 		return proto.QueryTidStatusResponse{KnownDecision: false, Outcome: proto.TidOutcomeAbort, VotedOK: false}, nil
 	}
-	if _, ok := n.allLogTIDs[req.TID]; ok {
+	if _, ok := n.allLogTxIds[req.TID]; ok {
 		return proto.QueryTidStatusResponse{KnownDecision: false, Outcome: proto.TidOutcomeUnknown, VotedOK: true}, nil
 	}
 	if n.prepareVotedOKLocked(req.TID) {
 		return proto.QueryTidStatusResponse{KnownDecision: false, Outcome: proto.TidOutcomeUnknown, VotedOK: true}, nil
 	}
-	if n.forcedAbort != nil {
-		if err := n.forcedAbort.Add(req.TID); err != nil {
+	if n.forcedAborts != nil {
+		if err := n.forcedAborts.AddItem(req.TID); err != nil {
 			return proto.QueryTidStatusResponse{}, err
 		}
 	}
@@ -2258,38 +2272,38 @@ func (n *Node) QueryTidStatus(ctx context.Context, req proto.QueryTidStatusReque
 	return proto.QueryTidStatusResponse{KnownDecision: true, Outcome: proto.TidOutcomeAbort, VotedOK: false}, nil
 }
 
-func (n *Node) QueryInDoubt(ctx context.Context, _ proto.QueryInDoubtRequest) (proto.QueryInDoubtResponse, error) {
+func (n *Participant) QueryInDoubt(ctx context.Context, _ proto.QueryInDoubtRequest) (proto.QueryInDoubtResponse, error) {
 	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.QueryInDoubtResponse{}, err
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	resp := proto.QueryInDoubtResponse{Entries: make([]proto.InDoubtEntry, 0, len(n.inDoubt))}
-	for tid, tx := range n.inDoubt {
+	for txId, tx := range n.inDoubt {
 		correlationID := tx.correlationID
 		if correlationID == "" {
-			correlationID = tid.CorrelationID()
+			correlationID = txId.CorrelationID()
 		}
 		resp.Entries = append(resp.Entries, proto.InDoubtEntry{
-			TID:           tid,
-			PreparedAt:    tx.preparedAt.UnixNano(),
+			TID:           txId,
+			PreparedAt:    tx.createdAt.UnixNano(),
 			CorrelationID: correlationID,
-			Participants:  append([]uint32(nil), tx.participants...),
+			Participants:  append([]uint32(nil), tx.hostIds...),
 		})
 	}
 	return resp, nil
 }
 
-func (n *Node) TimelineForTID(tid proto.TransactionID) []proto.TxnTimelineEvent {
+func (n *Participant) TimelineForTID(txId proto.TransactionID) []proto.TxnTimelineEvent {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	src := n.timelines[tid]
+	src := n.timelines[txId]
 	out := make([]proto.TxnTimelineEvent, len(src))
 	copy(out, src)
 	return out
 }
 
-func (n *Node) RecoveryForceAbort(ctx context.Context, req proto.RecoverForceAbortRequest) (proto.RecoverForceAbortResponse, error) {
+func (n *Participant) RecoveryForceAbort(ctx context.Context, req proto.RecoverForceAbortRequest) (proto.RecoverForceAbortResponse, error) {
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
 		return proto.RecoverForceAbortResponse{Vote: proto.VoteBadInternal}, ErrResourceExhausted
 	}
@@ -2309,36 +2323,36 @@ func (n *Node) RecoveryForceAbort(ctx context.Context, req proto.RecoverForceAbo
 	n.recordTimelineLocked(req.TID, correlationID, "recovery_force_abort", "")
 	if out, ok := n.commitOutcomes[req.TID]; ok {
 		if out.actionCommit {
-			return proto.RecoverForceAbortResponse{Vote: proto.VoteOK, KnownDecision: true, DecisionCommit: true}, nil
+			return proto.RecoverForceAbortResponse{Vote: proto.VoteOk, KnownDecision: true, DecisionCommit: true}, nil
 		}
 		return proto.RecoverForceAbortResponse{Vote: proto.VoteBadForced, KnownDecision: true}, nil
 	}
 	if n.decided != nil {
 		if committed, ok := n.decided.Get(req.TID); ok {
 			if committed {
-				return proto.RecoverForceAbortResponse{Vote: proto.VoteOK, KnownDecision: true, DecisionCommit: true}, nil
+				return proto.RecoverForceAbortResponse{Vote: proto.VoteOk, KnownDecision: true, DecisionCommit: true}, nil
 			}
 			return proto.RecoverForceAbortResponse{Vote: proto.VoteBadForced, KnownDecision: true}, nil
 		}
 	}
-	if n.forcedAbort != nil && n.forcedAbort.Has(req.TID) {
+	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
 		return proto.RecoverForceAbortResponse{Vote: proto.VoteBadForced}, nil
 	}
-	if _, ok := n.allLogTIDs[req.TID]; ok {
-		return proto.RecoverForceAbortResponse{Vote: proto.VoteOK}, nil
+	if _, ok := n.allLogTxIds[req.TID]; ok {
+		return proto.RecoverForceAbortResponse{Vote: proto.VoteOk}, nil
 	}
 	if n.prepareVotedOKLocked(req.TID) {
-		return proto.RecoverForceAbortResponse{Vote: proto.VoteOK}, nil
+		return proto.RecoverForceAbortResponse{Vote: proto.VoteOk}, nil
 	}
-	if n.forcedAbort != nil {
-		if err := n.forcedAbort.Add(req.TID); err != nil {
+	if n.forcedAborts != nil {
+		if err := n.forcedAborts.AddItem(req.TID); err != nil {
 			return proto.RecoverForceAbortResponse{Vote: proto.VoteBadInternal}, err
 		}
 	}
 	return proto.RecoverForceAbortResponse{Vote: proto.VoteBadForced}, nil
 }
 
-func (n *Node) RecoveryDecide(ctx context.Context, req proto.RecoverDecideRequest) (proto.RecoverDecideResponse, error) {
+func (n *Participant) RecoveryDecide(ctx context.Context, req proto.RecoverDecideRequest) (proto.RecoverDecideResponse, error) {
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
 		return proto.RecoverDecideResponse{Ack: false}, ErrResourceExhausted
 	}
@@ -2359,19 +2373,19 @@ func (n *Node) RecoveryDecide(ctx context.Context, req proto.RecoverDecideReques
 	return proto.RecoverDecideResponse{Ack: resp.Ack}, nil
 }
 
-func (n *Node) transactionHasDecisionDeadlineLocked(tid proto.TransactionID) bool {
-	txn := n.inDoubt[tid]
+func (n *Participant) transactionHasDecisionDeadlineLocked(txId proto.TransactionID) bool {
+	txn := n.inDoubt[txId]
 	return txn != nil && txn.decisionDeadlineNanos != 0
 }
 
-func (n *Node) Recover(ctx context.Context) error {
+func (n *Participant) Recover(ctx context.Context) error {
 	n.metrics.recoveryRuns.Inc()
 	n.log(slog.LevelInfo, "Recovery initiated", "epoch", n.epoch)
 	n.mu.Lock()
 	n.recoveryComplete = false
-	entries := []storage.RedoEntry{}
-	if n.redoLog != nil {
-		entries = n.redoLog.Entries()
+	entries := []storage.RedoLogItem{}
+	if n.redo != nil {
+		entries = n.redo.Entries()
 	}
 	ptr := 0
 	var err error
@@ -2393,7 +2407,7 @@ func (n *Node) Recover(ctx context.Context) error {
 
 	for i := ptr; i < len(entries); i++ {
 		entry := entries[i]
-		if err := n.callRecoverBoundaryHook("replay-before", entry.TID); err != nil {
+		if err := n.callRecoverBoundaryHook("replay-before", entry.TransactionId); err != nil {
 			return err
 		}
 		outcomeCommit := false
@@ -2401,7 +2415,7 @@ func (n *Node) Recover(ctx context.Context) error {
 
 		n.mu.Lock()
 		if n.decided != nil {
-			if c, ok := n.decided.Get(entry.TID); ok {
+			if c, ok := n.decided.Get(entry.TransactionId); ok {
 				outcomeCommit = c
 				known = true
 			}
@@ -2417,16 +2431,16 @@ func (n *Node) Recover(ctx context.Context) error {
 
 		n.mu.Lock()
 		if n.decided != nil {
-			if decidedCommit, decided := n.decided.Get(entry.TID); decided {
+			if decidedCommit, decided := n.decided.Get(entry.TransactionId); decided {
 				outcomeCommit = decidedCommit
-			} else if err := n.decided.Append(entry.TID, outcomeCommit); err != nil {
+			} else if err := n.decided.AddItem(entry.TransactionId, outcomeCommit); err != nil {
 				n.mu.Unlock()
 				return err
 			}
 		}
 		flushNotify := false
 		if outcomeCommit {
-			if err := n.callRecoverBoundaryHookLocked("apply-before", entry.TID); err != nil {
+			if err := n.callRecoverBoundaryHookLocked("apply-before", entry.TransactionId); err != nil {
 				n.mu.Unlock()
 				return err
 			}
@@ -2436,16 +2450,16 @@ func (n *Node) Recover(ctx context.Context) error {
 					return err
 				}
 			}
-			n.appliedLocal[entry.TID] = true
-			n.enqueueAppliedNotificationsLocked(entry.TID, entry.Participants)
+			n.appliedLocal[entry.TransactionId] = true
+			n.enqueueAppliedNotificationsLocked(entry.TransactionId, entry.HostIds)
 			flushNotify = true
-			if err := n.callRecoverBoundaryHookLocked("apply-after", entry.TID); err != nil {
+			if err := n.callRecoverBoundaryHookLocked("apply-after", entry.TransactionId); err != nil {
 				n.mu.Unlock()
 				return err
 			}
 		}
 		if n.storageDir != "" {
-			if err := n.callRecoverBoundaryHookLocked("pointer-before", entry.TID); err != nil {
+			if err := n.callRecoverBoundaryHookLocked("pointer-before", entry.TransactionId); err != nil {
 				n.mu.Unlock()
 				return err
 			}
@@ -2454,11 +2468,11 @@ func (n *Node) Recover(ctx context.Context) error {
 				return err
 			}
 		}
-		n.commitOutcomes[entry.TID] = commitOutcome{
+		n.commitOutcomes[entry.TransactionId] = commitOutcome{
 			resp:         proto.CommitResponse{Ack: true},
 			actionCommit: outcomeCommit,
 		}
-		delete(n.inDoubt, entry.TID)
+		delete(n.inDoubt, entry.TransactionId)
 		n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
 		n.mu.Unlock()
 		if flushNotify {
@@ -2485,73 +2499,73 @@ func (n *Node) Recover(ctx context.Context) error {
 	return nil
 }
 
-func (n *Node) callRecoverBoundaryHook(phase string, tid proto.TransactionID) error {
+func (n *Participant) callRecoverBoundaryHook(phase string, txId proto.TransactionID) error {
 	n.mu.Lock()
 	hook := n.recoverBoundaryHook
 	n.mu.Unlock()
 	if hook == nil {
 		return nil
 	}
-	return hook(phase, tid)
+	return hook(phase, txId)
 }
 
-func (n *Node) callRecoverBoundaryHookLocked(phase string, tid proto.TransactionID) error {
+func (n *Participant) callRecoverBoundaryHookLocked(phase string, txId proto.TransactionID) error {
 	if n.recoverBoundaryHook == nil {
 		return nil
 	}
-	return n.recoverBoundaryHook(phase, tid)
+	return n.recoverBoundaryHook(phase, txId)
 }
 
-func (n *Node) discoverOutcome(ctx context.Context, peers map[uint32]RecoveryPeer, entry storage.RedoEntry) (bool, error) {
+func (n *Participant) discoverOutcome(ctx context.Context, peers map[uint32]RecoveryPeer, entry storage.RedoLogItem) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	n.mu.Lock()
 	peerTimeout := n.peerTimeout
-	forcedAbort := n.forcedAbort != nil && n.forcedAbort.Has(entry.TID)
+	forcedAbort := n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(entry.TransactionId)
 	n.mu.Unlock()
 
 	knownDecision := false
 	knownCommit := false
 	negativeVote := forcedAbort
-	for _, pid := range entry.Participants {
-		if pid == n.memID {
+	for _, pid := range entry.HostIds {
+		if pid == n.hostId {
 			continue
 		}
 		if peers[pid] == nil {
-			return false, fmt.Errorf("%w: transaction %v participant %d is not configured", ErrRecoveryPending, entry.TID, pid)
+			return false, fmt.Errorf("%w: transaction %v participant %d is not configured", ErrRecoveryPending, entry.TransactionId, pid)
 		}
 	}
-	for _, pid := range entry.Participants {
-		if pid == n.memID {
+	for _, pid := range entry.HostIds {
+		if pid == n.hostId {
 			continue
 		}
 		peer := peers[pid]
 		queryCtx, cancel := context.WithTimeout(ctx, peerTimeout)
-		resp, err := peer.QueryTidStatus(queryCtx, proto.QueryTidStatusRequest{TID: entry.TID})
+		resp, err := peer.QueryTidStatus(queryCtx, proto.QueryTidStatusRequest{TID: entry.TransactionId})
 		cancel()
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return false, ctxErr
 			}
-			return false, fmt.Errorf("%w: transaction %v participant %d: %v", ErrRecoveryPending, entry.TID, pid, err)
+			return false, fmt.Errorf("%w: transaction %v participant %d: %v", ErrRecoveryPending, entry.TransactionId, pid, err)
 		}
 		if resp.KnownDecision {
 			switch resp.Outcome {
 			case proto.TidOutcomeCommit:
 				if knownDecision && !knownCommit {
-					return false, fmt.Errorf("%w: transaction %v has conflicting durable decisions", ErrRecoveryPending, entry.TID)
+					return false, fmt.Errorf("%w: transaction %v has conflicting durable decisions", ErrRecoveryPending, entry.TransactionId)
 				}
 				knownDecision = true
 				knownCommit = true
 			case proto.TidOutcomeAbort:
 				if knownDecision && knownCommit {
-					return false, fmt.Errorf("%w: transaction %v has conflicting durable decisions", ErrRecoveryPending, entry.TID)
+					return false, fmt.Errorf("%w: transaction %v has conflicting durable decisions", ErrRecoveryPending, entry.TransactionId)
 				}
 				knownDecision = true
 				knownCommit = false
 			default:
-				return false, fmt.Errorf("%w: transaction %v participant %d reported an unknown decision", ErrRecoveryPending, entry.TID, pid)
+				return false, fmt.Errorf("%w: transaction %v participant %d reported an unknown decision", ErrRecoveryPending, entry.TransactionId, pid)
 			}
 			continue
 		}
@@ -2568,11 +2582,11 @@ func (n *Node) discoverOutcome(ctx context.Context, peers map[uint32]RecoveryPee
 	return true, nil
 }
 
-func (n *Node) LockAllBlocking(ctx context.Context) error {
+func (n *Participant) LockAllBlocking(ctx context.Context) error {
 	return n.LockAllBlockingOwned(ctx, n.localBarrierOwner)
 }
 
-func (n *Node) LockAllBlockingOwned(ctx context.Context, owner string) error {
+func (n *Participant) LockAllBlockingOwned(ctx context.Context, owner string) error {
 	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return err
 	}
@@ -2613,11 +2627,11 @@ func (n *Node) LockAllBlockingOwned(ctx context.Context, owner string) error {
 	}
 }
 
-func (n *Node) UnlockAll() {
+func (n *Participant) UnlockAll() {
 	n.UnlockAllOwned(n.localBarrierOwner)
 }
 
-func (n *Node) UnlockAllOwned(owner string) {
+func (n *Participant) UnlockAllOwned(owner string) {
 	if owner == "" {
 		return
 	}
@@ -2631,7 +2645,7 @@ func (n *Node) UnlockAllOwned(owner string) {
 	n.cond.Broadcast()
 }
 
-func (n *Node) RenewAllOwned(ctx context.Context, owner string) error {
+func (n *Participant) RenewAllOwned(ctx context.Context, owner string) error {
 	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return err
 	}
@@ -2643,7 +2657,7 @@ func (n *Node) RenewAllOwned(ctx context.Context, owner string) error {
 	return nil
 }
 
-func (n *Node) expireGlobalLockLocked() {
+func (n *Participant) expireGlobalLockLocked() {
 	if !n.locks.globalWriteLock || n.locks.globalLeaseUntil.IsZero() {
 		return
 	}
@@ -2654,7 +2668,7 @@ func (n *Node) expireGlobalLockLocked() {
 	n.cond.Broadcast()
 }
 
-func (n *Node) clearGlobalLockLocked() {
+func (n *Participant) clearGlobalLockLocked() {
 	if n.baselineTransfer != nil {
 		n.abortBaselineTransferLocked()
 	}
@@ -2664,7 +2678,7 @@ func (n *Node) clearGlobalLockLocked() {
 	n.locks.globalLeaseUntil = time.Time{}
 }
 
-func (n *Node) touchGlobalLockLocked(owner string) error {
+func (n *Participant) touchGlobalLockLocked(owner string) error {
 	n.expireGlobalLockLocked()
 	if owner == "" || !n.locks.globalWriteLock || n.locks.globalOwner != owner {
 		return ErrReplicationBaselineLease
@@ -2673,7 +2687,7 @@ func (n *Node) touchGlobalLockLocked(owner string) error {
 	return nil
 }
 
-func (n *Node) renewGlobalLeaseLocked() {
+func (n *Participant) renewGlobalLeaseLocked() {
 	ttl := n.globalBarrierLeaseTTL
 	if ttl <= 0 {
 		ttl = defaultGlobalBarrierLeaseTTL
@@ -2690,7 +2704,7 @@ func (n *Node) renewGlobalLeaseLocked() {
 	})
 }
 
-func (n *Node) SetGlobalBarrierLeaseTTLForTest(ttl time.Duration) {
+func (n *Participant) SetGlobalBarrierLeaseTTLForTest(ttl time.Duration) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if ttl > 0 {
@@ -2698,7 +2712,7 @@ func (n *Node) SetGlobalBarrierLeaseTTLForTest(ttl time.Duration) {
 	}
 }
 
-func (n *Node) BeginBackupPhase(ctx context.Context, req proto.BeginBackupPhaseRequest) (proto.BeginBackupPhaseResponse, error) {
+func (n *Participant) BeginBackupPhase(ctx context.Context, req proto.BeginBackupPhaseRequest) (proto.BeginBackupPhaseResponse, error) {
 	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.BeginBackupPhaseResponse{Ack: false}, err
 	}
@@ -2710,8 +2724,8 @@ func (n *Node) BeginBackupPhase(ctx context.Context, req proto.BeginBackupPhaseR
 		return proto.BeginBackupPhaseResponse{Ack: true}, nil
 	}
 	boundary := proto.TransactionID{}
-	if n.redoLog != nil {
-		boundary = n.redoLog.LastTID()
+	if n.redo != nil {
+		boundary = n.redo.LastTID()
 	}
 	n.lastBackupBoundary = boundary
 	n.backupMode = true
@@ -2721,7 +2735,7 @@ func (n *Node) BeginBackupPhase(ctx context.Context, req proto.BeginBackupPhaseR
 	return proto.BeginBackupPhaseResponse{Ack: true, BoundaryTID: boundary}, nil
 }
 
-func (n *Node) CompleteBackupPhase(ctx context.Context, req proto.CompleteBackupPhaseRequest) (proto.CompleteBackupPhaseResponse, error) {
+func (n *Participant) CompleteBackupPhase(ctx context.Context, req proto.CompleteBackupPhaseRequest) (proto.CompleteBackupPhaseResponse, error) {
 	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.CompleteBackupPhaseResponse{Ack: false}, err
 	}
@@ -2775,7 +2789,7 @@ func (n *Node) CompleteBackupPhase(ctx context.Context, req proto.CompleteBackup
 	return proto.CompleteBackupPhaseResponse{Ack: true, SnapshotPath: snapshotPath, SnapshotSHA256: snapshotSHA256}, nil
 }
 
-func (n *Node) GlobalLockHeldDurationForTest() time.Duration {
+func (n *Participant) GlobalLockHeldDurationForTest() time.Duration {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.locks.globalLockedAt.IsZero() {
@@ -2784,10 +2798,10 @@ func (n *Node) GlobalLockHeldDurationForTest() time.Duration {
 	return time.Since(n.locks.globalLockedAt)
 }
 
-func (n *Node) HoldWriteLockForTest(addr uint64, length uint32) func() {
+func (n *Participant) HoldWriteLockForTest(addr uint64, length uint32) func() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	l := heldLock{start: addr, end: addr + uint64(length), write: true}
+	l := RangeLock{start: addr, end: addr + uint64(length), write: true}
 	if !n.locks.tryLock(l.start, l.end, true) {
 		return func() {}
 	}
@@ -2798,56 +2812,56 @@ func (n *Node) HoldWriteLockForTest(addr uint64, length uint32) func() {
 	}
 }
 
-func (n *Node) RedoEntryCountForTest() int {
+func (n *Participant) RedoEntryCountForTest() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.redoLog == nil {
+	if n.redo == nil {
 		return 0
 	}
-	return len(n.redoLog.Entries())
+	return len(n.redo.Entries())
 }
 
-func (n *Node) HasDecidedForTest(tid proto.TransactionID) bool {
+func (n *Participant) HasDecidedForTest(txId proto.TransactionID) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.decided == nil {
 		return false
 	}
-	_, ok := n.decided.Get(tid)
+	_, ok := n.decided.Get(txId)
 	return ok
 }
 
-func (n *Node) HasAppliedTrackingForTest(tid proto.TransactionID) bool {
+func (n *Participant) HasAppliedTrackingForTest(txId proto.TransactionID) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.appliedLocal[tid] {
+	if n.appliedLocal[txId] {
 		return true
 	}
-	if rem := n.appliedRemote[tid]; len(rem) > 0 {
+	if rem := n.appliedRemote[txId]; len(rem) > 0 {
 		return true
 	}
-	for _, tids := range n.pendingNotify {
-		if _, ok := tids[tid]; ok {
+	for _, txIds := range n.pendingNotify {
+		if _, ok := txIds[txId]; ok {
 			return true
 		}
 	}
 	return false
 }
 
-func (n *Node) HasForcedAbortForTest(tid proto.TransactionID) bool {
+func (n *Participant) HasForcedAbortForTest(txId proto.TransactionID) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.forcedAbort == nil {
+	if n.forcedAborts == nil {
 		return false
 	}
-	return n.forcedAbort.Has(tid)
+	return n.forcedAborts.IsForcedAbort(txId)
 }
 
-func (n *Node) ForceAbortForTest(tid proto.TransactionID) error {
+func (n *Participant) ForceAbortForTest(txId proto.TransactionID) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.forcedAbort == nil {
+	if n.forcedAborts == nil {
 		return errors.New("forced-abort store unavailable")
 	}
-	return n.forcedAbort.Add(tid)
+	return n.forcedAborts.AddItem(txId)
 }

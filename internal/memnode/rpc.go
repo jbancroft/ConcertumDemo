@@ -10,7 +10,7 @@ import (
 	"github.com/jbancroft/concertum2/internal/rpcwire"
 )
 
-func (n *Node) requireRecoveryComplete() error {
+func (n *Participant) requireRecoveryComplete() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if !n.recoveryComplete {
@@ -19,7 +19,7 @@ func (n *Node) requireRecoveryComplete() error {
 	return nil
 }
 
-func (n *Node) RPCServer() *rpcwire.Server {
+func (n *Participant) RPCServer() *rpcwire.Server {
 	srv := rpcwire.NewServer(nil, n.rpcConnContext)
 	rpcwire.RegisterTyped(srv, proto.MethodRead, func(ctx context.Context, req proto.ReadRequest) (proto.ReadResponse, error) {
 		if err := n.requireRecoveryComplete(); err != nil {
@@ -40,7 +40,7 @@ func (n *Node) RPCServer() *rpcwire.Server {
 		if err := n.requireRecoveryComplete(); err != nil {
 			return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, err
 		}
-		return n.ExecPrepare(ctx, req)
+		return n.ExecAndPrepare(ctx, req)
 	})
 	rpcwire.RegisterTyped(srv, proto.MethodExecCommit1PC, func(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
 		if err := n.requireRecoveryComplete(); err != nil {
@@ -91,7 +91,7 @@ func (n *Node) RPCServer() *rpcwire.Server {
 	return srv
 }
 
-func (n *Node) rpcConnContext(conn net.Conn) context.Context {
+func (n *Participant) rpcConnContext(conn net.Conn) context.Context {
 	ctx := context.Background()
 	if n.authorizer == nil {
 		return ctx

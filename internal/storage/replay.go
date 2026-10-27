@@ -81,8 +81,8 @@ type ReplayRetention struct {
 // Expired reports whether a record with the given TID is outside r's retry horizon.
 // It is the inverse of "still retryable"; it never returns true for Epoch 0 or
 // when reclamation is disabled.
-func (r ReplayRetention) Expired(tid proto.TransactionID) bool {
-	if tid.Epoch == 0 || r.RetryHorizon == 0 {
+func (r ReplayRetention) Expired(txId proto.TransactionID) bool {
+	if txId.Epoch == 0 || r.RetryHorizon == 0 {
 		return false
 	}
 	// Compare without forming Epoch+RetryHorizon to avoid uint64 overflow:
@@ -92,7 +92,7 @@ func (r ReplayRetention) Expired(tid proto.TransactionID) bool {
 	if r.CurrentEpoch <= r.RetryHorizon {
 		return false
 	}
-	return tid.Epoch <= r.CurrentEpoch-r.RetryHorizon
+	return txId.Epoch <= r.CurrentEpoch-r.RetryHorizon
 }
 
 // Bytes snapshots the durable replay artifact under the store mutex.
@@ -150,33 +150,33 @@ func (s *ReplayStore) SHA256() ([]byte, error) {
 	return h.Sum(nil), nil
 }
 
-func (s *ReplayStore) GetPrepare(tid proto.TransactionID) (proto.ExecPrepareResponse, bool) {
+func (s *ReplayStore) GetPrepare(txId proto.TransactionID) (proto.ExecPrepareResponse, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, ok := s.records[replayKey(tid, replayKindPrepare)]
+	record, ok := s.records[replayKey(txId, replayKindPrepare)]
 	if !ok || record.Prepare == nil {
 		return proto.ExecPrepareResponse{}, false
 	}
 	return clonePrepareReplay(*record.Prepare), true
 }
 
-func (s *ReplayStore) GetOnePC(tid proto.TransactionID) (proto.ExecCommit1PCResponse, bool) {
+func (s *ReplayStore) GetOnePC(txId proto.TransactionID) (proto.ExecCommit1PCResponse, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, ok := s.records[replayKey(tid, replayKindOnePC)]
+	record, ok := s.records[replayKey(txId, replayKindOnePC)]
 	if !ok || record.OnePC == nil {
 		return proto.ExecCommit1PCResponse{}, false
 	}
 	return cloneOnePCReplay(*record.OnePC), true
 }
 
-func (s *ReplayStore) AppendPrepare(tid proto.TransactionID, response proto.ExecPrepareResponse) error {
-	record := replayRecord{TID: tid, Kind: replayKindPrepare, Prepare: prepareReplayPtr(response)}
+func (s *ReplayStore) AppendPrepare(txId proto.TransactionID, response proto.ExecPrepareResponse) error {
+	record := replayRecord{TID: txId, Kind: replayKindPrepare, Prepare: prepareReplayPtr(response)}
 	return s.append(record)
 }
 
-func (s *ReplayStore) AppendOnePC(tid proto.TransactionID, response proto.ExecCommit1PCResponse) error {
-	record := replayRecord{TID: tid, Kind: replayKindOnePC, OnePC: onePCReplayPtr(response)}
+func (s *ReplayStore) AppendOnePC(txId proto.TransactionID, response proto.ExecCommit1PCResponse) error {
+	record := replayRecord{TID: txId, Kind: replayKindOnePC, OnePC: onePCReplayPtr(response)}
 	return s.append(record)
 }
 
@@ -486,8 +486,8 @@ func validateReplayRecord(record replayRecord) error {
 	return nil
 }
 
-func replayKey(tid proto.TransactionID, kind string) string {
-	return kind + ":" + tidKey(tid)
+func replayKey(txId proto.TransactionID, kind string) string {
+	return kind + ":" + tidKey(txId)
 }
 
 func cloneReplayRecord(record replayRecord) replayRecord {
