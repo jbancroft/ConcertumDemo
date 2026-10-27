@@ -442,8 +442,8 @@ func (n *Participant) HTTPHandler(enablePrometheus bool) http.Handler {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		var entry any
-		if n.redo != nil {
-			entries := n.redo.Entries()
+		if n.redoLog != nil {
+			entries := n.redoLog.Entries()
 			if len(entries) > 0 {
 				entry = entries[0]
 			}
@@ -456,8 +456,8 @@ func (n *Participant) HTTPHandler(enablePrometheus bool) http.Handler {
 		entries := []any{}
 		head := any(nil)
 		tail := any(nil)
-		if n.redo != nil {
-			raw := n.redo.Entries()
+		if n.redoLog != nil {
+			raw := n.redoLog.Entries()
 			if len(raw) > 0 {
 				head = raw[0]
 				tail = raw[len(raw)-1]

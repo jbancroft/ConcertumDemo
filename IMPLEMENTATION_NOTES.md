@@ -1,5 +1,12 @@
 # Implementation notes
 
+## 2026-10-27: Prepared transaction state naming
+
+Restored `preparedTxn`, `preparedAt`, and `participants` for the participant's
+prepared transaction state, plus `redoLog` and `logParticipants` for its log
+handle and logged participant lists. This follows the initial gofonia integration
+as a separate commit. The public gofonia vocabulary and reused helpers remain.
+
 ## 2026-10-27: Original gofonia vocabulary and helpers
 
 Adapted the original transaction builder, host projections, `RangeItem`,

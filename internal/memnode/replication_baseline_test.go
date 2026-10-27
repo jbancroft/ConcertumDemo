@@ -40,11 +40,11 @@ func TestReplicationBaselineInstallCrashBoundariesRecoverOldState(t *testing.T) 
 			}
 
 			txId := proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
-			redo, err := storage.OpenRedoLog(dir)
+			redoLog, err := storage.OpenRedoLog(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := redo.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
+			if err := redoLog.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
 				t.Fatal(err)
 			}
 			decided, err := storage.OpenDecidedTransactionLog(dir)
@@ -353,11 +353,11 @@ func seedOldBaseline(t *testing.T, dir string) proto.TransactionID {
 		t.Fatal(err)
 	}
 	txId := proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
-	redo, err := storage.OpenRedoLog(dir)
+	redoLog, err := storage.OpenRedoLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := redo.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
+	if err := redoLog.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
 		t.Fatal(err)
 	}
 	decided, err := storage.OpenDecidedTransactionLog(dir)

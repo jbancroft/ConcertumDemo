@@ -128,8 +128,8 @@ func (n *Participant) ExportReplicationBaselineChunk(ctx context.Context, req pr
 			return proto.ExportReplicationBaselineChunkResponse{Ack: false}, err
 		}
 		resp.SHA256 = digest
-		if artifact == baselineArtifactImage && n.redo != nil {
-			resp.BoundaryTID = n.redo.LastTID()
+		if artifact == baselineArtifactImage && n.redoLog != nil {
+			resp.BoundaryTID = n.redoLog.LastTID()
 		}
 	}
 	return resp, nil
@@ -415,8 +415,8 @@ func (n *Participant) installReplicationBaselineLocked(owner string, image []byt
 			return proto.InstallReplicationBaselineResponse{Ack: false}, err
 		}
 	}
-	if n.redo != nil {
-		if err := n.redo.Reset(); err != nil {
+	if n.redoLog != nil {
+		if err := n.redoLog.Reset(); err != nil {
 			n.markBaselineInstallFailedLocked(err)
 			return proto.InstallReplicationBaselineResponse{Ack: false}, err
 		}
@@ -482,12 +482,12 @@ func (n *Participant) installReplicationBaselineLocked(owner string, image []byt
 
 func (n *Participant) resetBaselineMemoryStateLocked() {
 	n.recoveryComplete = true
-	n.inDoubt = map[proto.TransactionID]*inDoubtTx{}
+	n.inDoubt = map[proto.TransactionID]*preparedTxn{}
 	n.allLogTxIds = map[proto.TransactionID]struct{}{}
 	n.appliedLocal = map[proto.TransactionID]bool{}
 	n.appliedRemote = map[proto.TransactionID]map[uint32]bool{}
 	n.pendingNotify = map[uint32]map[proto.TransactionID]struct{}{}
-	n.logHostIds = map[proto.TransactionID][]uint32{}
+	n.logParticipants = map[proto.TransactionID][]uint32{}
 	n.prepareOutcomes = map[proto.TransactionID]prepareOutcome{}
 	n.onePCOutcomes = map[proto.TransactionID]onePCOutcome{}
 	n.commitOutcomes = map[proto.TransactionID]commitOutcome{}

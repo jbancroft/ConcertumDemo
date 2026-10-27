@@ -10,6 +10,8 @@ The source was inspected in a temporary checkout. No files, commits, branches,
 settings, or other state in the original repository were changed. The current
 Concertum2 code was the destination for all adaptations. The source manifest
 records selected source-file hashes and how each file informed this integration.
+Its target hashes include the naming follow-up below; `integration_revision`
+identifies the first integration commit before that follow-up.
 
 Gofonia contains the beginnings of the same architecture: a minitransaction
 builder partitions compares, reads, and writes by host; a coordinator collects
@@ -54,12 +56,19 @@ those earlier locks, with a regression test for nested compatible readers.
 | `memnode.Node`, `NewNode`, `NewDurableNode` | `memnode.Participant`, `NewParticipant`, `NewDurableParticipant` |
 | `MemNode`, `RPCMemNode` client handles | `Participant`, `RPCParticipant` |
 | `ExecPrepare` Go methods | `ExecAndPrepare` |
-| `preparedTxn`, `preparedAt`, its `participants` | `inDoubtTx`, `createdAt`, `hostIds` |
-| `redoLog`, `forcedAbort`, `allLogTIDs` participant fields | `redo`, `forcedAborts`, `allLogTxIds` |
+| `preparedTxn`, `preparedAt`, its `participants` | Retained as `preparedTxn`, `preparedAt`, `participants` |
+| `redoLog`, `forcedAbort`, `allLogTIDs` participant fields | `redoLog` retained; `forcedAborts`, `allLogTxIds` |
 | `RedoEntry`, `DecidedStore`, `ForcedAbortStore` | `RedoLogItem`, `DecidedTransactionLog`, `ForcedAbortLog` |
 | Log insertion and forced-abort lookup | `AddItem`, `IsForcedAbort` |
 | `Index`, `New`, internal `node` in `minuet-index` | `BTree`, `NewBTree`, `BTreeNode` |
 | B+tree `Leaf`, `Keys`, `Children` | `isLeaf`, `keys`, `children` |
+
+The first integration commit used gofonia's `inDoubtTx`, `createdAt`, `hostIds`,
+and `redo` for participant state. A separate naming follow-up restored
+`preparedTxn`, `preparedAt`, `participants`, and `redoLog`, along with
+`logParticipants` for the logged transaction's participant list. The transaction
+builder, public item vocabulary, participant methods, and B+tree names remain
+as adapted from gofonia.
 
 These are source-level interface changes. Repository callers, the demo, and
 tests use the current names. There is no layer of deprecated aliases for the
