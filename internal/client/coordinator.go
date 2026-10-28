@@ -118,14 +118,6 @@ func newCoordinatorID() uint64 {
 	return id
 }
 
-// SetCoordinatorIDForTest gives tests a predictable coordinator ID.
-// Call it before running any transactions.
-func (c *Coordinator) SetCoordinatorIDForTest(id uint64) {
-	c.genMu.Lock()
-	defer c.genMu.Unlock()
-	c.coordID = id
-}
-
 func (c *Coordinator) SetPrimaryMapping(logicalToPrimary map[uint32]uint32) {
 	c.primaryFor = map[uint32]uint32{}
 	for logical, primary := range logicalToPrimary {
