@@ -5,14 +5,14 @@ import (
 	"time"
 )
 
-// Executor submits a complete compare/read/write request. The coordinator
-// assigns a fresh transaction ID for each attempt, including retries.
+// Executor runs a completed transaction. The coordinator gives each attempt,
+// including retries, a fresh transaction ID.
 type Executor interface {
 	ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult
 }
 
-// MiniTransaction buffers operations until ExecuteAndCommit. Its builder and
-// host projections follow gofonia, using pointer receivers and owned byte slices.
+// MiniTransaction collects operations until ExecuteAndCommit is called.
+// It copies input bytes so callers can safely reuse their buffers.
 type MiniTransaction struct {
 	executor Executor
 	class    string
@@ -29,8 +29,8 @@ func (t *MiniTransaction) Compare(hostId uint32, address uint64, data []byte) *M
 	return t.CompareValidUntil(hostId, address, data, time.Time{})
 }
 
-// CompareValidUntil also requires a commit decision strictly before validUntil.
-// A zero deadline places no time constraint on the comparison.
+// CompareValidUntil requires matching bytes and a commit decision before the
+// deadline. A zero time means there's no deadline; equality is already too late.
 func (t *MiniTransaction) CompareValidUntil(hostId uint32, address uint64, data []byte, validUntil time.Time) *MiniTransaction {
 	t.compares = append(t.compares, CompareItem{HostId: hostId, Address: address, Data: append([]byte(nil), data...), ValidUntil: validUntil})
 	return t
@@ -105,8 +105,8 @@ func (t *MiniTransaction) WriteItemsForHost(hostId uint32) []WriteItem {
 	return result
 }
 
-// UniqueHostIds returns a detached set so callers cannot change the transaction
-// by modifying the returned membership. uint32 host IDs convert losslessly.
+// UniqueHostIds returns a new set of the hosts this transaction touches.
+// Changing the returned set won't change the transaction.
 func (t *MiniTransaction) UniqueHostIds() *Int64Set {
 	uniqueHostIds := NewInt64Set()
 	for _, item := range t.compares {

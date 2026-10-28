@@ -1,10 +1,7 @@
-// Package minuetindex implements a single-version Minuet-style B+tree over
-// sinfoniaclient minitransactions. Each index resides on one memory node.
-// Mutations validate and write the reachable tree; search and scan do not
-// guarantee consistent snapshots alongside concurrent mutations.
+// Package minuetindex stores a small B+tree on one memory node.
+// Updates compare the old page bytes and write the new ones in a minitransaction.
+// Searches and scans can see inconsistent results while another caller writes.
 //
-// The fixed page format, allocator, and occupancy limits are Concertum choices.
-// Research lineage, extraction provenance, and limits are documented in the
-// repository README, IMPLEMENTATION_NOTES.md, and docs/design.md. This package
-// does not implement the Minuet paper's multiversion snapshots or writable clones.
+// Minuet inspired the design, but this version has no multiversion snapshots or
+// writable clones. See the README and docs/design.md for the layout and limits.
 package minuetindex

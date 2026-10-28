@@ -104,9 +104,8 @@ func (d *DiskImage) Bytes() ([]byte, error) {
 	return buf, nil
 }
 
-// ReadAt reads a bounded portion of the durable image without materializing
-// the complete image. Callers that need a consistent snapshot must hold the
-// higher-level global write barrier while issuing a sequence of reads.
+// ReadAt reads part of the saved memory image. To get a consistent copy across
+// several reads, the caller must hold the global write lock for the whole copy.
 func (d *DiskImage) ReadAt(buf []byte, offset int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -123,7 +122,7 @@ func (d *DiskImage) Size() int {
 	return d.size
 }
 
-// SHA256 computes the image digest in bounded chunks.
+// SHA256 hashes the image without loading the whole file into memory.
 func (d *DiskImage) SHA256() ([]byte, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -146,10 +145,8 @@ func (d *DiskImage) SHA256() ([]byte, error) {
 	return sum, nil
 }
 
-// Replace replaces the complete durable image and synchronizes it before
-// returning. The caller must hold any higher-level state transition barrier.
-// The caller must provide exactly the image size; accepting a partial image
-// would make a replication baseline ambiguous.
+// Replace writes and syncs a complete memory image. The size must match exactly,
+// and the caller must prevent competing state changes during replacement.
 func (d *DiskImage) Replace(data []byte) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -166,9 +163,8 @@ func (d *DiskImage) Replace(data []byte) error {
 	return d.file.Sync()
 }
 
-// ReplaceFrom replaces the complete durable image from a staged file while
-// keeping memory bounded. The caller must provide exactly the configured image
-// size and hold any higher-level state transition barrier.
+// ReplaceFrom copies a staged image without loading it all into memory. The size
+// must match, and the caller must prevent competing state changes.
 func (d *DiskImage) ReplaceFrom(path string) error {
 	in, err := os.Open(path)
 	if err != nil {
@@ -450,8 +446,7 @@ func (r *RedoLog) TruncateHead(count int) error {
 	return nil
 }
 
-// Reset removes every redo entry and durably rewrites the log file. It is
-// used when a replica installs a complete authoritative image baseline.
+// Reset clears and syncs the redo log when a replica installs a replacement image.
 func (r *RedoLog) Reset() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -581,10 +576,8 @@ func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]proto.TransactionID, 
 	return removed, nil
 }
 
-// Reset removes every forced-abort marker and durably rewrites the store.
-// A baseline install replaces the replica's previous transaction history, so
-// retaining an old forced-abort marker could reject a future transaction that
-// is not present in the installed state.
+// Reset clears and syncs the forced-abort log when replacing a replica's history.
+// Keeping an old marker could incorrectly reject a later transaction.
 func (s *ForcedAbortLog) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -700,8 +693,8 @@ func (s *DecidedTransactionLog) Remove(txId proto.TransactionID) error {
 	return f.Sync()
 }
 
-// Reset removes every durable decision and rewrites the store. The caller is
-// responsible for serializing this with participant operations.
+// Reset clears the saved decisions. The caller must prevent participant
+// operations from running during the reset.
 func (s *DecidedTransactionLog) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

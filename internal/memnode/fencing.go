@@ -58,9 +58,8 @@ func isFencingPublicationOutcomeUnknown(err error) bool {
 	return errors.As(err, &target)
 }
 
-// setFencingPublicationHookForTest injects deterministic publication failures
-// at the persistence checkpoints. It is intentionally only used by tests; a
-// production node always publishes through the platform barrier below.
+// setFencingPublicationHookForTest lets tests fail each step of saving a fencing
+// generation. Normal operation uses the platform's persistence code below.
 func (n *Participant) setFencingPublicationHookForTest(fn func(point string) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()

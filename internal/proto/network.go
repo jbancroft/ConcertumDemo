@@ -37,8 +37,8 @@ type DirectoryRequest struct{}
 
 type DirectoryResponse struct {
 	Mappings map[uint32]DirectoryEntry
-	// Revision is the store-wide immutable directory snapshot revision. A zero
-	// value is the bootstrap revision and is also what legacy servers report.
+	// Revision identifies this directory snapshot. Zero means a new directory,
+	// or an older server that doesn't report revisions.
 	Revision uint64
 }
 

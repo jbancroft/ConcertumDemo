@@ -510,8 +510,8 @@ func (n *Participant) markBaselineInstallFailedLocked(err error) {
 }
 
 func (n *Participant) replicationBaselineIngressBlockedLocked() bool {
-	// A failed install clears its staged transfer but remains unsafe until the
-	// next durable open rolls back the published journal.
+	// Drop the staged transfer after failure, but keep the node unavailable.
+	// Reopening will restore the old files from the rollback journal.
 	return n.baselineTransfer != nil || n.baselineRecoveryRequired
 }
 

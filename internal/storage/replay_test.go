@@ -195,8 +195,8 @@ func TestReplayStoreOpenTruncatesTornTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Append a torn partial line (no trailing newline, invalid JSON) to the
-	// tail. A torn tail must never synthesize a record.
+	// Add an unfinished line with no newline and invalid JSON. Loading must
+	// discard it rather than invent a saved reply.
 	f, err := os.OpenFile(filepath.Join(dir, "replay.log"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +219,7 @@ func TestReplayStoreOpenTruncatesTornTail(t *testing.T) {
 	if _, ok := reopened.GetPrepare(proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}); ok {
 		t.Fatal("torn tail was treated as a valid record")
 	}
-	// The physical file must equal the valid prefix.
+	// The file should contain only the complete records.
 	disk, err := os.ReadFile(filepath.Join(dir, "replay.log"))
 	if err != nil {
 		t.Fatal(err)
@@ -239,8 +239,8 @@ func TestReplayStoreOpenFailsClosedOnCompleteCorruptLine(t *testing.T) {
 	if err := stored.AppendPrepare(proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, stable); err != nil {
 		t.Fatal(err)
 	}
-	// A complete (newline-terminated) but invalid record is corruption, not a
-	// torn tail; opening must fail closed.
+	// A bad record with a newline was fully written. Report corruption
+	// instead of treating it as an unfinished tail.
 	f, err := os.OpenFile(filepath.Join(dir, "replay.log"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -303,7 +303,7 @@ func TestReplayStoreCompactPreservesRetryableTID(t *testing.T) {
 	if _, ok := store.GetOnePC(legacy); !ok {
 		t.Fatal("legacy Epoch==0 TID dropped by compaction")
 	}
-	// Reopen proves the rewrite is durable and not a torn state.
+	// Reopen and check that the saved log contains the expected records.
 	reopened, err := storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)

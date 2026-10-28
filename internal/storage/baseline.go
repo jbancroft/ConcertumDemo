@@ -51,19 +51,16 @@ type baselineJournalFile struct {
 	Size   int64  `json:"size,omitempty"`
 }
 
-// BaselineInstallJournal records the old durable replica files before an
-// install mutates any of them. A journal left behind by a crashed process is
-// rolled back on the next durable-node open; a journal removed by Commit means
-// every new file was already synchronized and is therefore the new complete
-// baseline.
+// BaselineInstallJournal backs up a replica's files before replacing them.
+// If a crash leaves the journal behind, reopening restores the old files.
+// Commit removes the active journal after all replacement files are synced.
 type BaselineInstallJournal struct {
 	dir     string
 	journal string
 }
 
-// BeginBaselineInstall creates and durably publishes a rollback journal. The
-// caller must keep the journal until all new durable files have been written
-// and synchronized.
+// BeginBaselineInstall saves a rollback journal. Keep it until every replacement
+// file has been written and synced.
 func BeginBaselineInstall(dir string) (*BaselineInstallJournal, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, errors.New("baseline install directory is required")
@@ -125,10 +122,9 @@ func BeginBaselineInstall(dir string) (*BaselineInstallJournal, error) {
 	return &BaselineInstallJournal{dir: dir, journal: journalPath}, nil
 }
 
-// Commit atomically retires the rollback journal only after the caller has
-// synchronized the complete new baseline. If publication or its directory
-// sync fails, startup can still select the active journal and recover the old
-// state; cleanup of the retired tombstone is best effort.
+// Commit retires the rollback journal. Call it after syncing every replacement
+// file. If the rename or directory sync fails, startup can use a journal that's
+// still active to restore the old files. Cleaning up the retired copy can wait.
 func (j *BaselineInstallJournal) Commit() error {
 	if j == nil || j.journal == "" {
 		return errors.New("baseline install journal is nil")
@@ -146,16 +142,15 @@ func (j *BaselineInstallJournal) Commit() error {
 	if err := syncDir(j.dir); err != nil {
 		return err
 	}
-	// Tombstone cleanup is deliberately best effort. Its presence cannot make
-	// the active journal reappear, so a crash here still selects the new state.
+	// The retired copy can't become active again. Cleanup can fail without
+	// changing which files startup will use.
 	_ = os.RemoveAll(tombstone)
 	_ = syncDir(j.dir)
 	return nil
 }
 
-// RecoverBaselineInstall rolls back a published but uncommitted baseline
-// install. It is called before opening durable storage files, so no live file
-// descriptor can observe the partially restored state.
+// RecoverBaselineInstall restores the old files after an unfinished install.
+// Call it before opening the storage files so nobody sees a partial restore.
 func RecoverBaselineInstall(dir string) error {
 	if strings.TrimSpace(dir) == "" {
 		return nil
@@ -209,8 +204,8 @@ func recoverJournal(dir, journalPath string) error {
 	if len(seen) != len(known) {
 		return errors.New("baseline journal is missing a durable state file")
 	}
-	// Validate the entire rollback set before restoring any live file. A
-	// missing or truncated backup must fail closed, never expose a mixed set.
+	// Check every backup before restoring any files. If one is missing or
+	// truncated, stop rather than leaving a mix of old and new files.
 	for _, entry := range manifest.Files {
 		if !entry.Exists {
 			continue

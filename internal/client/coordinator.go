@@ -24,7 +24,7 @@ var coordinatorIDFallback atomic.Uint64
 
 var ErrDeadlineDecisionProtocolUpgradeRequired = errors.New("deadline decision protocol upgrade required")
 
-// Participant defines the minimal participant operations used by the coordinator scaffold.
+// Participant is the node interface used by the coordinator.
 type Participant interface {
 	Read(ctx context.Context, addr uint64, length uint32) ([]byte, error)
 	Write(ctx context.Context, addr uint64, data []byte) error
@@ -77,7 +77,7 @@ func (b RandomBackoff) Wait(ctx context.Context, attempt int) {
 	}
 }
 
-// Coordinator routes client operations to registered memory nodes.
+// Coordinator gathers participant votes and sends commit or abort decisions.
 type Coordinator struct {
 	nodes       map[uint32]Participant
 	primaryFor  map[uint32]uint32
@@ -119,8 +119,8 @@ func newCoordinatorID() uint64 {
 	return id
 }
 
-// SetCoordinatorIDForTest replaces the process-unique coordinator identity.
-// It must be called before the coordinator executes any transactions.
+// SetCoordinatorIDForTest gives tests a predictable coordinator ID.
+// Call it before running any transactions.
 func (c *Coordinator) SetCoordinatorIDForTest(id uint64) {
 	c.genMu.Lock()
 	defer c.genMu.Unlock()
@@ -305,11 +305,10 @@ type rpcWorker struct {
 	batchMax   int
 }
 
-// FlushPendingCommits waits for asynchronous phase-two decisions from completed
-// ExecuteAndCommit calls to be delivered. Write decisions are recoverable from
-// participant vote/deadline state at return; deadline-bearing commits also
-// synchronously retain one decision witness. This barrier provides immediate
-// visibility and reports delivery failures.
+// FlushPendingCommits waits for queued commit/abort messages and reports errors.
+// ExecuteAndCommit returns once the decision is recoverable from participant
+// state. For deadline-bearing writes, it also saves the decision on a participant
+// before returning. Use this method when you need to wait for delivery too.
 func (c *Coordinator) FlushPendingCommits(ctx context.Context) error {
 	c.workersMu.Lock()
 	workers := make([]*rpcWorker, 0, len(c.workers))

@@ -52,3 +52,15 @@ snapshot described in [gofonia-lineage.md](gofonia-lineage.md).
 The separate prepared-state naming follow-up passed `make check` and `make race`
 on 2026-10-27. The updated destination hashes and original source hashes were
 verified again; the original gofonia checkout remained unchanged.
+
+## 2026-10-28: Plain-language pass
+
+`make check` and `make demo` passed after the README, design notes, and comments
+were simplified. A Go token comparison found no executable changes in the 30
+edited Go files, and build/compiler directives were unchanged. Local Markdown
+links and the historical hashes in both source manifests were checked too.
+
+A targeted scan of 181 historical file blobs and the current tracked files found
+no contact addresses, home paths, private keys, or known credential-token patterns.
+The two pull-request discussions were checked for the same patterns. Git author
+metadata is separate from file contents and needs its own publication check.

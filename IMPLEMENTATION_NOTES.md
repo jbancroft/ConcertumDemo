@@ -1,5 +1,12 @@
 # Implementation notes
 
+## 2026-10-28: Easier reading
+
+Rewrote the README, design notes, and code comments in plainer language. Added a
+short explanation of the AI assistance and kept the practical limits visible,
+including the invalid-superblock behavior. Executable Go code is unchanged.
+The source manifests keep their historical hashes and identify those snapshots.
+
 ## 2026-10-27: Prepared transaction state naming
 
 Restored `preparedTxn`, `preparedAt`, and `participants` for the participant's

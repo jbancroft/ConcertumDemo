@@ -1,14 +1,12 @@
-// Package minuetsql contains an MVP SQL layer over Minuet indexes and Sinfonia-backed minitransactions.
+// Package minuetsql adds a tiny SQL layer over the B+tree and transaction client.
+// Tables have two unsigned columns, id and value. Supported statements are
+// CREATE TABLE, INSERT, DELETE, and SELECT, with an optional ID filter for SELECT.
 //
-// Current MVP scope:
-//   - Catalog/table/index bootstrap for SQL tables.
-//   - Minimal parser/planner/executor for CREATE TABLE, INSERT, DELETE, and SELECT.
-//   - End-to-end tests that exercise behavior through real Sinfonia coordinator paths.
+// There are no multi-statement transactions. Searches and scans have the same
+// concurrency limits as the index, and table regions aren't sized for arbitrary
+// growth. The demo uses one small table; see docs/design.md for the limits.
 //
-// MVP isolation contract (repository extension semantics):
-//   - Per-statement atomicity only: each SQL statement maps to one bounded Sinfonia/minuet-index mutation/read flow.
-//   - No multi-statement transactions yet; there is no BEGIN/COMMIT/ROLLBACK surface in this package.
-//   - Same-engine, same-primary-key write conflicts are serialized; concurrent INSERT on one key yields one success and one ErrDuplicateKey.
-//   - DELETE on a missing row is deterministic (ErrRowNotFound), including when another concurrent statement has already removed the row.
-//   - Retry exhaustion from lower minuet-index commit conflicts is surfaced as ErrBusy.
+// One engine serializes writes to the same key. A duplicate insert returns
+// ErrDuplicateKey, deleting a missing row returns ErrRowNotFound, and running
+// out of index retries returns ErrBusy. Tests exercise the real coordinator path.
 package minuetsql

@@ -1,11 +1,10 @@
-// Package mini_transaction contains the transaction vocabulary and builder
-// adapted from gofonia. Execution is supplied by the coordinator-backed client.
+// Package mini_transaction builds compare/read/write requests for the client.
+// The builder and item names come from the earlier gofonia project.
 package mini_transaction
 
 import "time"
 
-// RangeItem is the common byte-range view of compare, read, and write items.
-// Addresses and sizes retain Concertum2's unsigned representation.
+// RangeItem gives the byte offset and size of a compare, read, or write.
 type RangeItem interface {
 	Offset() uint64
 	Size() uint64

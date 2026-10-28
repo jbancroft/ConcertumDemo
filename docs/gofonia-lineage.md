@@ -10,7 +10,8 @@ The source was inspected in a temporary checkout. No files, commits, branches,
 settings, or other state in the original repository were changed. The current
 Concertum2 code was the destination for all adaptations. The source manifest
 records selected source-file hashes and how each file informed this integration.
-Its target hashes include the naming follow-up below; `integration_revision`
+Its target hashes describe `target_revision`, including the naming follow-up
+below. Later comment edits can change file hashes. `integration_revision`
 identifies the first integration commit before that follow-up.
 
 Gofonia contains the beginnings of the same architecture: a minitransaction

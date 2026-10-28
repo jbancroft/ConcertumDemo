@@ -1,7 +1,7 @@
 package mini_transaction
 
-// Vote represents a participant's prepare-phase outcome. The existing
-// Concertum2 wire values are retained: VoteOk is zero, unlike gofonia's enum.
+// Vote is a participant's answer to a prepare request.
+// Keep the numeric values stable: existing wire messages use VoteOk == 0.
 type Vote int32
 
 const (
@@ -15,7 +15,7 @@ const (
 
 const VoteUnknown Vote = -1
 
-// String follows gofonia's diagnostic vote names.
+// String returns the vote names used in gofonia.
 func (v Vote) String() string {
 	switch v {
 	case VoteOk:

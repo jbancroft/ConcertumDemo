@@ -32,17 +32,15 @@ type replayRecord struct {
 	OnePC   *proto.ExecCommit1PCResponse `json:"one_pc,omitempty"`
 }
 
-// ReplayStore durably retains terminal participant responses by transaction
-// ID. RequestID is delivery-attempt metadata and is replaced by the caller on
-// replay; the vote and response payload remain the original result.
+// ReplayStore saves participant replies by transaction ID. A retry gets the
+// original vote and data, with its own RequestID filled in by the caller.
 type ReplayStore struct {
 	mu      sync.Mutex
 	path    string
 	records map[string]replayRecord
 }
 
-// PublicRetryHorizon is the number of epochs for which a transaction ID may
-// still be retried by the memnode public request path.
+// PublicRetryHorizon limits a transaction's age in epochs when a client retries it.
 const PublicRetryHorizon uint64 = 2
 
 func OpenReplayStore(dir string) (*ReplayStore, error) {
@@ -57,53 +55,40 @@ func OpenReplayStore(dir string) (*ReplayStore, error) {
 	return &ReplayStore{path: path, records: records}, nil
 }
 
-// ReplayRetention is a point-in-time snapshot of the public transaction-ID retry
-// horizon used to decide which terminal replay records may be reclaimed.
-//
-// A record whose TID.Epoch > 0 is expired (and eligible for reclamation) when
-// TID.Epoch + RetryHorizon <= CurrentEpoch. This matches the memnode stale-
-// epoch reject rule (TID.Epoch > 0 && TID.Epoch + horizon <= currentEpoch): a
-// TID that has scrolled past the retry horizon can no longer be the subject of a
-// public retry, so its replay record is safe to drop. Records with Epoch == 0
-// are legacy TIDs that are never subject to the epoch horizon and are always
-// retained. A RetryHorizon of 0 disables reclamation entirely (unbounded
-// retention). Retention is only ever evaluated against a caller-supplied,
-// monotonic CurrentEpoch; the store never infers the current epoch, so a stale
-// or zero CurrentEpoch cannot cause reclamation to over-reclaim.
+// ReplayRetention decides which saved replies are too old to need anymore.
+// A reply can be dropped when Epoch + RetryHorizon <= CurrentEpoch, matching
+// the node's rule for rejecting old retries. Keep legacy IDs with Epoch == 0.
+// A zero RetryHorizon keeps everything. The caller supplies an epoch that only
+// moves forward; the store doesn't guess it from the clock.
 type ReplayRetention struct {
 	// CurrentEpoch is the caller's view of the current retry epoch.
 	CurrentEpoch uint64
-	// RetryHorizon is the number of epochs for which a TID remains retryable
-	// after its own epoch. 0 disables reclamation (retain all).
+	// RetryHorizon is the retry window in epochs. Zero keeps all replies.
 	RetryHorizon uint64
 }
 
-// Expired reports whether a record with the given TID is outside r's retry horizon.
-// It is the inverse of "still retryable"; it never returns true for Epoch 0 or
-// when reclamation is disabled.
+// Expired says whether a transaction is too old to retry. Legacy IDs with
+// Epoch == 0 are always kept, as are all IDs when RetryHorizon == 0.
 func (r ReplayRetention) Expired(txId proto.TransactionID) bool {
 	if txId.Epoch == 0 || r.RetryHorizon == 0 {
 		return false
 	}
-	// Compare without forming Epoch+RetryHorizon to avoid uint64 overflow:
-	// Epoch + Horizon <= Current  <=>  Epoch <= Current - Horizon (when
-	// Current >= Horizon). If Current < Horizon no in-horizon TID can be
-	// expired, so nothing is reclaimed.
+	// Subtract instead of adding to Epoch so uint64 can't overflow.
+	// If the current epoch hasn't passed the retry window, keep everything.
 	if r.CurrentEpoch <= r.RetryHorizon {
 		return false
 	}
 	return txId.Epoch <= r.CurrentEpoch-r.RetryHorizon
 }
 
-// Bytes snapshots the durable replay artifact under the store mutex.
+// Bytes reads the saved reply log while holding the store's lock.
 func (s *ReplayStore) Bytes() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return os.ReadFile(s.path)
 }
 
-// Size returns the current durable replay artifact size without materializing
-// the log in memory.
+// Size returns the log size without reading its contents.
 func (s *ReplayStore) Size() (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,9 +99,8 @@ func (s *ReplayStore) Size() (int64, error) {
 	return info.Size(), nil
 }
 
-// ReadAt reads one bounded portion of the durable replay artifact. Callers
-// that need a consistent sequence must hold the higher-level replication
-// barrier while issuing a sequence of reads.
+// ReadAt reads part of the reply log. To get a consistent copy across several
+// reads, the caller must hold the replication barrier for the whole sequence.
 func (s *ReplayStore) ReadAt(buf []byte, offset int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -134,7 +118,7 @@ func (s *ReplayStore) ReadAt(buf []byte, offset int64) error {
 	return nil
 }
 
-// SHA256 computes the replay artifact digest in bounded chunks.
+// SHA256 hashes the log without loading the whole file into memory.
 func (s *ReplayStore) SHA256() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -180,9 +164,8 @@ func (s *ReplayStore) AppendOnePC(txId proto.TransactionID, response proto.ExecC
 	return s.append(record)
 }
 
-// ReplaceFrom validates a staged replay artifact, atomically publishes it at
-// the store path, and refreshes the in-memory index only after the new file is
-// durable. The caller must hold any higher-level state transition barrier.
+// ReplaceFrom checks and installs a staged reply log, then updates the in-memory
+// index once the file is durable. The caller must prevent competing state changes.
 func (s *ReplayStore) ReplaceFrom(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -230,14 +213,10 @@ func (s *ReplayStore) ReplaceFrom(path string) error {
 	return nil
 }
 
-// Compact reclaims replay records whose TIDs have scrolled past the public
-// retry horizon described by retention. The rewrite is safe at the storage
-// boundary: only records that can no longer be the subject of a public retry are removed, and
-// the rewrite is atomic (staged to a temp file and renamed) so a crash during
-// compaction leaves either the old or the new artifact, never a mixed state.
-// Records with TID.Epoch == 0 and records the retention rules deem still
-// retryable are preserved. A retention with RetryHorizon == 0 or CurrentEpoch
-// <= RetryHorizon reclaims nothing.
+// Compact drops replies that are too old to retry. It writes a temporary file
+// and renames it, so a crash leaves either the old log or the new one.
+// Keep legacy IDs and replies still inside the retry window. A zero retry
+// window, or a current epoch no greater than the window, removes nothing.
 func (s *ReplayStore) Compact(retention ReplayRetention) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -248,13 +227,12 @@ func (s *ReplayStore) Compact(retention ReplayRetention) error {
 			kept++
 		}
 	}
-	// No reclaimable records or reclamation disabled: nothing to do.
+	// Nothing expired, or cleanup is disabled.
 	if kept == len(s.records) || retention.RetryHorizon == 0 {
 		return nil
 	}
 
-	// Rebuild the artifact deterministically from the retained records. Order by
-	// key so the rewritten file is stable across compactions.
+	// Sort by key so the same records produce the same file each time.
 	keys := make([]string, 0, kept)
 	for key, record := range s.records {
 		if !retention.Expired(record.TID) {
@@ -296,9 +274,8 @@ func (s *ReplayStore) Compact(retention ReplayRetention) error {
 	if err := syncDir(filepath.Dir(s.path)); err != nil {
 		return err
 	}
-	// The artifact is now durable; refresh the in-memory index from the
-	// retained records. Snapshot before reassigning so we do not read from the
-	// new (empty) map.
+	// The file is durable. Keep the old records before replacing the map so
+	// we can rebuild the index from them.
 	snapshot := make(map[string]replayRecord, kept)
 	for _, key := range keys {
 		snapshot[key] = s.records[key]
@@ -368,9 +345,8 @@ func loadReplayStoreRecords(path string) (map[string]replayRecord, error) {
 		lastLine = line
 		validLen += int64(len(line))
 		trimmed := bytes.TrimSpace(line)
-		// Only newline-terminated records are complete. A final line without
-		// its delimiter is a torn write and must be discarded, even when the
-		// bytes happen to contain valid JSON.
+		// A record is complete only when its newline was written. Drop a final
+		// partial line even if it happens to contain valid JSON.
 		complete := len(line) > 0 && line[len(line)-1] == '\n'
 		if complete && len(trimmed) != 0 {
 			var record replayRecord
@@ -397,10 +373,8 @@ func loadReplayStoreRecords(path string) (map[string]replayRecord, error) {
 			return nil, readErr
 		}
 	}
-	// A non-empty final line that is not newline-terminated is a torn tail: a
-	// record whose terminating newline was never written. Truncate it durably so
-	// the artifact contains only completed records and no outcome is ever
-	// synthesized.
+	// Remove a final partial record and sync the truncation. Recovery must use
+	// only complete records, never guess an outcome from a half-written reply.
 	if len(lastLine) > 0 && lastLine[len(lastLine)-1] != '\n' {
 		if err := truncateDurableReplay(path, lastStart); err != nil {
 			return nil, err
@@ -409,10 +383,8 @@ func loadReplayStoreRecords(path string) (map[string]replayRecord, error) {
 	return records, nil
 }
 
-// truncateDurableReplay physically truncates the replay artifact to length bytes
-// and makes the truncation durable by syncing the file and its parent
-// directory. It is only used to remove a torn tail, so length is always the
-// boundary of the last completed (newline-terminated) record.
+// truncateDurableReplay removes a partial tail, then syncs the file and its
+// parent directory. length must end at the last complete record's newline.
 func truncateDurableReplay(path string, length int64) error {
 	f, err := os.OpenFile(path, os.O_WRONLY, 0o644)
 	if err != nil {
@@ -458,8 +430,8 @@ func loadReplayRecords(r io.Reader) (map[string]replayRecord, error) {
 				records[key] = cloneReplayRecord(record)
 			}
 		}
-		// JSONL requires every non-empty record to end in a newline. Unlike the
-		// live log loader, staged artifacts cannot be repaired in place.
+		// Every record needs a newline. A staged log must already be complete;
+		// only the live log loader repairs a partial tail.
 		if len(line) > 0 && line[len(line)-1] != '\n' {
 			return nil, errors.New("incomplete replay JSONL record")
 		}

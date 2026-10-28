@@ -6,7 +6,7 @@ import (
 	"github.com/jbancroft/concertum2/mini_transaction"
 )
 
-// TransactionID uniquely identifies a minitransaction and carries epoch information.
+// TransactionID combines a coordinator ID, counter, and epoch to identify an attempt.
 type TransactionID struct {
 	CoordinatorID uint64
 	Counter       uint64
@@ -32,8 +32,8 @@ func itoa64(v uint64) string {
 	return string(buf[i:])
 }
 
-// CmpItem compares data at (MemID, Addr) with Data and may require the
-// transaction decision to occur before ValidUntil, including during recovery.
+// CmpItem requires the bytes at (MemID, Addr) to match Data. ValidUntil can also
+// put a deadline on the transaction decision, including during recovery.
 type CmpItem struct {
 	MemID      uint32
 	Addr       uint64
@@ -64,7 +64,7 @@ type WriteItem struct {
 func (i WriteItem) Offset() uint64 { return i.Addr }
 func (i WriteItem) Size() uint64   { return uint64(len(i.Data)) }
 
-// Vote represents a participant's prepare-phase outcome.
+// Vote is a participant's answer to a prepare request.
 type Vote = mini_transaction.Vote
 
 const (

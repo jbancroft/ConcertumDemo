@@ -1,3 +1,4 @@
+// Package concertum is the public client for reads, writes, and minitransactions.
 package concertum
 
 import (
@@ -63,7 +64,7 @@ type Stats struct {
 	ByClass map[string]TxnClassStats `json:"by_class,omitempty"`
 }
 
-// Backend defines the coordinator backend needed by Client.
+// Backend supplies the reads, writes, stats, and transactions used by Client.
 type Backend interface {
 	Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error)
 	Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
@@ -71,7 +72,7 @@ type Backend interface {
 	ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult
 }
 
-// Client exposes the public coordinator-backed API.
+// Client sends operations to its transaction backend.
 type Client struct {
 	backend Backend
 }
@@ -122,11 +123,10 @@ func (c *Client) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff time.Dur
 	return errors.New("retry policy is not supported by this backend")
 }
 
-// FlushPendingCommits waits for asynchronous phase-two decisions from completed
-// ExecuteAndCommit calls on coordinator-backed clients. The transaction decision is
-// already recoverable from participant vote state at return (and logged in
-// durable modes); flushing provides prompt visibility and delivery errors.
-// Custom backends remain a no-op for compatibility.
+// FlushPendingCommits waits for queued commit/abort messages to reach the nodes.
+// ExecuteAndCommit can return once the decision is recoverable, before those
+// messages finish. Flush when you need to wait for delivery and check its errors.
+// This does nothing if a custom backend doesn't provide a flush operation.
 func (c *Client) FlushPendingCommits(ctx context.Context) error {
 	type commitFlusher interface {
 		FlushPendingCommits(context.Context) error

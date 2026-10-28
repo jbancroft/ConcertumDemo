@@ -54,8 +54,8 @@ type RangeLock struct {
 	write bool
 }
 
-// OverlapsWith follows gofonia's half-open range comparison, expressed using
-// the participant's existing start/end representation.
+// OverlapsWith checks [start, end) ranges: touching endpoints don't overlap.
+// This follows the range comparison from gofonia.
 func (rl RangeLock) OverlapsWith(other RangeLock) bool {
 	if rl.start >= rl.end || other.start >= other.end {
 		return false
@@ -92,6 +92,8 @@ type commitOutcome struct {
 	actionCommit bool
 }
 
+// preparedTxn keeps the writes and locks until a commit or abort decision arrives.
+// Durable nodes also log prepared writes so they can recover after a restart.
 type preparedTxn struct {
 	writes                []proto.WriteItem
 	readData              map[uint32][]byte
@@ -552,9 +554,8 @@ func (n *Participant) SetOutcomeReplayBoundaryHookForTest(fn func(phase string, 
 	n.outcomeReplayBoundaryHook = fn
 }
 
-// SetWriteApplyFaultForTest injects a failure after memory apply and before the
-// durable disk image accepts a write. It is intended only for deterministic
-// recovery tests.
+// SetWriteApplyFaultForTest lets recovery tests fail a write after memory changes
+// but before the disk image is updated.
 func (n *Participant) SetWriteApplyFaultForTest(fn func(addr uint64, data []byte) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -917,10 +918,9 @@ func (n *Participant) callOutcomeReplayBoundaryHookLocked(phase string, txId pro
 	return n.outcomeReplayBoundaryHook(phase, txId)
 }
 
-// replicateReplayRecordLocked publishes a terminal participant response to
-// the live replica before the primary returns it to its caller. The primary
-// mutex is released during the RPC, matching redo/decision replication and
-// allowing the replica to acquire its own node mutex without deadlock.
+// replicateReplayRecordLocked saves a reply on the replica before returning it
+// to the caller. Release the primary's mutex during the RPC so the replica can
+// take its own lock without deadlocking.
 func (n *Participant) replicateReplayRecordLocked(txId proto.TransactionID, kind proto.ReplayRecordKind, prepare *proto.ExecPrepareResponse, onePC *proto.ExecCommit1PCResponse) error {
 	if n.mode != ModeReplPrimary || n.replica == nil {
 		return nil
@@ -1212,9 +1212,8 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 		readData[uint32(idx)] = data
 	}
 
-	// Sinfonia logs every OK participant vote when the transaction has any
-	// writes. A participant with a read-only local projection still needs an
-	// empty redo entry so recovery can derive the all-OK commit decision.
+	// Save our yes vote before replying. Even with no local writes, we need an
+	// empty entry if the transaction writes elsewhere: recovery needs every vote.
 	if n.redoLog != nil && (req.HasWrites || len(req.WriteItems) > 0) {
 		participants := append([]uint32(nil), req.Participants...)
 		clonedWrites := cloneWrites(req.WriteItems)
@@ -1562,8 +1561,8 @@ func (n *Participant) commit(ctx context.Context, req proto.CommitRequest, recov
 	if n.decided != nil {
 		_, logged = n.allLogTxIds[req.TID]
 		if durableAction, ok := n.decided.Get(req.TID); ok {
-			// A durable decision is immutable even when redo GC or a prior
-			// application/recovery attempt removed the other live state.
+			// Keep the saved decision even if log cleanup or recovery removed
+			// the other transaction state.
 			req.ActionCommit = durableAction
 			knownDecision = true
 		}
@@ -1661,6 +1660,8 @@ func (n *Participant) CommitBatch(ctx context.Context, req proto.CommitBatchRequ
 	return proto.CommitBatchResponse{Acks: acks}, nil
 }
 
+// commitLocked saves decisions for logged transactions before applying writes,
+// then releases the transaction's locks.
 func (n *Participant) commitLocked(req proto.CommitRequest) (proto.CommitResponse, error) {
 
 	if n.decided != nil {
@@ -1749,9 +1750,8 @@ func (n *Participant) ReplicateCommitDecision(ctx context.Context, req proto.Rep
 	return proto.ReplicateCommitDecisionResponse{Ack: resp.Ack}, nil
 }
 
-// ReplicateReplayRecord durably installs one terminal participant response on
-// a replica. It deliberately does not execute the request or alter data; the
-// record is only used to answer a later same-TID retry after promotion.
+// ReplicateReplayRecord saves a reply so a promoted replica can answer a retry
+// with the same transaction ID. Saving a reply doesn't execute the transaction.
 func (n *Participant) ReplicateReplayRecord(ctx context.Context, req proto.ReplicateReplayRecordRequest) (proto.ReplicateReplayRecordResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ReplicateReplayRecordResponse{Ack: false}, err
@@ -1824,10 +1824,8 @@ func (n *Participant) ListRedoEntries(ctx context.Context, _ proto.ListRedoEntri
 	return resp, nil
 }
 
-// ExportReplicationBaseline returns the primary's complete durable image.
-// ReplicationManager holds the global write barrier before calling this method;
-// requiring that barrier here prevents a caller from accidentally publishing a
-// snapshot with an uncoordinated live-update race.
+// ExportReplicationBaseline returns the primary's saved memory image.
+// The manager must hold the global write lock so updates can't race the copy.
 func (n *Participant) ExportReplicationBaseline(ctx context.Context, req proto.ExportReplicationBaselineRequest) (proto.ExportReplicationBaselineResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.ExportReplicationBaselineResponse{Ack: false}, err
@@ -1861,10 +1859,9 @@ func (n *Participant) ExportReplicationBaseline(ctx context.Context, req proto.E
 	return proto.ExportReplicationBaselineResponse{Ack: true, Image: image, SHA256: checksum[:], BoundaryTID: boundary}, nil
 }
 
-// InstallReplicationBaseline replaces a replica's logical image and stale
-// transaction state while the manager holds the replica's global write lock.
-// Exact participant response replay is intentionally retained as node-local
-// metadata; transferring that metadata is a separate failover contract.
+// InstallReplicationBaseline replaces a replica's image and old transaction state.
+// The manager must hold the replica's global write lock. Saved replies stay local;
+// this call doesn't transfer them from the primary.
 func (n *Participant) InstallReplicationBaseline(ctx context.Context, req proto.InstallReplicationBaselineRequest) (proto.InstallReplicationBaselineResponse, error) {
 	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
 		return proto.InstallReplicationBaselineResponse{Ack: false}, err
@@ -2155,8 +2152,8 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 		if n.forcedAborts == nil {
 			return errors.New("deadline abort GC requires forced-abort storage")
 		}
-		// Redo GC removes the field that identifies the deadline protocol.
-		// Preserve the abort under the protocol's epoch-based safe-GC rule first.
+		// Removing redo loses the deadline protocol field, so save the abort
+		// first. Keep it until the protocol's epoch rules allow cleanup.
 		if err := n.forcedAborts.AddItem(entry.TransactionId); err != nil {
 			return err
 		}
@@ -2209,8 +2206,8 @@ func (n *Participant) RunForcedAbortGC() error {
 	if err != nil {
 		return err
 	}
-	// Deadline-abort redo GC retains the final abort beside its forced marker.
-	// Remove that decision only after the epoch marker is durably reclaimed.
+	// Keep a deadline abort until its forced-abort marker has been removed
+	// durably under the epoch rules.
 	for _, txId := range removed {
 		if n.decided == nil {
 			continue
@@ -2378,6 +2375,8 @@ func (n *Participant) transactionHasDecisionDeadlineLocked(txId proto.Transactio
 	return txn != nil && txn.decisionDeadlineNanos != 0
 }
 
+// Recover resolves logged transactions using saved decisions and peer evidence.
+// The node stays unavailable if it can't safely finish recovery.
 func (n *Participant) Recover(ctx context.Context) error {
 	n.metrics.recoveryRuns.Inc()
 	n.log(slog.LevelInfo, "Recovery initiated", "epoch", n.epoch)
@@ -2593,9 +2592,8 @@ func (n *Participant) LockAllBlockingOwned(ctx context.Context, owner string) er
 	if owner == "" {
 		return ErrReplicationBaselineLease
 	}
-	// sync.Cond has no context-aware wait. This notifier wakes the condition
-	// when the caller cancels, while the lease timer below wakes it when an
-	// abandoned owner expires.
+	// sync.Cond doesn't understand contexts. Wake it on cancellation; the timer
+	// below also wakes it when an abandoned owner's lease expires.
 	wakeDone := make(chan struct{})
 	go func() {
 		select {

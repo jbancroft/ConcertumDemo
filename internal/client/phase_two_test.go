@@ -16,8 +16,8 @@ import (
 	"github.com/jbancroft/concertum2/internal/proto"
 )
 
-// phaseTwoNode controls delivery at the existing Participant interface while the
-// coordinator runs its normal asynchronous workers and batching implementation.
+// phaseTwoNode intercepts node calls so tests can delay or fail delivery while
+// the coordinator uses its normal workers and batching.
 type phaseTwoNode struct {
 	Participant
 	prepared  chan proto.TransactionID

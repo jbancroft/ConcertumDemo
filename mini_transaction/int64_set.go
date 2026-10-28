@@ -1,7 +1,7 @@
 package mini_transaction
 
-// Int64Set and its iteration interface are retained from gofonia. A set is
-// local to its caller; concurrent mutation requires external synchronization.
+// Int64Set is the small set helper from gofonia. Callers must provide locking
+// if they share a set between goroutines that change it.
 type Int64Set map[int64]bool
 
 func NewInt64Set() *Int64Set {

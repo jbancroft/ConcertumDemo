@@ -6,7 +6,7 @@ import (
 	"github.com/jbancroft/concertum2/internal/proto"
 )
 
-// DummyNode is a no-logic in-memory memnode for compile/smoke tests.
+// DummyNode is a stub node for tests that don't need transaction behavior.
 type DummyNode struct{}
 
 func (d *DummyNode) Read(_ context.Context, _ uint64, length uint32) ([]byte, error) {

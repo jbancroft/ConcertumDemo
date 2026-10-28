@@ -26,8 +26,8 @@ func TestMiniTransactionRetainsOperationsAndOwnsData(t *testing.T) {
 	tx := NewMiniTransaction(executor).WithClass("gofonia")
 	compareData, writeData := []byte("compare"), []byte("write")
 	deadline := time.Date(2026, time.October, 27, 12, 0, 0, 0, time.UTC)
-	// Separate calls intentionally exercise the value-receiver bug in gofonia:
-	// callers need not retain the return value for operations to stay buffered.
+	// Separate calls catch gofonia's old value-receiver bug: operations must
+	// stay in the builder even when the caller ignores the return value.
 	tx.Compare(1, 4, compareData)
 	tx.CompareValidUntil(2, 8, []byte("other"), deadline)
 	tx.Read(2, 12, 4)

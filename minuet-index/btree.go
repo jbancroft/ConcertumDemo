@@ -13,8 +13,8 @@ import (
 const (
 	superblockSize  = 64
 	pageSize        = 512
-	superMagic      = uint32(0x4d4e5432) // MNT2
-	pageMagic       = uint32(0x50414745) // PAGE
+	superMagic      = uint32(0x4d4e5432) // ASCII "MNT2": marks the tree metadata.
+	pageMagic       = uint32(0x50414745) // ASCII "PAGE": marks a node's page.
 	maxLeafKeys     = 8
 	maxInternalKeys = 8
 )
@@ -36,17 +36,21 @@ type Entry struct {
 	Value uint64
 }
 
+// BTree stores one tree at a fixed address on one memory node.
 type BTree struct {
 	cfg    Config
 	client sinfoniaclient.TxnClient
 }
 
+// superblock is the tree's starting point: which page is the root and where to
+// allocate next. Version is an update counter, not a storage-format version.
 type superblock struct {
 	Version  uint64
 	RootPage uint32
 	NextPage uint32
 }
 
+// BTreeNode holds either leaf key/value pairs or internal keys and child IDs.
 type BTreeNode struct {
 	ID       uint32
 	isLeaf   bool
@@ -56,6 +60,8 @@ type BTreeNode struct {
 	NextLeaf uint32
 }
 
+// snapshot is a working copy. raw and rawSB keep the original bytes for the
+// commit comparisons; the reads themselves aren't a consistent snapshot.
 type snapshot struct {
 	super superblock
 	nodes map[uint32]*BTreeNode
@@ -184,6 +190,7 @@ func (idx *BTree) RangeScan(ctx context.Context, start, end uint64) (*Iterator, 
 	return &Iterator{entries: out}, nil
 }
 
+// mutate reloads the tree and retries if it can't commit the changed copy.
 func (idx *BTree) mutate(ctx context.Context, class string, fn func(*snapshot) error) error {
 	for attempt := 0; attempt < idx.cfg.MaxRetries; attempt++ {
 		s, err := idx.loadSnapshot(ctx)
@@ -217,6 +224,8 @@ func (idx *BTree) loadSnapshot(ctx context.Context) (*snapshot, error) {
 	}
 	s := &snapshot{nodes: map[uint32]*BTreeNode{}, raw: map[uint32][]byte{}, rawSB: rawSB}
 	if binary.BigEndian.Uint32(rawSB[0:4]) != superMagic {
+		// This also treats damaged metadata as a new tree. A later write can
+		// overwrite old data; a safer version would separate create from open.
 		s.super = superblock{Version: 0, RootPage: 0, NextPage: 1}
 		return s, nil
 	}
@@ -255,6 +264,7 @@ func (idx *BTree) readNodeRecursive(ctx context.Context, s *snapshot, pageID uin
 	return nil
 }
 
+// commitSnapshot checks the original bytes and writes the changed pages together.
 func (idx *BTree) commitSnapshot(ctx context.Context, class string, s *snapshot) bool {
 	compares := []sinfoniaclient.CompareItem{{HostId: idx.cfg.HostId, Address: idx.cfg.BaseAddress, Data: s.rawSB}}
 	writes := []sinfoniaclient.WriteItem{{HostId: idx.cfg.HostId, Address: idx.cfg.BaseAddress, Data: encodeSuperblock(s.super)}}

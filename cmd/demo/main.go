@@ -1,4 +1,4 @@
-// Command demo exercises the extracted Go engine with two durable participants.
+// Command demo runs transactions, an index, and SQL on two local nodes.
 package main
 
 import (
@@ -64,7 +64,7 @@ func run(ctx context.Context, dir string, out io.Writer) (err error) {
 		Write(1, balanceAddr, number(75)).Write(2, balanceAddr, number(125))); err != nil {
 		return err
 	}
-	// A stale compare must abort without applying either participant's write.
+	// The balance is now 75, so comparing it with 100 must reject both writes.
 	ok, _, status := c.api.NewMiniTransaction().Compare(1, balanceAddr, number(100)).
 		Write(1, balanceAddr, number(0)).Write(2, balanceAddr, number(0)).ExecuteAndCommit(ctx)
 	if ok || status != concertum.StatusAborted {
@@ -144,7 +144,7 @@ func commit(ctx context.Context, api *concertum.Client, tx *concertum.MiniTransa
 	if !ok {
 		return fmt.Errorf("transaction did not commit: status=%d", status)
 	}
-	// Ordinary distributed decisions return before phase-two delivery finishes.
+	// Wait for the background commit messages before checking the saved values.
 	return api.FlushPendingCommits(ctx)
 }
 
@@ -239,7 +239,7 @@ func openCluster(ctx context.Context, dir string) (_ *cluster, err error) {
 		go func() { finished <- node.RPCServer().Serve(tracked) }()
 		participants[id] = client.NewRPCParticipant(listener.Addr().String(), nil, 5*time.Second)
 	}
-	// Peer recovery calls are local; coordinator data operations use loopback RPC.
+	// Recovery peers call each other directly; client requests go over local TCP.
 	c.nodes[0].SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: c.nodes[1]})
 	c.nodes[1].SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: c.nodes[0]})
 	for _, node := range c.nodes {

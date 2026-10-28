@@ -1,10 +1,10 @@
 package proto
 
-// RequestID identifies one delivery attempt for a logical transaction.
+// RequestID labels a request delivery attempt within a transaction.
 type RequestID string
 
-// DeadlineDecisionProtocolVersion identifies the protocol that durably records
-// a coordinator-selected deadline decision and gives it precedence in recovery.
+// DeadlineDecisionProtocolVersion identifies the deadline rules used by peers.
+// These rules save the coordinator's decision and honor it during recovery.
 const DeadlineDecisionProtocolVersion uint16 = 1
 
 type DescribeTransactionCapabilitiesRequest struct{}
@@ -13,16 +13,15 @@ type DescribeTransactionCapabilitiesResponse struct {
 	DeadlineDecisionProtocolVersion uint16
 }
 
-// ExecPrepareRequest models the EXEC_PREPARE participant RPC.
+// ExecPrepareRequest asks a participant to check and prepare its part of a transaction.
 type ExecPrepareRequest struct {
 	TID           TransactionID
 	RequestID     RequestID
 	CorrelationID string
 	Participants  []uint32
 	HasWrites     bool
-	// DecisionDeadlineNanos is the earliest nonzero CmpItem.ValidUntil in
-	// the complete transaction. DeadlineDecisionProtocolVersion must be current
-	// whenever this field is nonzero.
+	// DecisionDeadlineNanos is the earliest nonzero ValidUntil in the whole
+	// transaction. A deadline requires the current decision protocol version.
 	DecisionDeadlineNanos           int64
 	DeadlineDecisionProtocolVersion uint16
 	CmpItems                        []CmpItem
@@ -33,7 +32,7 @@ type ExecPrepareRequest struct {
 	Generation                      uint64
 }
 
-// ExecPrepareResponse carries a vote and any read payload for this participant.
+// ExecPrepareResponse returns the participant's vote and any bytes it read.
 type ExecPrepareResponse struct {
 	RequestID    RequestID
 	Vote         Vote
@@ -42,7 +41,7 @@ type ExecPrepareResponse struct {
 	LockConflict *LockConflict
 }
 
-// CommitRequest models the COMMIT participant RPC.
+// CommitRequest tells a participant to commit or abort its prepared work.
 type CommitRequest struct {
 	TID                             TransactionID
 	RequestID                       RequestID
@@ -52,13 +51,13 @@ type CommitRequest struct {
 	DeadlineDecisionProtocolVersion uint16
 }
 
-// CommitResponse acknowledges COMMIT receipt.
+// CommitResponse acknowledges a commit or abort request.
 type CommitResponse struct {
 	RequestID RequestID
 	Ack       bool
 }
 
-// ExecCommit1PCRequest executes and commits atomically at a single participant.
+// ExecCommit1PCRequest combines execution and commit for a single participant.
 type ExecCommit1PCRequest struct {
 	TID                             TransactionID
 	RequestID                       RequestID
@@ -115,10 +114,8 @@ type ReplicateCommitDecisionResponse struct {
 	Ack bool
 }
 
-// ReplayRecordKind identifies the terminal participant response being
-// replicated. Replay records are keyed by (TID, Kind), because a transaction
-// may have both a prepare response and a one-phase response in separate
-// protocol paths.
+// ReplayRecordKind says which kind of reply is being saved. Replies are keyed
+// by (TID, Kind), since prepare and single-participant calls have separate paths.
 type ReplayRecordKind string
 
 const (
@@ -126,10 +123,9 @@ const (
 	ReplayRecordOnePC   ReplayRecordKind = "one_pc"
 )
 
-// ReplicateReplayRecordRequest carries an exact terminal participant response
-// to a synced replica. The replica stores the response before acknowledging,
-// so promotion can replay the original vote and read payload without
-// reevaluating the request.
+// ReplicateReplayRecordRequest sends a reply to a synced replica. The replica
+// saves it before acknowledging, so it can return the same vote and data if it
+// takes over and receives a retry.
 type ReplicateReplayRecordRequest struct {
 	TID     TransactionID
 	Kind    ReplayRecordKind
@@ -149,9 +145,9 @@ const (
 	ReplicationRoleReplica ReplicationRole = "replica"
 )
 
-// ReplicationFencingProtocolVersion identifies managers that understand the
-// outcome-unknown fencing publication response. Durable memnodes require this
-// version before accepting a new fencing generation.
+// ReplicationFencingProtocolVersion identifies managers that understand an
+// uncertain result when saving a fencing generation. Durable nodes require it
+// before accepting a new generation.
 const ReplicationFencingProtocolVersion uint16 = 1
 
 type ConfigureReplicationRequest struct {
@@ -200,9 +196,9 @@ type ListRedoEntriesResponse struct {
 	Entries []RedoEntryPayload
 }
 
-// ExportReplicationBaselineResponse is a complete durable image captured
-// under the manager's global write barrier. BoundaryTID is diagnostic evidence
-// for the snapshot point; the image itself is authoritative for the replica.
+// ExportReplicationBaselineResponse carries a saved image copied while writes
+// are blocked. BoundaryTID helps diagnose where the copy was taken; the image
+// itself supplies the replica's state.
 type ExportReplicationBaselineRequest struct {
 	BarrierOwner string
 }
@@ -228,8 +224,8 @@ type InstallReplicationBaselineResponse struct {
 
 type ExportReplicationBaselineChunkRequest struct {
 	BarrierOwner string
-	// Artifact is empty or "image" for the durable memory image. "replay"
-	// selects the exact-response replay log in the same baseline session.
+	// Artifact selects the saved memory image (empty or "image") or the
+	// saved reply log ("replay") in this transfer session.
 	Artifact string
 	Offset   uint64
 	MaxBytes uint32
@@ -291,7 +287,7 @@ type AbortReplicationBaselineResponse struct {
 	Ack bool
 }
 
-// RecoverForceAbortRequest models a management-node recovery RPC.
+// RecoverForceAbortRequest asks a node to record an abort unless it already voted yes.
 type RecoverForceAbortRequest struct {
 	TID                             TransactionID
 	Epoch                           uint64
@@ -299,14 +295,14 @@ type RecoverForceAbortRequest struct {
 	DeadlineDecisionProtocolVersion uint16
 }
 
-// RecoverForceAbortResponse reports the participant's effective vote.
+// RecoverForceAbortResponse returns the participant's vote after that check.
 type RecoverForceAbortResponse struct {
 	Vote           Vote
 	KnownDecision  bool
 	DecisionCommit bool
 }
 
-// RecoverDecideRequest drives the final recovery decision.
+// RecoverDecideRequest asks the node to apply a recovery decision.
 type RecoverDecideRequest struct {
 	TID                             TransactionID
 	ActionCommit                    bool
@@ -314,7 +310,7 @@ type RecoverDecideRequest struct {
 	DeadlineDecisionProtocolVersion uint16
 }
 
-// RecoverDecideResponse acknowledges decision application.
+// RecoverDecideResponse acknowledges that recovery decision.
 type RecoverDecideResponse struct {
 	Ack bool
 }
@@ -426,8 +422,8 @@ type UpdateEntryRequest struct {
 	MemID              uint32
 	Entry              DirectoryEntry
 	ExpectedGeneration uint64
-	// ExpectedRevisionSet distinguishes an exact CAS of bootstrap revision zero
-	// from the legacy generation-only request.
+	// ExpectedRevisionSet makes zero an explicit expected revision, rather
+	// than the older request format's "check generation only" behavior.
 	ExpectedRevision    uint64
 	ExpectedRevisionSet bool
 }
@@ -440,6 +436,6 @@ type UpdateEntryResponse struct {
 	Degraded          bool
 }
 
-// Optional future RPC placeholders from SPEC.md.
+// Ideas for additional recovery and notification RPCs:
 // - RecoverVoteQuery(tid)
 // - AppliedTidsNotify(fromMemID, tids[])

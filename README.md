@@ -1,26 +1,23 @@
 # Concertum2
 
-A focused Go code sample: Sinfonia-style distributed minitransactions, durable
-participants, a Minuet-style B+tree, and a small SQL layer. The working engine
-was extracted from Concertum. The transaction builder, host projections, ID
-set, vote names, and range-overlap checks incorporate the original gofonia
-project. The demo and documentation explain how these layers fit together.
+A small Go experiment in distributed transactions, with a B+tree and a tiny SQL
+layer on top. It's a code sample to read, run, and tinker with.
 
-See [gofonia analysis and integration](docs/gofonia-lineage.md) for the source
-revision, adopted names, adapted code, and implementation differences.
+The idea comes from Sinfonia: describe byte ranges to **compare**, **read**, and
+**write**, then commit across memory nodes. Minuet inspired the index.
 
-Go 1.22 or newer. No third-party dependencies or external services are required.
+## Try it
 
-## Run it
+You need Go 1.22 or newer. Everything uses the standard library; there's nothing
+else to install or start.
 
 ```sh
 go run ./cmd/demo
 ```
 
-The demo starts two durable memory nodes and sends coordinator requests over
-loopback TCP. It commits a conditional transfer across both participants,
-rejects a stale comparison, grows and shrinks an index, executes a SQL query,
-then closes and reopens both nodes to verify persisted state.
+The demo starts two nodes in one process and talks to them over local TCP. It
+transfers 25 between two balances, rejects an update based on a stale balance,
+inserts and deletes index entries, runs a SQL query, then reopens the saved data.
 
 ```text
 Two durable participants listening on loopback TCP
@@ -30,89 +27,76 @@ SQL: SELECT id, value FROM scores -> [{1 100} {2 250}]
 Recovery: reopened both nodes; balances, index, and SQL catalog/data verified
 ```
 
-Each invocation creates a fresh subdirectory under `tmp/demo/` and retains it
-for inspection. Use `-data-dir <parent>` to choose another location. Both nodes
-run in the demo process; recovery-peer calls are local, and client data traffic
-uses the retained framed gob/TCP implementation. Reopening is an orderly
-restart demonstration; participant crash/recovery cases live in the tests.
+Files are left under `tmp/demo/`; use `-data-dir <parent>` to choose another spot.
+The demo does an orderly restart. Tests cover crashes at specific points.
 
-## Where to start reading
+## How it fits together
 
-| File | What it demonstrates |
+1. A `MiniTransaction` collects operations at known addresses. A comparison says,
+   for example, "only make these changes if the balance is still 100."
+2. The coordinator asks each participant to prepare. Participants lock ranges,
+   check comparisons, and log prepared writes when using disk storage.
+3. If everyone votes yes, the coordinator sends commit messages. Participants
+   apply writes and release locks. Saved evidence lets recovery finish after a crash.
+
+The B+tree stores pages through this transaction API. SQL uses the tree for two
+columns: `id` and `value`.
+
+Commit messages normally run in the background; `FlushPendingCommits` waits for
+delivery. A network failure can leave the caller unsure whether a transaction
+committed, so the API also has an explicit unknown result.
+
+## Where to read
+
+| Start here | What to look for |
 | --- | --- |
-| [Demo](cmd/demo/main.go) | How the layers fit together, with checked outcomes |
-| [Coordinator](internal/client/coordinator.go) | Parallel prepare, votes, retries, one-participant fast path, asynchronous decision delivery |
-| [Transaction builder](mini_transaction/mini_transaction.go) | Compare/read/write operations, host projections, and the gofonia vocabulary |
-| [Participant](internal/memnode/participant.go) | Range locking, conditional execution, durable decisions, idempotency, recovery |
-| [Storage](internal/storage/) | Disk image, redo log, replay records, durable metadata |
-| [Public API](pkg/concertum/client.go) | Transaction builder and explicit unknown outcomes |
-| [B+tree](minuet-index/btree.go) | B+tree layout, search, splits, borrowing/merging, ordered scans |
-| [SQL engine](minuet-sql/engine.go) | Catalog-backed tables over the index |
+| [Demo](cmd/demo/main.go) | A complete example with checked results |
+| [Transaction builder](mini_transaction/mini_transaction.go) | The compare/read/write API and grouping work by host |
+| [Coordinator](internal/client/coordinator.go) | Votes, retries, and sending decisions |
+| [Participant](internal/memnode/participant.go) | Locks, comparisons, logging, and recovery |
+| [B+tree](minuet-index/btree.go) | Pages, splits, merges, and range scans |
+| [SQL engine](minuet-sql/engine.go) | A small parser and table layer over the tree |
 
-The index and SQL layers depend on `sinfonia-client`, which adapts the public
-transaction API. They do not import memory-node internals.
+The [client](pkg/concertum/client.go) and [SDK](sinfonia-client/client.go) connect
+these layers. Index and SQL code use the SDK without importing node internals.
 
-Transactions use `api.NewMiniTransaction().Compare(...).Read(...).Write(...)`
-followed by `ExecuteAndCommit(ctx)`. Items expose `HostId`, `Address`, and
-`Length` for reads; compare and write lengths are inferred from `Data`.
+## Keep the limits in mind
 
-## Verify
+- This is experimental code for small examples. It isn't ready for production.
+- A tree lives on one node, reads the whole reachable tree for updates, and never
+  reuses deleted pages. Searches and scans can be inconsistent during writes.
+  There are no multiversion snapshots or writable clones.
+- A bad superblock currently looks like an empty tree; a later update can
+  overwrite existing data.
+- SQL has a few `CREATE TABLE`, `INSERT`, `SELECT`, and `DELETE` forms. No joins,
+  custom schemas, or multi-statement transactions. Table regions aren't sized
+  for arbitrary growth; the demo uses one small table.
+- Replication helpers are included, but automatic failover and the services to
+  manage a cluster aren't. Real power-loss safety hasn't been tested here.
+
+[Design notes](docs/design.md) go into the details and tradeoffs.
+
+## Check it
 
 ```sh
-make check       # formatting, vet, build, and tests
-make race        # all tests with the Go race detector
+make check       # formatting, go vet, build, and tests
+make race        # tests with the Go race detector
 make demo
-make bench       # one iteration of each deterministic index benchmark
+make bench       # a quick benchmark run, not a performance claim
 ```
 
-You can also use `go test ./...`, `go test -race ./...`, `go vet ./...`, and
-`go build ./...` directly. The Make targets keep temporary test files under
-the ignored repository-local `tmp/` directory. Tests include compare failure,
-lock contention, replay/idempotency, ambiguous outcomes, durable recovery,
-replication primitives, malformed input, index rebalance invariants, SQL
-conformance, and the complete loopback demo.
+## Where it came from
 
-## Scope and limits
+This grew out of my earlier gofonia experiments. Much of the newer code was built
+with AI assistance, with me directing many design choices. The working engine
+came from Concertum; helpers and names also came from gofonia. The
+[extraction notes](docs/extraction.md) and [gofonia notes](docs/gofonia-lineage.md)
+record what came from where.
 
-This is an implementation sample with deliberately bounded scope. It retains
-the existing Go algorithms, including their tradeoffs:
-
-- Minitransactions operate on known byte ranges. Ordinary distributed commits
-  return once votes establish the decision; call `FlushPendingCommits` when
-  immediate phase-two delivery matters. Transport ambiguity can produce an
-  unknown outcome.
-- An index uses one memory node, fixed 512-byte pages, `uint64` keys and values,
-  and eight keys per node. Mutations read the reachable tree and validate/write
-  those pages in a minitransaction. The page allocator grows monotonically.
-  This favors inspectability over scale.
-- Search and scan use ordinary page reads without a final validation pass.
-  They do not provide a guaranteed consistent snapshot during concurrent
-  mutations. There is no MVCC, copy-on-write snapshot, writable clone, proxy
-  cache, or sharding of one tree across nodes.
-- SQL supports `CREATE TABLE name`, `INSERT INTO name VALUES (id, value)`,
-  `SELECT id, value FROM name` with an optional `WHERE id = n`, and
-  `DELETE FROM name WHERE id = n`. It has no joins, arbitrary schemas, or
-  multi-statement transactions. The fixed catalog holds six tables; reserved
-  index regions are small and are not an allocator for independently growing
-  tables. The demo deliberately uses one small SQL table.
-- Node replication/fencing and directory-client primitives remain because
-  they are part of the retained core. The manager, directory daemon, automatic
-  failover, and deployment lifecycle are outside this sample.
-
-See [design and tradeoffs](docs/design.md) and
-[extraction provenance](docs/extraction.md) for the exact boundary.
-
-## Research lineage
-
-[Sinfonia: a new paradigm for building scalable distributed systems](https://read.seas.harvard.edu/~kohler/class/08w-dsi/aguilera07sinfonia.pdf)
-(SOSP 2007) motivates the compare/read/write primitive and participant recovery.
-[Minuet: A Scalable Distributed Multiversion B-Tree](https://www.cs.cornell.edu/~sowell/2012-VLDB-Minuet.pdf)
-(VLDB 2012), especially its background on transactional B-trees in Section 2,
-provides the index lineage. This sample implements a smaller single-version
-index and does not claim the complete Minuet system or its published performance.
-The page format, RPC encoding, storage layout, deadline extension, and SQL
-surface are Concertum implementation choices.
-
-## License
+The papers behind the ideas are
+[Sinfonia](https://read.seas.harvard.edu/~kohler/class/08w-dsi/aguilera07sinfonia.pdf)
+and [Minuet](https://www.cs.cornell.edu/~sowell/2012-VLDB-Minuet.pdf).
+This project implements a small subset of those ideas, with its own storage
+formats and wire protocol.
 
 Licensed under the [MIT License](LICENSE).

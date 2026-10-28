@@ -76,6 +76,11 @@ filenames as historical evidence. See [gofonia-lineage.md](gofonia-lineage.md)
 and [gofonia-source-manifest.json](gofonia-source-manifest.json) for the exact
 source revision, reused code, renames, and compatibility decisions.
 
+On 2026-10-28, the README, design notes, and code comments were rewritten in
+plainer language. The README also describes the AI assistance behind much of the
+newer code. No executable Go code changed. Both source manifests still describe
+their recorded snapshots, so current comments can differ from their file hashes.
+
 ## Interview use
 
 The demo and reading guide make this a smaller entry point into existing work.

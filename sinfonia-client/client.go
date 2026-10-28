@@ -20,22 +20,21 @@ type ExecResult struct {
 	UnknownOutcome bool
 }
 
-// TxnClient is the minitransaction contract consumed by higher layers.
+// TxnClient is what the index and SQL code need from a transaction client.
 type TxnClient interface {
 	ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult
 	Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error)
 	Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
 }
 
-// TransactionDomainProvider identifies clients that can participate in the
-// same atomic minitransactions even when they are distinct wrapper instances.
+// TransactionDomainProvider lets separate client wrappers say they use the
+// same transaction backend.
 type TransactionDomainProvider interface {
 	TransactionDomainID() string
 }
 
-// SameTransactionDomain reports whether two clients target the same atomic
-// minitransaction domain. Custom clients without a domain ID must be the same
-// comparable client instance.
+// SameTransactionDomain checks whether two clients can share a transaction.
+// Without a domain ID, they must be the same comparable client instance.
 func SameTransactionDomain(a, b TxnClient) bool {
 	if a == nil || b == nil {
 		return false

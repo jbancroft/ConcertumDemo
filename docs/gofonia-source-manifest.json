@@ -5,6 +5,7 @@
   "integration_date": "2026-10-27",
   "concertum2_base_revision": "19414d45e1f92558b1c3f157d51b22e703f94b13",
   "integration_revision": "50b2623a686057752c47b02b2b76053867ae23ab",
+  "target_revision": "aa74a0b4f7ae3d0b8fc969e96aa1c9f95b11e86c",
   "naming_followup": {
     "inDoubtTx": "preparedTxn",
     "createdAt": "preparedAt",
@@ -12,7 +13,7 @@
     "redo": "redoLog",
     "logHostIds": "logParticipants"
   },
-  "scope": "Selected code adaptations, test cases, and naming provenance. Target hashes include naming_followup; integration_revision preserves the original integration commit. Naming-only entries do not claim algorithm reuse.",
+  "scope": "Selected code adaptations, test cases, and naming provenance. Target hashes describe target_revision, including naming_followup; later comment edits may differ. integration_revision preserves the original integration commit. Naming-only entries do not claim algorithm reuse.",
   "files": [
     {
       "source_path": "mini_transaction/mini_transaction.go",

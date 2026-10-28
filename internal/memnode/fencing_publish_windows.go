@@ -55,7 +55,7 @@ func removeFencingGeneration(path string) error {
 		}
 		return callErr
 	}
-	// The write-through rename durably removes the active generation name. A
-	// leftover tombstone is harmless and can be cleaned on a later pass.
+	// The write-through rename durably removes the active generation name.
+	// A leftover retired file is harmless; cleanup can wait.
 	return os.Remove(tombstone)
 }

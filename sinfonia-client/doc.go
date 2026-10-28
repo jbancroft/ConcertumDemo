@@ -1,2 +1,2 @@
-// Package sinfoniaclient exposes the public API/SDK used by higher layers.
+// Package sinfoniaclient connects the index and SQL code to the transaction API.
 package sinfoniaclient

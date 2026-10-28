@@ -61,8 +61,8 @@ func (c *DirectoryClient) UpdateEntryCAS(ctx context.Context, hostId uint32, ent
 	return c.updateEntryCAS(ctx, hostId, entry, expectedGeneration, 0, false)
 }
 
-// UpdateEntryCASRevision adds an exact store-wide revision precondition,
-// including bootstrap revision zero.
+// UpdateEntryCASRevision only updates the entry if the directory revision still
+// matches, including revision zero for a new directory.
 func (c *DirectoryClient) UpdateEntryCASRevision(ctx context.Context, hostId uint32, entry proto.DirectoryEntry, expectedGeneration, expectedRevision uint64) error {
 	return c.updateEntryCAS(ctx, hostId, entry, expectedGeneration, expectedRevision, true)
 }
