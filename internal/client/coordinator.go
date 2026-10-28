@@ -17,7 +17,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
-	"github.com/jbancroft/ConcertumDemo/mini_transaction"
 )
 
 var coordinatorIDFallback atomic.Uint64
@@ -240,21 +239,21 @@ func (c *Coordinator) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff tim
 }
 
 func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
-	uniqueHostIds := mini_transaction.NewInt64Set()
+	seen := make(map[uint32]struct{})
 	for _, i := range compares {
-		uniqueHostIds.Add(int64(c.resolveHostId(i.MemID)))
+		seen[c.resolveHostId(i.MemID)] = struct{}{}
 	}
 	for _, i := range reads {
-		uniqueHostIds.Add(int64(c.resolveHostId(i.MemID)))
+		seen[c.resolveHostId(i.MemID)] = struct{}{}
 	}
 	for _, i := range writes {
-		uniqueHostIds.Add(int64(c.resolveHostId(i.MemID)))
+		seen[c.resolveHostId(i.MemID)] = struct{}{}
 	}
-	hostIds := make([]uint32, 0, uniqueHostIds.Len())
-	uniqueHostIds.Each(func(hostId int64) bool {
-		hostIds = append(hostIds, uint32(hostId))
-		return true
-	})
+	hostIds := make([]uint32, 0, len(seen))
+	for hostId := range seen {
+		hostIds = append(hostIds, hostId)
+	}
+	sort.Slice(hostIds, func(i, j int) bool { return hostIds[i] < hostIds[j] })
 
 	attempt := 0
 	for {

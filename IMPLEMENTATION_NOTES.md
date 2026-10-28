@@ -1,5 +1,11 @@
 # Implementation notes
 
+## 2026-10-28: Host ID sets
+
+Removed the `Int64Set` wrapper. The builder and coordinator deduplicate host IDs
+with local `map[uint32]struct{}` sets. `UniqueHostIds` returns a separate, sorted
+`[]uint32` slice.
+
 ## 2026-10-28: ConcertumDemo
 
 Renamed the project and Go module to ConcertumDemo. Imports use

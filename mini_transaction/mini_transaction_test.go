@@ -3,7 +3,6 @@ package mini_transaction
 import (
 	"context"
 	"math"
-	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -57,13 +56,13 @@ func TestMiniTransactionRetainsOperationsAndOwnsData(t *testing.T) {
 	if len(tx.CompareItemsForHost(99)) != 0 || len(tx.ReadItemsForHost(99)) != 0 || len(tx.WriteItemsForHost(99)) != 0 {
 		t.Fatal("unknown host has transaction items")
 	}
-	uniqueHostIds := tx.UniqueHostIds()
-	uniqueHostIds.Remove(1)
-	uniqueHostIds.Add(99)
-	hostIds := tx.UniqueHostIds().ToInt64Slice()
-	slices.Sort(hostIds)
-	if !reflect.DeepEqual(hostIds, []int64{1, 2, 3}) {
+	hostIds := tx.UniqueHostIds()
+	if !slices.Equal(hostIds, []uint32{1, 2, 3}) {
 		t.Fatalf("host IDs=%v", hostIds)
+	}
+	hostIds[0] = 99
+	if got := tx.UniqueHostIds(); !slices.Equal(got, []uint32{1, 2, 3}) {
+		t.Fatalf("changing returned host IDs changed the transaction: %v", got)
 	}
 
 	committed, _, status := tx.ExecuteAndCommit(context.Background())
@@ -87,8 +86,11 @@ func TestMiniTransactionRetainsOperationsAndOwnsData(t *testing.T) {
 }
 
 func TestUniqueHostIdsPreservesUnsignedHostRange(t *testing.T) {
-	tx := NewMiniTransaction(nil).Read(math.MaxUint32, 0, 1)
-	if got := tx.UniqueHostIds().ToInt64Slice(); !reflect.DeepEqual(got, []int64{math.MaxUint32}) {
+	tx := NewMiniTransaction(nil).
+		Compare(math.MaxUint32, 0, []byte("old")).
+		Read(0, 0, 1).
+		Write(math.MaxUint32, 0, []byte("new"))
+	if got := tx.UniqueHostIds(); !slices.Equal(got, []uint32{0, math.MaxUint32}) {
 		t.Fatalf("host IDs=%v", got)
 	}
 }

@@ -2,6 +2,7 @@ package mini_transaction
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
@@ -105,20 +106,25 @@ func (t *MiniTransaction) WriteItemsForHost(hostId uint32) []WriteItem {
 	return result
 }
 
-// UniqueHostIds returns a new set of the hosts this transaction touches.
-// Changing the returned set won't change the transaction.
-func (t *MiniTransaction) UniqueHostIds() *Int64Set {
-	uniqueHostIds := NewInt64Set()
+// UniqueHostIds returns the hosts this transaction touches, sorted without
+// duplicates. Changing the returned slice won't change the transaction.
+func (t *MiniTransaction) UniqueHostIds() []uint32 {
+	seen := make(map[uint32]struct{})
 	for _, item := range t.compares {
-		uniqueHostIds.Add(int64(item.HostId))
+		seen[item.HostId] = struct{}{}
 	}
 	for _, item := range t.reads {
-		uniqueHostIds.Add(int64(item.HostId))
+		seen[item.HostId] = struct{}{}
 	}
 	for _, item := range t.writes {
-		uniqueHostIds.Add(int64(item.HostId))
+		seen[item.HostId] = struct{}{}
 	}
-	return uniqueHostIds
+	hostIds := make([]uint32, 0, len(seen))
+	for hostId := range seen {
+		hostIds = append(hostIds, hostId)
+	}
+	slices.Sort(hostIds)
+	return hostIds
 }
 
 func (t *MiniTransaction) ExecuteAndCommit(ctx context.Context) (bool, map[ReadKey][]byte, Status) {
