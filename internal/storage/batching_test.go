@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/proto"
-	"github.com/jbancroft/concertum2/internal/storage"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
 func TestRedoDecisionDeadlineIsAdditiveAndLegacyZeroIsOmitted(t *testing.T) {

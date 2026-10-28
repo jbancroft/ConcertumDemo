@@ -3,7 +3,7 @@ package memnode
 import (
 	"context"
 
-	"github.com/jbancroft/concertum2/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
 )
 
 // DummyNode is a stub node for tests that don't need transaction behavior.

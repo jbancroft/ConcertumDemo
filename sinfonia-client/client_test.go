@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jbancroft/concertum2/pkg/concertum"
+	"github.com/jbancroft/ConcertumDemo/pkg/concertum"
 )
 
 type domainTestBackend struct{ marker byte }

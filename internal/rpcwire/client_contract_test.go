@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
 )
 
 func TestClientNormalizesServerErrors(t *testing.T) {

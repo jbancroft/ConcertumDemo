@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/memnode"
-	"github.com/jbancroft/concertum2/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/memnode"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
 )
 
 // phaseTwoNode intercepts node calls so tests can delay or fail delivery while

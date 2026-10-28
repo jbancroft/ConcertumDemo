@@ -3,8 +3,8 @@ package client_test
 import (
 	"testing"
 
-	"github.com/jbancroft/concertum2/internal/client"
-	"github.com/jbancroft/concertum2/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/client"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
 )
 
 func TestDirectoryResolvePrimaryAndReplica(t *testing.T) {

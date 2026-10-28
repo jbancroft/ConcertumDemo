@@ -5,9 +5,9 @@ import (
 	"crypto/tls"
 	"net"
 
-	"github.com/jbancroft/concertum2/internal/auth"
-	"github.com/jbancroft/concertum2/internal/proto"
-	"github.com/jbancroft/concertum2/internal/rpcwire"
+	"github.com/jbancroft/ConcertumDemo/internal/auth"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
 func (n *Participant) requireRecoveryComplete() error {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbancroft/concertum2/pkg/concertum"
+	"github.com/jbancroft/ConcertumDemo/pkg/concertum"
 )
 
 func TestPublicAPISignaturesDoNotExposeInternalPackages(t *testing.T) {

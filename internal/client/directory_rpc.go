@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/proto"
-	"github.com/jbancroft/concertum2/internal/rpcwire"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
 var (

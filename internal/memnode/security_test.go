@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jbancroft/concertum2/internal/auth"
-	"github.com/jbancroft/concertum2/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/auth"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
 )
 
 func TestRecoveryDeniedForClientIdentity(t *testing.T) {

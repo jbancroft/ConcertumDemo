@@ -13,7 +13,7 @@
     "redo": "redoLog",
     "logHostIds": "logParticipants"
   },
-  "scope": "Selected code adaptations, test cases, and naming provenance. Target hashes describe target_revision, including naming_followup; later comment edits may differ. integration_revision preserves the original integration commit. Naming-only entries do not claim algorithm reuse.",
+  "scope": "Selected code adaptations, test cases, and naming provenance. Target hashes describe target_revision, including naming_followup; later edits may differ. integration_revision preserves the original integration commit. Naming-only entries do not claim algorithm reuse.",
   "files": [
     {
       "source_path": "mini_transaction/mini_transaction.go",

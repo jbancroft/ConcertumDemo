@@ -8,9 +8,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/jbancroft/concertum2/internal/auth"
-	"github.com/jbancroft/concertum2/internal/proto"
-	"github.com/jbancroft/concertum2/internal/storage"
+	"github.com/jbancroft/ConcertumDemo/internal/auth"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
 const (

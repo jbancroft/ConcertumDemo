@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/jbancroft/concertum2/internal/proto"
-	"github.com/jbancroft/concertum2/internal/storage"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
 func TestReplayStoreBytesReturnsDurableSnapshot(t *testing.T) {

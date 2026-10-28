@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
 )
 
 func TestExecCommit1PCRejectsExpiredCompareDeadline(t *testing.T) {

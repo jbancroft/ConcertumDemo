@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"bytes"
 	"encoding/gob"
 	"os"
 	"reflect"
@@ -27,5 +28,15 @@ func TestPrepareFrameBeforeGofoniaRenaming(t *testing.T) {
 	}
 	if !reflect.DeepEqual(message, want) {
 		t.Fatalf("old wire frame changed meaning: got %+v, want %+v", message, want)
+	}
+
+	// Old peers also need to recognize messages sent by the renamed module.
+	var encoded bytes.Buffer
+	message = want
+	if err := gob.NewEncoder(&encoded).Encode(&message); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded.Bytes(), []byte("github.com/jbancroft/concertum2/internal/proto.ExecPrepareRequest")) {
+		t.Fatal("prepare frame lost its original gob type name")
 	}
 }

@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/client"
-	"github.com/jbancroft/concertum2/internal/memnode"
-	"github.com/jbancroft/concertum2/pkg/concertum"
+	"github.com/jbancroft/ConcertumDemo/internal/client"
+	"github.com/jbancroft/ConcertumDemo/internal/memnode"
+	"github.com/jbancroft/ConcertumDemo/pkg/concertum"
 )
 
 type backoffFunc func(context.Context, int)

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	minuetindex "github.com/jbancroft/concertum2/minuet-index"
-	sinfoniaclient "github.com/jbancroft/concertum2/sinfonia-client"
+	minuetindex "github.com/jbancroft/ConcertumDemo/minuet-index"
+	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
 type memTxnClient struct {

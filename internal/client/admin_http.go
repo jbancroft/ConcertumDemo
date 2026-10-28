@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/memnode"
+	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 )
 
 type AdminHTTPClient struct {

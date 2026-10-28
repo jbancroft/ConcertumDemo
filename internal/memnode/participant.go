@@ -13,11 +13,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/auth"
-	"github.com/jbancroft/concertum2/internal/proto"
-	"github.com/jbancroft/concertum2/internal/ratelimit"
-	"github.com/jbancroft/concertum2/internal/storage"
-	"github.com/jbancroft/concertum2/mini_transaction"
+	"github.com/jbancroft/ConcertumDemo/internal/auth"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/ratelimit"
+	"github.com/jbancroft/ConcertumDemo/internal/storage"
+	"github.com/jbancroft/ConcertumDemo/mini_transaction"
 )
 
 var ErrOutOfBounds = errors.New("out of bounds")

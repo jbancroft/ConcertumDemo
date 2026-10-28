@@ -1,4 +1,4 @@
-# Concertum2
+# ConcertumDemo
 
 A small Go experiment in distributed transactions, with a B+tree and a tiny SQL
 layer on top. It's a code sample to read, run, and tinker with.

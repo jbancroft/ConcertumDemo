@@ -14,10 +14,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/memnode"
-	"github.com/jbancroft/concertum2/internal/proto"
-	"github.com/jbancroft/concertum2/internal/rpcwire"
-	"github.com/jbancroft/concertum2/mini_transaction"
+	"github.com/jbancroft/ConcertumDemo/internal/memnode"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
+	"github.com/jbancroft/ConcertumDemo/mini_transaction"
 )
 
 var coordinatorIDFallback atomic.Uint64

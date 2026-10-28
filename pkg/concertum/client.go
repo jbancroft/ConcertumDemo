@@ -7,10 +7,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/client"
-	"github.com/jbancroft/concertum2/internal/memnode"
-	"github.com/jbancroft/concertum2/internal/proto"
-	"github.com/jbancroft/concertum2/mini_transaction"
+	"github.com/jbancroft/ConcertumDemo/internal/client"
+	"github.com/jbancroft/ConcertumDemo/internal/memnode"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/mini_transaction"
 )
 
 type ReadKey = mini_transaction.ReadKey

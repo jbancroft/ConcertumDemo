@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/jbancroft/concertum2/mini_transaction"
-	"github.com/jbancroft/concertum2/pkg/concertum"
+	"github.com/jbancroft/ConcertumDemo/mini_transaction"
+	"github.com/jbancroft/ConcertumDemo/pkg/concertum"
 )
 
 type CompareItem = mini_transaction.CompareItem

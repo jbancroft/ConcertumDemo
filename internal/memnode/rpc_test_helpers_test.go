@@ -4,7 +4,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/jbancroft/concertum2/internal/memnode"
+	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 )
 
 // Extracted from the excluded manager integration tests.

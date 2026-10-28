@@ -86,6 +86,12 @@ and no-reply address. That changed its ID and the IDs of later commits, while
 preserving their file contents. Local snapshot references were updated to the
 corrected history; the source repositories and recorded file hashes are unchanged.
 
+On 2026-10-28, the project was renamed from Concertum2 to ConcertumDemo. The Go
+module and imports now use `github.com/jbancroft/ConcertumDemo`. Earlier names in
+these notes and the manifests describe the historical snapshots.
+Gob message registrations keep their original package prefix for compatibility;
+the saved prepare-frame fixture and outgoing message-name check cover that case.
+
 ## Interview use
 
 The demo and reading guide make this a smaller entry point into existing work.

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	sinfoniaclient "github.com/jbancroft/concertum2/sinfonia-client"
+	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
 const (

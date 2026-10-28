@@ -75,3 +75,10 @@ match their corrected revisions.
 
 The earlier metadata scan incorrectly flagged GitHub's service no-reply address
 as a personal email. The personal author name was the field that needed removal.
+
+## 2026-10-28: ConcertumDemo rename
+
+`make check` and `make demo` passed with the new module path. All 82 gob body
+types keep their original wire names. The frozen prepare-frame test still
+decodes old messages and checks the name used by outgoing messages. Local
+documentation links and historical snapshot hashes were checked too.

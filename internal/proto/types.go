@@ -3,7 +3,7 @@ package proto
 import (
 	"time"
 
-	"github.com/jbancroft/concertum2/mini_transaction"
+	"github.com/jbancroft/ConcertumDemo/mini_transaction"
 )
 
 // TransactionID combines a coordinator ID, counter, and epoch to identify an attempt.

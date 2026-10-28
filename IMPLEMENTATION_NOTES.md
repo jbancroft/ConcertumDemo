@@ -1,5 +1,14 @@
 # Implementation notes
 
+## 2026-10-28: ConcertumDemo
+
+Renamed the project and Go module to ConcertumDemo. Imports use
+`github.com/jbancroft/ConcertumDemo`. Historical source snapshots and their
+recorded hashes keep the earlier name.
+
+Gob message names explicitly keep their original package prefix, so the module
+rename doesn't break older peers or the saved prepare-frame fixture.
+
 ## 2026-10-28: Easier reading
 
 Rewrote the README, design notes, and code comments in plainer language. Added a

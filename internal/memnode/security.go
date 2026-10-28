@@ -7,8 +7,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/jbancroft/concertum2/internal/auth"
-	"github.com/jbancroft/concertum2/internal/ratelimit"
+	"github.com/jbancroft/ConcertumDemo/internal/auth"
+	"github.com/jbancroft/ConcertumDemo/internal/ratelimit"
 )
 
 var (

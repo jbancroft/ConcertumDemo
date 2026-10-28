@@ -14,7 +14,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/jbancroft/concertum2/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto"
 )
 
 const (

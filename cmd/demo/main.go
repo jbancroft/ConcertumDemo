@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jbancroft/concertum2/internal/client"
-	"github.com/jbancroft/concertum2/internal/memnode"
-	minuetindex "github.com/jbancroft/concertum2/minuet-index"
-	minuetsql "github.com/jbancroft/concertum2/minuet-sql"
-	"github.com/jbancroft/concertum2/pkg/concertum"
-	sinfoniaclient "github.com/jbancroft/concertum2/sinfonia-client"
+	"github.com/jbancroft/ConcertumDemo/internal/client"
+	"github.com/jbancroft/ConcertumDemo/internal/memnode"
+	minuetindex "github.com/jbancroft/ConcertumDemo/minuet-index"
+	minuetsql "github.com/jbancroft/ConcertumDemo/minuet-sql"
+	"github.com/jbancroft/ConcertumDemo/pkg/concertum"
+	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
 const balanceAddr = 768 // Separate from the SQL catalog and index pages.
