@@ -1,21 +1,12 @@
 package memnode
 
 import (
-	"context"
 	"errors"
-	"fmt"
-	"runtime"
-	"strings"
 
-	"github.com/jbancroft/ConcertumDemo/internal/auth"
 	"github.com/jbancroft/ConcertumDemo/internal/ratelimit"
 )
 
-var (
-	ErrResourceExhausted = errors.New("RESOURCE_EXHAUSTED")
-	ErrUnauthorized      = errors.New("UNAUTHORIZED")
-	ErrForbidden         = errors.New("FORBIDDEN")
-)
+var ErrResourceExhausted = errors.New("RESOURCE_EXHAUSTED")
 
 type SafetyConfig struct {
 	MaxInFlightPrepare  int
@@ -32,7 +23,6 @@ type SafetyConfig struct {
 	DebugRate    float64
 	Burst        int
 	EnableDebug  bool
-	Authorizer   *auth.Authorizer
 }
 
 func (n *Participant) ConfigureSafety(cfg SafetyConfig) {
@@ -67,55 +57,7 @@ func (n *Participant) ConfigureSafety(cfg SafetyConfig) {
 	n.commitLimiter = ratelimit.NewKeyedLimiter(cfg.CommitRate, cfg.Burst)
 	n.recoveryLimiter = ratelimit.NewKeyedLimiter(cfg.RecoveryRate, cfg.Burst)
 	n.debugLimiter = ratelimit.NewKeyedLimiter(cfg.DebugRate, cfg.Burst)
-	n.authorizer = cfg.Authorizer
 	n.enableDebugEndpoints = cfg.EnableDebug
-}
-
-func (n *Participant) authorize(ctx context.Context, allowed ...auth.Role) error {
-	if n.authorizer == nil {
-		return nil
-	}
-	id, ok := auth.FromContext(ctx)
-	if !ok {
-		n.metrics.authFailures.Inc()
-		return ErrUnauthorized
-	}
-	if n.authorizer.Policy != nil {
-		action := callerAction()
-		resource := fmt.Sprintf("memnode/%d", n.hostId)
-		if err := n.authorizer.Authorize(ctx, action, resource, allowed...); err != nil {
-			n.metrics.authFailures.Inc()
-			return ErrForbidden
-		}
-		return nil
-	}
-	for _, r := range allowed {
-		if id.Role == r {
-			return nil
-		}
-	}
-	n.metrics.authFailures.Inc()
-	return ErrForbidden
-}
-
-func callerAction() string {
-	pc, _, _, ok := runtime.Caller(2)
-	if !ok {
-		return "memnode.unknown"
-	}
-	name := runtime.FuncForPC(pc).Name()
-	if i := strings.LastIndex(name, "."); i >= 0 {
-		name = name[i+1:]
-	}
-	name = strings.TrimPrefix(name, "(*Node).")
-	var b strings.Builder
-	for i, r := range name {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			b.WriteByte('_')
-		}
-		b.WriteRune(r)
-	}
-	return "memnode." + strings.ToLower(b.String())
 }
 
 func (n *Participant) allowRate(l *ratelimit.KeyedLimiter, key string) bool {

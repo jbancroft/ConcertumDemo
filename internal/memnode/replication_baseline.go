@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/jbancroft/ConcertumDemo/internal/auth"
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
@@ -34,9 +33,6 @@ func (n *Participant) callBaselineBoundaryHookLocked(phase string) error {
 }
 
 func (n *Participant) ExportReplicationBaselineChunk(ctx context.Context, req proto.ExportReplicationBaselineChunkRequest) (proto.ExportReplicationBaselineChunkResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ExportReplicationBaselineChunkResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplPrimary {
@@ -136,9 +132,6 @@ func (n *Participant) ExportReplicationBaselineChunk(ctx context.Context, req pr
 }
 
 func (n *Participant) BeginReplicationBaseline(ctx context.Context, req proto.BeginReplicationBaselineRequest) (proto.BeginReplicationBaselineResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.BeginReplicationBaselineResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplReplica {
@@ -209,9 +202,6 @@ func (n *Participant) BeginReplicationBaseline(ctx context.Context, req proto.Be
 }
 
 func (n *Participant) WriteReplicationBaselineChunk(ctx context.Context, req proto.WriteReplicationBaselineChunkRequest) (proto.WriteReplicationBaselineChunkResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.WriteReplicationBaselineChunkResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := n.touchGlobalLockLocked(req.BarrierOwner); err != nil {
@@ -256,9 +246,6 @@ func (n *Participant) WriteReplicationBaselineChunk(ctx context.Context, req pro
 }
 
 func (n *Participant) CommitReplicationBaseline(ctx context.Context, req proto.CommitReplicationBaselineRequest) (proto.CommitReplicationBaselineResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.CommitReplicationBaselineResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := n.touchGlobalLockLocked(req.BarrierOwner); err != nil {
@@ -327,9 +314,6 @@ func (n *Participant) CommitReplicationBaseline(ctx context.Context, req proto.C
 }
 
 func (n *Participant) AbortReplicationBaseline(ctx context.Context, req proto.AbortReplicationBaselineRequest) (proto.AbortReplicationBaselineResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.AbortReplicationBaselineResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.baselineTransfer == nil {

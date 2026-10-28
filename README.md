@@ -63,6 +63,7 @@ these layers. Index and SQL code use the SDK without importing node internals.
 ## Keep the limits in mind
 
 - This is experimental code for small examples. It isn't ready for production.
+- Operations and HTTP endpoints have no authentication or authorization.
 - A tree lives on one node, reads the whole reachable tree for updates, and never
   reuses deleted pages. Searches and scans can be inconsistent during writes.
   There are no multiversion snapshots or writable clones.

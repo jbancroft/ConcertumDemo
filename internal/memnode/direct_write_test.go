@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/auth"
 	"github.com/jbancroft/ConcertumDemo/internal/client"
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
@@ -73,7 +72,7 @@ func TestDurableDirectWriteRejectedWithoutLiveOrRestartMutation(t *testing.T) {
 	assertBytesAt(t, restartedAgain, ctx, 4, []byte("mtx"))
 }
 
-func TestDurableDirectWritePreservesAuthorizationAndFencingPrecedence(t *testing.T) {
+func TestDurableDirectWritePreservesFencingPrecedence(t *testing.T) {
 	ctx := context.Background()
 	n, err := memnode.NewDurableParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
@@ -90,19 +89,13 @@ func TestDurableDirectWritePreservesAuthorizationAndFencingPrecedence(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	n.ConfigureSafety(memnode.SafetyConfig{Authorizer: &auth.Authorizer{}})
-
-	if err := n.Write(proto.WithGeneration(ctx, 41), 0, []byte("x")); !errors.Is(err, memnode.ErrUnauthorized) {
-		t.Fatalf("unauthenticated write error = %v, want %v", err, memnode.ErrUnauthorized)
-	}
-	clientCtx := auth.WithIdentity(ctx, auth.Identity{Name: "client", Role: auth.RoleClient})
-	if err := n.Write(proto.WithGeneration(clientCtx, 41), 0, []byte("x")); !errors.Is(err, memnode.ErrStaleGeneration) {
+	if err := n.Write(proto.WithGeneration(ctx, 41), 0, []byte("x")); !errors.Is(err, memnode.ErrStaleGeneration) {
 		t.Fatalf("stale write error = %v, want %v", err, memnode.ErrStaleGeneration)
 	}
-	if err := n.Write(proto.WithGeneration(clientCtx, 42), 0, []byte("x")); !errors.Is(err, memnode.ErrDirectWriteRequiresMiniTransaction) {
+	if err := n.Write(proto.WithGeneration(ctx, 42), 0, []byte("x")); !errors.Is(err, memnode.ErrDirectWriteRequiresMiniTransaction) {
 		t.Fatalf("current-generation write error = %v, want %v", err, memnode.ErrDirectWriteRequiresMiniTransaction)
 	}
-	assertBytesAt(t, n, proto.WithGeneration(clientCtx, 42), 0, []byte{0})
+	assertBytesAt(t, n, proto.WithGeneration(ctx, 42), 0, []byte{0})
 }
 
 func TestInMemoryDirectWriteRemainsSupported(t *testing.T) {

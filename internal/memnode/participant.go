@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/auth"
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
 	"github.com/jbancroft/ConcertumDemo/internal/ratelimit"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
@@ -320,7 +319,6 @@ type Participant struct {
 	commitLimiter               *ratelimit.KeyedLimiter
 	recoveryLimiter             *ratelimit.KeyedLimiter
 	debugLimiter                *ratelimit.KeyedLimiter
-	authorizer                  *auth.Authorizer
 	enableDebugEndpoints        bool
 	recoverBoundaryHook         func(phase string, txId proto.TransactionID) error
 	outcomeReplayBoundaryHook   func(phase string, txId proto.TransactionID) error
@@ -330,9 +328,6 @@ type Participant struct {
 }
 
 func (n *Participant) DescribeTransactionCapabilities(ctx context.Context, _ proto.DescribeTransactionCapabilitiesRequest) (proto.DescribeTransactionCapabilitiesResponse, error) {
-	if err := n.authorize(ctx, auth.RoleClient, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.DescribeTransactionCapabilitiesResponse{}, err
-	}
 	n.mu.Lock()
 	mode := n.mode
 	replica := n.replica
@@ -722,9 +717,6 @@ func (n *Participant) PrimaryLikelyDown(timeout time.Duration) bool {
 }
 
 func (n *Participant) ConfigureReplication(ctx context.Context, req proto.ConfigureReplicationRequest) (proto.ConfigureReplicationResponse, error) {
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ConfigureReplicationResponse{Ack: false}, err
-	}
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -795,9 +787,6 @@ func (n *Participant) ConfigureReplication(ctx context.Context, req proto.Config
 }
 
 func (n *Participant) ReplicationStatus(ctx context.Context, _ proto.ReplicationStatusRequest) (proto.ReplicationStatusResponse, error) {
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ReplicationStatusResponse{}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return proto.ReplicationStatusResponse{
@@ -812,9 +801,6 @@ func (n *Participant) ReplicationStatus(ctx context.Context, _ proto.Replication
 }
 
 func (n *Participant) Read(ctx context.Context, addr uint64, length uint32) ([]byte, error) {
-	if err := n.authorize(ctx, auth.RoleClient, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return nil, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := n.checkGenerationLocked(generationFromContext(ctx)); err != nil {
@@ -834,9 +820,6 @@ func (n *Participant) read(addr uint64, length uint32) ([]byte, error) {
 }
 
 func (n *Participant) Write(ctx context.Context, addr uint64, data []byte) error {
-	if err := n.authorize(ctx, auth.RoleClient, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := n.checkGenerationLocked(generationFromContext(ctx)); err != nil {
@@ -1029,9 +1012,6 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 	default:
 		n.metrics.rejectedRequestsTotal.Inc()
 		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrResourceExhausted
-	}
-	if err := n.authorize(ctx, auth.RoleClient, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, err
 	}
 	if requestHasDecisionDeadline(req.DecisionDeadlineNanos, req.CmpItems) && req.DeadlineDecisionProtocolVersion < proto.DeadlineDecisionProtocolVersion {
 		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrDeadlineDecisionProtocolUpgradeRequired
@@ -1264,9 +1244,6 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 }
 
 func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (resp proto.ExecCommit1PCResponse, err error) {
-	if err := n.authorize(ctx, auth.RoleClient, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, err
-	}
 	if requestHasDecisionDeadline(0, req.CmpItems) && req.DeadlineDecisionProtocolVersion < proto.DeadlineDecisionProtocolVersion {
 		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrDeadlineDecisionProtocolUpgradeRequired
 	}
@@ -1533,9 +1510,6 @@ func (n *Participant) commit(ctx context.Context, req proto.CommitRequest, recov
 	if !n.allowRate(n.commitLimiter, "commit") {
 		return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, ErrResourceExhausted
 	}
-	if err := n.authorize(ctx, auth.RoleClient, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, err
-	}
 
 	start := time.Now()
 	n.mu.Lock()
@@ -1706,9 +1680,6 @@ func (n *Participant) commitLocked(req proto.CommitRequest) (proto.CommitRespons
 }
 
 func (n *Participant) ReplicateRedoEntry(ctx context.Context, req proto.ReplicateRedoEntryRequest) (proto.ReplicateRedoEntryResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ReplicateRedoEntryResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplReplica {
@@ -1732,9 +1703,6 @@ func (n *Participant) ReplicateRedoEntry(ctx context.Context, req proto.Replicat
 }
 
 func (n *Participant) ReplicateCommitDecision(ctx context.Context, req proto.ReplicateCommitDecisionRequest) (proto.ReplicateCommitDecisionResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ReplicateCommitDecisionResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplReplica {
@@ -1753,9 +1721,6 @@ func (n *Participant) ReplicateCommitDecision(ctx context.Context, req proto.Rep
 // ReplicateReplayRecord saves a reply so a promoted replica can answer a retry
 // with the same transaction ID. Saving a reply doesn't execute the transaction.
 func (n *Participant) ReplicateReplayRecord(ctx context.Context, req proto.ReplicateReplayRecordRequest) (proto.ReplicateReplayRecordResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ReplicateReplayRecordResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplReplica {
@@ -1791,9 +1756,6 @@ func (n *Participant) ReplicateReplayRecord(ctx context.Context, req proto.Repli
 }
 
 func (n *Participant) ListCommittedTIDs(ctx context.Context, _ proto.ListCommittedTIDsRequest) (proto.ListCommittedTIDsResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ListCommittedTIDsResponse{}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	resp := proto.ListCommittedTIDsResponse{}
@@ -1809,9 +1771,6 @@ func (n *Participant) ListCommittedTIDs(ctx context.Context, _ proto.ListCommitt
 }
 
 func (n *Participant) ListRedoEntries(ctx context.Context, _ proto.ListRedoEntriesRequest) (proto.ListRedoEntriesResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ListRedoEntriesResponse{}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	resp := proto.ListRedoEntriesResponse{}
@@ -1827,9 +1786,6 @@ func (n *Participant) ListRedoEntries(ctx context.Context, _ proto.ListRedoEntri
 // ExportReplicationBaseline returns the primary's saved memory image.
 // The manager must hold the global write lock so updates can't race the copy.
 func (n *Participant) ExportReplicationBaseline(ctx context.Context, req proto.ExportReplicationBaselineRequest) (proto.ExportReplicationBaselineResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.ExportReplicationBaselineResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplPrimary {
@@ -1863,9 +1819,6 @@ func (n *Participant) ExportReplicationBaseline(ctx context.Context, req proto.E
 // The manager must hold the replica's global write lock. Saved replies stay local;
 // this call doesn't transfer them from the primary.
 func (n *Participant) InstallReplicationBaseline(ctx context.Context, req proto.InstallReplicationBaselineRequest) (proto.InstallReplicationBaselineResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.InstallReplicationBaselineResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplReplica {
@@ -2026,9 +1979,6 @@ func syncBaselineArtifact(ctx context.Context, primary PrimarySyncPeer, replica 
 }
 
 func (n *Participant) NotifyApplied(ctx context.Context, req proto.NotifyAppliedRequest) (proto.NotifyAppliedResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.NotifyAppliedResponse{Ack: false}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for _, txId := range req.TIDs {
@@ -2187,9 +2137,6 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 }
 
 func (n *Participant) RunRedoLogGCRPC(ctx context.Context, _ proto.RunRedoLogGCRequest) (proto.RunRedoLogGCResponse, error) {
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.RunRedoLogGCResponse{Ack: false}, err
-	}
 	err := n.RunRedoLogGC(ctx)
 	return proto.RunRedoLogGCResponse{Ack: err == nil}, err
 }
@@ -2223,17 +2170,11 @@ func (n *Participant) RunForcedAbortGC() error {
 }
 
 func (n *Participant) RunForcedAbortGCRPC(ctx context.Context, _ proto.RunForcedAbortGCRequest) (proto.RunForcedAbortGCResponse, error) {
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.RunForcedAbortGCResponse{Ack: false}, err
-	}
 	err := n.RunForcedAbortGC()
 	return proto.RunForcedAbortGCResponse{Ack: err == nil}, err
 }
 
 func (n *Participant) QueryTidStatus(ctx context.Context, req proto.QueryTidStatusRequest) (proto.QueryTidStatusResponse, error) {
-	if err := n.authorize(ctx, auth.RolePeer, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.QueryTidStatusResponse{}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if out, ok := n.commitOutcomes[req.TID]; ok {
@@ -2270,9 +2211,6 @@ func (n *Participant) QueryTidStatus(ctx context.Context, req proto.QueryTidStat
 }
 
 func (n *Participant) QueryInDoubt(ctx context.Context, _ proto.QueryInDoubtRequest) (proto.QueryInDoubtResponse, error) {
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.QueryInDoubtResponse{}, err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	resp := proto.QueryInDoubtResponse{Entries: make([]proto.InDoubtEntry, 0, len(n.inDoubt))}
@@ -2303,9 +2241,6 @@ func (n *Participant) TimelineForTID(txId proto.TransactionID) []proto.TxnTimeli
 func (n *Participant) RecoveryForceAbort(ctx context.Context, req proto.RecoverForceAbortRequest) (proto.RecoverForceAbortResponse, error) {
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
 		return proto.RecoverForceAbortResponse{Vote: proto.VoteBadInternal}, ErrResourceExhausted
-	}
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.RecoverForceAbortResponse{Vote: proto.VoteBadInternal}, err
 	}
 
 	n.mu.Lock()
@@ -2352,9 +2287,6 @@ func (n *Participant) RecoveryForceAbort(ctx context.Context, req proto.RecoverF
 func (n *Participant) RecoveryDecide(ctx context.Context, req proto.RecoverDecideRequest) (proto.RecoverDecideResponse, error) {
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
 		return proto.RecoverDecideResponse{Ack: false}, ErrResourceExhausted
-	}
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.RecoverDecideResponse{Ack: false}, err
 	}
 	n.mu.Lock()
 	deadlineTransaction := n.transactionHasDecisionDeadlineLocked(req.TID)
@@ -2586,9 +2518,6 @@ func (n *Participant) LockAllBlocking(ctx context.Context) error {
 }
 
 func (n *Participant) LockAllBlockingOwned(ctx context.Context, owner string) error {
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return err
-	}
 	if owner == "" {
 		return ErrReplicationBaselineLease
 	}
@@ -2644,9 +2573,6 @@ func (n *Participant) UnlockAllOwned(owner string) {
 }
 
 func (n *Participant) RenewAllOwned(ctx context.Context, owner string) error {
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return err
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := n.touchGlobalLockLocked(owner); err != nil {
@@ -2711,9 +2637,6 @@ func (n *Participant) SetGlobalBarrierLeaseTTLForTest(ttl time.Duration) {
 }
 
 func (n *Participant) BeginBackupPhase(ctx context.Context, req proto.BeginBackupPhaseRequest) (proto.BeginBackupPhaseResponse, error) {
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.BeginBackupPhaseResponse{Ack: false}, err
-	}
 	n.metrics.backupRuns.Inc()
 	n.log(slog.LevelInfo, "Backup phase transitions", "phase", "begin", "tid", req.BackupID)
 	n.mu.Lock()
@@ -2734,9 +2657,6 @@ func (n *Participant) BeginBackupPhase(ctx context.Context, req proto.BeginBacku
 }
 
 func (n *Participant) CompleteBackupPhase(ctx context.Context, req proto.CompleteBackupPhaseRequest) (proto.CompleteBackupPhaseResponse, error) {
-	if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-		return proto.CompleteBackupPhaseResponse{Ack: false}, err
-	}
 	n.log(slog.LevelInfo, "Backup phase transitions", "phase", "complete", "tid", req.BackupID)
 	n.mu.Lock()
 	if n.diskImage == nil {

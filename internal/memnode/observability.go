@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/jbancroft/ConcertumDemo/internal/auth"
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 	"io"
@@ -113,8 +112,6 @@ type nodeMetrics struct {
 	logGCRuns                 counter
 	backupRuns                counter
 	rejectedRequestsTotal     counter
-	authFailures              counter
-	tlsHandshakeFailuresTotal counter
 	rateLimitedTotal          counter
 	requestSizeRejectedTotal  counter
 
@@ -403,17 +400,13 @@ func (n *Participant) HTTPHandler(enablePrometheus bool) http.Handler {
 		if !n.enableDebugEndpoints {
 			return func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }
 		}
-		wrapped := h
-		if n.authorizer != nil {
-			wrapped = auth.RequireRole(wrapped, n.authorizer, auth.RoleAdmin)
-		}
 		return func(w http.ResponseWriter, r *http.Request) {
 			if !n.allowRate(n.debugLimiter, "debug") {
 				w.WriteHeader(http.StatusTooManyRequests)
 				_, _ = w.Write([]byte(`{"error":"RESOURCE_EXHAUSTED"}`))
 				return
 			}
-			wrapped(w, r)
+			h(w, r)
 		}
 	}
 	mux.HandleFunc("/stats", getOnly(func(w http.ResponseWriter, _ *http.Request) {
@@ -563,8 +556,6 @@ func (n *Participant) prometheusMetrics() string {
 		"concertum_log_gc_runs " + strconv.FormatUint(n.metrics.logGCRuns.Value(), 10),
 		"concertum_backup_runs " + strconv.FormatUint(n.metrics.backupRuns.Value(), 10),
 		"concertum_rejected_requests_total " + strconv.FormatUint(n.metrics.rejectedRequestsTotal.Value(), 10),
-		"concertum_auth_failures_total " + strconv.FormatUint(n.metrics.authFailures.Value(), 10),
-		"concertum_tls_handshake_failures_total " + strconv.FormatUint(n.metrics.tlsHandshakeFailuresTotal.Value(), 10),
 		"concertum_rate_limited_total " + strconv.FormatUint(n.metrics.rateLimitedTotal.Value(), 10),
 		"concertum_request_size_rejected_total " + strconv.FormatUint(n.metrics.requestSizeRejectedTotal.Value(), 10),
 	}

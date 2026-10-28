@@ -73,6 +73,37 @@ func TestPublicObservabilityEndpointsRequireGET(t *testing.T) {
 	}
 }
 
+func TestDebugEndpointAvailability(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		enable bool
+		status int
+	}{
+		{name: "disabled", status: http.StatusNotFound},
+		{name: "enabled", enable: true, status: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := NewParticipant(32)
+			n.ConfigureSafety(SafetyConfig{EnableDebug: tc.enable})
+			handler := n.HTTPHandler(false)
+			for _, path := range []string{
+				"/debug/in_doubt",
+				"/debug/redo_log_head",
+				"/debug/redo_log_inspect",
+				"/debug/txn_timeline?coord=1&counter=1&epoch=1",
+				"/debug/forced_abort",
+				"/debug/locks",
+			} {
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+				if recorder.Code != tc.status {
+					t.Errorf("%s status = %d, want %d", path, recorder.Code, tc.status)
+				}
+			}
+		})
+	}
+}
+
 func TestMetricsCommitAbortAndRetry(t *testing.T) {
 	n := NewParticipant(32)
 	tid1 := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}

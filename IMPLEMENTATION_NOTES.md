@@ -1,5 +1,11 @@
 # Implementation notes
 
+## 2026-10-28: Authentication removal
+
+Removed the authentication package, participant role and policy checks, RPC
+connection identity setup, HTTP debug authorization, and auth-related metrics.
+Operations and enabled debug endpoints are accessible without credentials.
+
 ## 2026-10-28: minitxn package
 
 Renamed the transaction package to `minitxn`. The builder is now in

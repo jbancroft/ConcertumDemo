@@ -2,10 +2,7 @@ package memnode
 
 import (
 	"context"
-	"crypto/tls"
-	"net"
 
-	"github.com/jbancroft/ConcertumDemo/internal/auth"
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
@@ -20,7 +17,7 @@ func (n *Participant) requireRecoveryComplete() error {
 }
 
 func (n *Participant) RPCServer() *rpcwire.Server {
-	srv := rpcwire.NewServer(nil, n.rpcConnContext)
+	srv := rpcwire.NewServer(nil, nil)
 	rpcwire.RegisterTyped(srv, proto.MethodRead, func(ctx context.Context, req proto.ReadRequest) (proto.ReadResponse, error) {
 		if err := n.requireRecoveryComplete(); err != nil {
 			return proto.ReadResponse{}, err
@@ -62,9 +59,6 @@ func (n *Participant) RPCServer() *rpcwire.Server {
 		return proto.BackupRenewLockResponse{Ack: err == nil}, err
 	})
 	rpcwire.RegisterTyped(srv, proto.MethodBackupUnlockAll, func(ctx context.Context, req proto.BackupUnlockAllRequest) (proto.BackupUnlockAllResponse, error) {
-		if err := n.authorize(ctx, auth.RoleManager, auth.RoleAdmin); err != nil {
-			return proto.BackupUnlockAllResponse{Ack: false}, err
-		}
 		n.UnlockAllOwned(req.Owner)
 		return proto.BackupUnlockAllResponse{Ack: true}, nil
 	})
@@ -89,21 +83,4 @@ func (n *Participant) RPCServer() *rpcwire.Server {
 	rpcwire.RegisterTyped(srv, proto.MethodConfigureReplication, n.ConfigureReplication)
 	rpcwire.RegisterTyped(srv, proto.MethodReplicationStatus, n.ReplicationStatus)
 	return srv
-}
-
-func (n *Participant) rpcConnContext(conn net.Conn) context.Context {
-	ctx := context.Background()
-	if n.authorizer == nil {
-		return ctx
-	}
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
-		return ctx
-	}
-	state := tlsConn.ConnectionState()
-	id, err := n.authorizer.AuthenticateTLS(&state)
-	if err != nil {
-		return ctx
-	}
-	return auth.WithIdentity(ctx, id)
 }
