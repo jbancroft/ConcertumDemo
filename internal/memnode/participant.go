@@ -22,7 +22,6 @@ import (
 var ErrOutOfBounds = errors.New("out of bounds")
 var ErrRecoveryPending = errors.New("participant recovery pending peer evidence")
 var ErrReplayUnavailable = errors.New("durable transaction exists without exact replay payload")
-var ErrDeadlineDecisionProtocolUpgradeRequired = errors.New("deadline decision protocol upgrade required")
 
 type ReplicationMode int
 
@@ -94,15 +93,14 @@ type commitOutcome struct {
 // preparedTxn keeps the writes and locks until a commit or abort decision arrives.
 // Durable nodes also log prepared writes so they can recover after a restart.
 type preparedTxn struct {
-	writes                []proto.WriteItem
-	readData              map[uint32][]byte
-	heldLocks             []RangeLock
-	preparedAt            time.Time
-	participants          []uint32
-	decisionDeadlineNanos int64
-	redoLoggedTid         bool
-	class                 string
-	correlationID         string
+	writes        []proto.WriteItem
+	readData      map[uint32][]byte
+	heldLocks     []RangeLock
+	preparedAt    time.Time
+	participants  []uint32
+	redoLoggedTid bool
+	class         string
+	correlationID string
 }
 
 type LockManager struct {
@@ -215,18 +213,6 @@ func overlapsAnyWrite(item minitxn.RangeItem, writes []proto.WriteItem) bool {
 	return false
 }
 
-func requestHasDecisionDeadline(deadlineNanos int64, items []proto.CmpItem) bool {
-	if deadlineNanos != 0 {
-		return true
-	}
-	for _, item := range items {
-		if !item.ValidUntil.IsZero() {
-			return true
-		}
-	}
-	return false
-}
-
 type RecoveryPeer interface {
 	QueryTidStatus(ctx context.Context, req proto.QueryTidStatusRequest) (proto.QueryTidStatusResponse, error)
 	NotifyApplied(ctx context.Context, req proto.NotifyAppliedRequest) (proto.NotifyAppliedResponse, error)
@@ -236,10 +222,6 @@ type ReplicaPeer interface {
 	ReplicateRedoEntry(ctx context.Context, req proto.ReplicateRedoEntryRequest) (proto.ReplicateRedoEntryResponse, error)
 	ReplicateCommitDecision(ctx context.Context, req proto.ReplicateCommitDecisionRequest) (proto.ReplicateCommitDecisionResponse, error)
 	ReplicateReplayRecord(ctx context.Context, req proto.ReplicateReplayRecordRequest) (proto.ReplicateReplayRecordResponse, error)
-}
-
-type deadlineDecisionCapabilityPeer interface {
-	DescribeTransactionCapabilities(context.Context, proto.DescribeTransactionCapabilitiesRequest) (proto.DescribeTransactionCapabilitiesResponse, error)
 }
 
 type PrimarySyncPeer interface {
@@ -325,24 +307,6 @@ type Participant struct {
 	baselineInstallBoundaryHook func(phase string) error
 	fencingPublicationHook      func(point string) error
 	writeApplyFaultHook         func(addr uint64, data []byte) error
-}
-
-func (n *Participant) DescribeTransactionCapabilities(ctx context.Context, _ proto.DescribeTransactionCapabilitiesRequest) (proto.DescribeTransactionCapabilitiesResponse, error) {
-	n.mu.Lock()
-	mode := n.mode
-	replica := n.replica
-	n.mu.Unlock()
-	if mode == ModeReplPrimary && replica != nil {
-		capable, ok := replica.(deadlineDecisionCapabilityPeer)
-		if !ok {
-			return proto.DescribeTransactionCapabilitiesResponse{}, nil
-		}
-		resp, err := capable.DescribeTransactionCapabilities(ctx, proto.DescribeTransactionCapabilitiesRequest{})
-		if err != nil || resp.DeadlineDecisionProtocolVersion < proto.DeadlineDecisionProtocolVersion {
-			return proto.DescribeTransactionCapabilitiesResponse{}, err
-		}
-	}
-	return proto.DescribeTransactionCapabilitiesResponse{DeadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion}, nil
 }
 
 func (n *Participant) initSafetyDefaults() {
@@ -477,12 +441,11 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 			}
 		} else {
 			n.inDoubt[e.TransactionId] = &preparedTxn{
-				writes:                cloneWrites(e.WriteItems),
-				participants:          append([]uint32(nil), e.HostIds...),
-				decisionDeadlineNanos: e.DecisionDeadlineNanos,
-				redoLoggedTid:         true,
-				preparedAt:            now,
-				correlationID:         e.TransactionId.CorrelationID(),
+				writes:        cloneWrites(e.WriteItems),
+				participants:  append([]uint32(nil), e.HostIds...),
+				redoLoggedTid: true,
+				preparedAt:    now,
+				correlationID: e.TransactionId.CorrelationID(),
 			}
 		}
 	}
@@ -1013,9 +976,6 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 		n.metrics.rejectedRequestsTotal.Inc()
 		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrResourceExhausted
 	}
-	if requestHasDecisionDeadline(req.DecisionDeadlineNanos, req.CmpItems) && req.DeadlineDecisionProtocolVersion < proto.DeadlineDecisionProtocolVersion {
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrDeadlineDecisionProtocolUpgradeRequired
-	}
 	if n.maxItemsPerTxn > 0 && len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems) > n.maxItemsPerTxn {
 		n.metrics.rejectedRequestsTotal.Inc()
 		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrResourceExhausted
@@ -1098,15 +1058,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 	if correlationID == "" {
 		correlationID = req.TID.CorrelationID()
 	}
-	decisionDeadlineNanos := req.DecisionDeadlineNanos
-	for _, item := range req.CmpItems {
-		deadline := item.ValidUntil.UnixNano()
-		if item.ValidUntil.IsZero() || (decisionDeadlineNanos != 0 && deadline >= decisionDeadlineNanos) {
-			continue
-		}
-		decisionDeadlineNanos = deadline
-	}
-	n.inDoubt[req.TID] = &preparedTxn{preparedAt: n.nowFn(), participants: append([]uint32(nil), req.Participants...), decisionDeadlineNanos: decisionDeadlineNanos, class: req.Class, correlationID: correlationID}
+	n.inDoubt[req.TID] = &preparedTxn{preparedAt: n.nowFn(), participants: append([]uint32(nil), req.Participants...), class: req.Class, correlationID: correlationID}
 	txn := n.inDoubt[req.TID]
 	n.recordTimelineLocked(req.TID, correlationID, "prepare_received", "")
 	acquired := make([]RangeLock, 0, len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems))
@@ -1168,11 +1120,6 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 	}
 
 	for _, item := range req.CmpItems {
-		if !item.ValidUntil.IsZero() && !n.nowFn().Before(item.ValidUntil) {
-			n.releaseLocks(acquired)
-			delete(n.inDoubt, req.TID)
-			return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadCmp, CurrentEpoch: currentEpoch})
-		}
 		actual, err := n.read(item.Addr, uint32(len(item.Data)))
 		if err != nil || string(actual) != string(item.Data) {
 			n.releaseLocks(acquired)
@@ -1197,7 +1144,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 	if n.redoLog != nil && (req.HasWrites || len(req.WriteItems) > 0) {
 		participants := append([]uint32(nil), req.Participants...)
 		clonedWrites := cloneWrites(req.WriteItems)
-		if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.TID, HostIds: participants, DecisionDeadlineNanos: decisionDeadlineNanos, WriteItems: clonedWrites}); err != nil {
+		if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.TID, HostIds: participants, WriteItems: clonedWrites}); err != nil {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
 			return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
@@ -1205,7 +1152,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 		if n.mode == ModeReplPrimary && n.replica != nil {
 			n.mu.Unlock()
 			replStart := time.Now()
-			replResp, replErr := n.replica.ReplicateRedoEntry(context.Background(), proto.ReplicateRedoEntryRequest{Entry: proto.RedoEntryPayload{TID: req.TID, Participants: participants, DecisionDeadlineNanos: decisionDeadlineNanos, WriteItems: clonedWrites}})
+			replResp, replErr := n.replica.ReplicateRedoEntry(context.Background(), proto.ReplicateRedoEntryRequest{Entry: proto.RedoEntryPayload{TID: req.TID, Participants: participants, WriteItems: clonedWrites}})
 			n.metrics.replicationRoundtripLatency.Observe(time.Since(replStart))
 			n.metrics.replicationEntriesSent.Inc()
 			n.mu.Lock()
@@ -1244,9 +1191,6 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 }
 
 func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (resp proto.ExecCommit1PCResponse, err error) {
-	if requestHasDecisionDeadline(0, req.CmpItems) && req.DeadlineDecisionProtocolVersion < proto.DeadlineDecisionProtocolVersion {
-		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrDeadlineDecisionProtocolUpgradeRequired
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode == ModeReplReplica {
@@ -1373,10 +1317,6 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 	}
 
 	for _, item := range req.CmpItems {
-		if !item.ValidUntil.IsZero() && !n.nowFn().Before(item.ValidUntil) {
-			n.releaseLocks(acquired)
-			return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadCmp, CurrentEpoch: currentEpoch})
-		}
 		actual, err := n.read(item.Addr, uint32(len(item.Data)))
 		if err != nil || string(actual) != string(item.Data) {
 			n.releaseLocks(acquired)
@@ -1526,9 +1466,6 @@ func (n *Participant) commit(ctx context.Context, req proto.CommitRequest, recov
 		resp.RequestID = req.RequestID
 		resp.Ack = !requestedAction || out.actionCommit
 		return resp, nil
-	}
-	if n.transactionHasDecisionDeadlineLocked(req.TID) && req.DeadlineDecisionProtocolVersion < proto.DeadlineDecisionProtocolVersion {
-		return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, ErrDeadlineDecisionProtocolUpgradeRequired
 	}
 	logged := false
 	knownDecision := false
@@ -1691,13 +1628,13 @@ func (n *Participant) ReplicateRedoEntry(ctx context.Context, req proto.Replicat
 	if n.redoLog == nil {
 		return proto.ReplicateRedoEntryResponse{Ack: false}, errors.New("redo log unavailable")
 	}
-	if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.Entry.TID, HostIds: append([]uint32(nil), req.Entry.Participants...), DecisionDeadlineNanos: req.Entry.DecisionDeadlineNanos, WriteItems: cloneWrites(req.Entry.WriteItems)}); err != nil {
+	if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.Entry.TID, HostIds: append([]uint32(nil), req.Entry.Participants...), WriteItems: cloneWrites(req.Entry.WriteItems)}); err != nil {
 		return proto.ReplicateRedoEntryResponse{Ack: false}, err
 	}
 	n.allLogTxIds[req.Entry.TID] = struct{}{}
 	n.logParticipants[req.Entry.TID] = append([]uint32(nil), req.Entry.Participants...)
 	correlationID := req.Entry.TID.CorrelationID()
-	n.inDoubt[req.Entry.TID] = &preparedTxn{writes: cloneWrites(req.Entry.WriteItems), participants: append([]uint32(nil), req.Entry.Participants...), decisionDeadlineNanos: req.Entry.DecisionDeadlineNanos, redoLoggedTid: true, preparedAt: n.nowFn(), correlationID: correlationID}
+	n.inDoubt[req.Entry.TID] = &preparedTxn{writes: cloneWrites(req.Entry.WriteItems), participants: append([]uint32(nil), req.Entry.Participants...), redoLoggedTid: true, preparedAt: n.nowFn(), correlationID: correlationID}
 	n.recordTimelineLocked(req.Entry.TID, correlationID, "replicated_prepare", "")
 	return proto.ReplicateRedoEntryResponse{Ack: true}, nil
 }
@@ -1778,7 +1715,7 @@ func (n *Participant) ListRedoEntries(ctx context.Context, _ proto.ListRedoEntri
 		return resp, nil
 	}
 	for _, entry := range n.redoLog.Entries() {
-		resp.Entries = append(resp.Entries, proto.RedoEntryPayload{TID: entry.TransactionId, Participants: append([]uint32(nil), entry.HostIds...), DecisionDeadlineNanos: entry.DecisionDeadlineNanos, WriteItems: cloneWrites(entry.WriteItems)})
+		resp.Entries = append(resp.Entries, proto.RedoEntryPayload{TID: entry.TransactionId, Participants: append([]uint32(nil), entry.HostIds...), WriteItems: cloneWrites(entry.WriteItems)})
 	}
 	return resp, nil
 }
@@ -2091,23 +2028,6 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 		return nil
 	}
 	removed := entries[:truncateCount]
-	for _, entry := range removed {
-		if entry.DecisionDeadlineNanos == 0 {
-			continue
-		}
-		committed, known := n.decided.Get(entry.TransactionId)
-		if !known || committed {
-			continue
-		}
-		if n.forcedAborts == nil {
-			return errors.New("deadline abort GC requires forced-abort storage")
-		}
-		// Removing redo loses the deadline protocol field, so save the abort
-		// first. Keep it until the protocol's epoch rules allow cleanup.
-		if err := n.forcedAborts.AddItem(entry.TransactionId); err != nil {
-			return err
-		}
-	}
 	if err := n.redoLog.TruncateHead(truncateCount); err != nil {
 		return err
 	}
@@ -2124,10 +2044,6 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 			}
 		}
 		if n.decided != nil {
-			committed, known := n.decided.Get(entry.TransactionId)
-			if entry.DecisionDeadlineNanos != 0 && known && !committed {
-				continue
-			}
 			if err := n.decided.Remove(entry.TransactionId); err != nil {
 				return err
 			}
@@ -2149,24 +2065,8 @@ func (n *Participant) RunForcedAbortGC() error {
 		return nil
 	}
 	current := n.currentEpochLocked()
-	removed, err := n.forcedAborts.GCByEpoch(current)
-	if err != nil {
-		return err
-	}
-	// Keep a deadline abort until its forced-abort marker has been removed
-	// durably under the epoch rules.
-	for _, txId := range removed {
-		if n.decided == nil {
-			continue
-		}
-		committed, known := n.decided.Get(txId)
-		if _, logged := n.allLogTxIds[txId]; !logged && known && !committed {
-			if err := n.decided.Remove(txId); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	_, err := n.forcedAborts.GCByEpoch(current)
+	return err
 }
 
 func (n *Participant) RunForcedAbortGCRPC(ctx context.Context, _ proto.RunForcedAbortGCRequest) (proto.RunForcedAbortGCResponse, error) {
@@ -2245,9 +2145,6 @@ func (n *Participant) RecoveryForceAbort(ctx context.Context, req proto.RecoverF
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.transactionHasDecisionDeadlineLocked(req.TID) && req.DeadlineDecisionProtocolVersion < proto.DeadlineDecisionProtocolVersion {
-		return proto.RecoverForceAbortResponse{Vote: proto.VoteBadInternal}, ErrDeadlineDecisionProtocolUpgradeRequired
-	}
 	correlationID := req.CorrelationID
 	if correlationID == "" {
 		correlationID = n.correlationForTIDLocked(req.TID)
@@ -2288,23 +2185,11 @@ func (n *Participant) RecoveryDecide(ctx context.Context, req proto.RecoverDecid
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
 		return proto.RecoverDecideResponse{Ack: false}, ErrResourceExhausted
 	}
-	n.mu.Lock()
-	deadlineTransaction := n.transactionHasDecisionDeadlineLocked(req.TID)
-	n.mu.Unlock()
-	if deadlineTransaction && req.DeadlineDecisionProtocolVersion < proto.DeadlineDecisionProtocolVersion {
-		return proto.RecoverDecideResponse{Ack: false}, ErrDeadlineDecisionProtocolUpgradeRequired
-	}
-
-	resp, err := n.commit(ctx, proto.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit, CorrelationID: req.CorrelationID, DeadlineDecisionProtocolVersion: req.DeadlineDecisionProtocolVersion}, true)
+	resp, err := n.commit(ctx, proto.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit, CorrelationID: req.CorrelationID}, true)
 	if err != nil {
 		return proto.RecoverDecideResponse{Ack: false}, err
 	}
 	return proto.RecoverDecideResponse{Ack: resp.Ack}, nil
-}
-
-func (n *Participant) transactionHasDecisionDeadlineLocked(txId proto.TransactionID) bool {
-	txn := n.inDoubt[txId]
-	return txn != nil && txn.decisionDeadlineNanos != 0
 }
 
 // Recover resolves logged transactions using saved decisions and peer evidence.

@@ -54,7 +54,7 @@ func (b *coordinatorBackend) GetStats(hostId uint32) (concertum.Stats, error) {
 func (b *coordinatorBackend) ExecuteAndCommit(ctx context.Context, class string, compares []concertum.CompareItem, reads []concertum.ReadItem, writes []concertum.WriteItem) concertum.ExecResult {
 	internalCmp := make([]proto.CmpItem, 0, len(compares))
 	for _, item := range compares {
-		internalCmp = append(internalCmp, proto.CmpItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...), ValidUntil: item.ValidUntil})
+		internalCmp = append(internalCmp, proto.CmpItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
 	}
 	internalReads := make([]proto.ReadItem, 0, len(reads))
 	for _, item := range reads {

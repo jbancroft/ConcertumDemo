@@ -1,7 +1,6 @@
 package storage_test
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,42 +11,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
-
-func TestRedoDecisionDeadlineIsAdditiveAndLegacyZeroIsOmitted(t *testing.T) {
-	legacyDir := filepath.Join(t.TempDir(), "legacy")
-	legacy, err := storage.OpenRedoLog(legacyDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.AddItem(storage.RedoLogItem{TransactionId: proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, HostIds: []uint32{1}}); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(filepath.Join(legacyDir, "redo.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(raw, []byte("decision_deadline_nanos")) {
-		t.Fatalf("zero deadline changed legacy redo encoding: %s", raw)
-	}
-
-	deadlineDir := filepath.Join(t.TempDir(), "deadline")
-	deadlineLog, err := storage.OpenRedoLog(deadlineDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const deadline = int64(123456789)
-	if err := deadlineLog.AddItem(storage.RedoLogItem{TransactionId: proto.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 1}, HostIds: []uint32{1, 2}, DecisionDeadlineNanos: deadline}); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := storage.OpenRedoLog(deadlineDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	entries := reopened.Entries()
-	if len(entries) != 1 || entries[0].DecisionDeadlineNanos != deadline {
-		t.Fatalf("deadline redo round trip: %+v", entries)
-	}
-}
 
 func TestRedoLogBatchingReducesFsyncCallsAndPreservesDurability(t *testing.T) {
 	dir := t.TempDir()

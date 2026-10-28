@@ -3,7 +3,6 @@ package minitxn
 import (
 	"context"
 	"slices"
-	"time"
 )
 
 // Executor runs a completed transaction. The coordinator gives each attempt,
@@ -27,13 +26,7 @@ func NewMiniTransaction(executor Executor) *MiniTransaction {
 }
 
 func (t *MiniTransaction) Compare(hostId uint32, address uint64, data []byte) *MiniTransaction {
-	return t.CompareValidUntil(hostId, address, data, time.Time{})
-}
-
-// CompareValidUntil requires matching bytes and a commit decision before the
-// deadline. A zero time means there's no deadline; equality is already too late.
-func (t *MiniTransaction) CompareValidUntil(hostId uint32, address uint64, data []byte, validUntil time.Time) *MiniTransaction {
-	t.compares = append(t.compares, CompareItem{HostId: hostId, Address: address, Data: append([]byte(nil), data...), ValidUntil: validUntil})
+	t.compares = append(t.compares, CompareItem{HostId: hostId, Address: address, Data: append([]byte(nil), data...)})
 	return t
 }
 

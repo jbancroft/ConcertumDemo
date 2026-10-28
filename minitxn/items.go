@@ -2,8 +2,6 @@
 // The builder and item names come from the earlier gofonia project.
 package minitxn
 
-import "time"
-
 // RangeItem gives the byte offset and size of a compare, read, or write.
 type RangeItem interface {
 	Offset() uint64
@@ -11,10 +9,9 @@ type RangeItem interface {
 }
 
 type CompareItem struct {
-	HostId     uint32
-	Address    uint64
-	Data       []byte
-	ValidUntil time.Time
+	HostId  uint32
+	Address uint64
+	Data    []byte
 }
 
 func (i CompareItem) Offset() uint64 { return i.Address }

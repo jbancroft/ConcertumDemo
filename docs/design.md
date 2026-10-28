@@ -50,10 +50,6 @@ the transaction aborted. The API reports committed, aborted, or unknown.
 Participants remember replies so duplicate requests can get the same result
 without applying writes twice.
 
-`CompareValidUntil` also places a deadline on the commit decision. For writes,
-this path saves the decision on a participant before returning success. It's an
-extension in this project, rather than part of the original Sinfonia primitive.
-
 ## Disk storage and recovery
 
 A durable node saves its memory image, redo entries, decisions, forced-abort

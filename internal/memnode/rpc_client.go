@@ -19,11 +19,6 @@ type RPCPeer struct {
 	owner string
 }
 
-func (p *RPCPeer) DescribeTransactionCapabilities(ctx context.Context, req proto.DescribeTransactionCapabilitiesRequest) (proto.DescribeTransactionCapabilitiesResponse, error) {
-	var out proto.DescribeTransactionCapabilitiesResponse
-	return out, p.rpc.Call(ctx, proto.MethodTransactionCapabilities, req, &out)
-}
-
 func NewRPCPeer(addr string, tlsConfig *tls.Config, timeout time.Duration) *RPCPeer {
 	if timeout <= 0 {
 		timeout = 5 * time.Second

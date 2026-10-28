@@ -3,38 +3,9 @@ package memnode
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
 )
-
-func TestExecCommit1PCRejectsExpiredCompareDeadline(t *testing.T) {
-	ctx := context.Background()
-	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
-	n := NewParticipant(8)
-	n.SetEpochSourceForTest(time.Hour, func() time.Time { return now })
-	if err := n.Write(ctx, 0, []byte("A")); err != nil {
-		t.Fatal(err)
-	}
-	deadline := now.Add(time.Minute)
-	now = deadline
-	resp, err := n.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{
-		TID:                             proto.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1},
-		RequestID:                       "expired-compare",
-		CmpItems:                        []proto.CmpItem{{MemID: 1, Addr: 0, Data: []byte("A"), ValidUntil: deadline}},
-		WriteItems:                      []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("B")}},
-		Epoch:                           1,
-		Generation:                      0,
-		DeadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion,
-	})
-	if err != nil || resp.Vote != proto.VoteBadCmp {
-		t.Fatalf("expired compare resp=%+v err=%v", resp, err)
-	}
-	got, err := n.Read(ctx, 0, 1)
-	if err != nil || string(got) != "A" {
-		t.Fatalf("expired compare applied write: got=%q err=%v", got, err)
-	}
-}
 
 func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testing.T) {
 	n := NewParticipant(8)

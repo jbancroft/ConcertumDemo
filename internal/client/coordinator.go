@@ -5,7 +5,6 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"log"
 	"math/rand"
 	"sort"
@@ -21,8 +20,6 @@ import (
 
 var coordinatorIDFallback atomic.Uint64
 
-var ErrDeadlineDecisionProtocolUpgradeRequired = errors.New("deadline decision protocol upgrade required")
-
 // Participant is the node interface used by the coordinator.
 type Participant interface {
 	Read(ctx context.Context, addr uint64, length uint32) ([]byte, error)
@@ -31,10 +28,6 @@ type Participant interface {
 	ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error)
 	Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error)
 	CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error)
-}
-
-type deadlineDecisionCapable interface {
-	DescribeTransactionCapabilities(context.Context, proto.DescribeTransactionCapabilitiesRequest) (proto.DescribeTransactionCapabilitiesResponse, error)
 }
 
 type StatsReader interface {
@@ -277,14 +270,13 @@ type prepareResult struct {
 }
 
 type commitDispatch struct {
-	tid                             proto.TransactionID
-	requestID                       proto.RequestID
-	correlationID                   string
-	actionCommit                    bool
-	generation                      uint64
-	deadlineDecisionProtocolVersion uint16
-	barrier                         bool
-	respC                           chan error
+	tid           proto.TransactionID
+	requestID     proto.RequestID
+	correlationID string
+	actionCommit  bool
+	generation    uint64
+	barrier       bool
+	respC         chan error
 }
 
 type rpcWorker struct {
@@ -380,13 +372,13 @@ func (w *rpcWorker) runCommitBatcher() {
 		stopTimer()
 		decisions := make([]proto.CommitRequest, 0, len(batch))
 		for _, d := range batch {
-			decisions = append(decisions, proto.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation, DeadlineDecisionProtocolVersion: d.deadlineDecisionProtocolVersion})
+			decisions = append(decisions, proto.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation})
 		}
 		resp, err := w.node.CommitBatch(context.Background(), proto.CommitBatchRequest{Decisions: decisions})
 		var firstErr error
 		if err != nil {
 			for _, d := range batch {
-				commitResp, err2 := w.node.Commit(context.Background(), proto.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation, DeadlineDecisionProtocolVersion: d.deadlineDecisionProtocolVersion})
+				commitResp, err2 := w.node.Commit(context.Background(), proto.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation})
 				if err2 != nil {
 					log.Printf("commit rpc failed for memnode %d tid=%+v: %v", w.hostId, d.tid, err2)
 					if firstErr == nil {
@@ -460,12 +452,6 @@ func (w *rpcWorker) flushPending(ctx context.Context) error {
 }
 
 func (c *Coordinator) execAttempt(ctx context.Context, txId proto.TransactionID, hostIds []uint32, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) (ExecResult, bool) {
-	decisionDeadlineNanos := earliestDecisionDeadlineNanos(compares)
-	if decisionDeadlineNanos != 0 {
-		if err := c.requireDeadlineDecisionProtocol(ctx, hostIds); err != nil {
-			return ExecResult{Committed: false, ReadResults: map[proto.ReadItem][]byte{}, Status: proto.VoteBadInternal, TransportErr: err}, false
-		}
-	}
 	if len(hostIds) == 1 {
 		return c.execSingleParticipant1PC(ctx, txId, hostIds[0], class, compares, reads, writes), false
 	}
@@ -482,19 +468,17 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId proto.TransactionID,
 			}
 			reqReads := readItemsForHost(hostId, reads, c.resolveHostId)
 			worker.prepareCh <- prepareCall{ctx: ctx, req: proto.ExecPrepareRequest{
-				TID:                             txId,
-				RequestID:                       proto.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
-				CorrelationID:                   txId.CorrelationID(),
-				Participants:                    append([]uint32(nil), hostIds...),
-				HasWrites:                       len(writes) > 0,
-				DecisionDeadlineNanos:           decisionDeadlineNanos,
-				DeadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion,
-				CmpItems:                        compareItemsForHost(hostId, compares, c.resolveHostId),
-				ReadItems:                       reqReads,
-				WriteItems:                      writeItemsForHost(hostId, writes, c.resolveHostId),
-				Epoch:                           txId.Epoch,
-				Class:                           class,
-				Generation:                      c.generationFor(hostId),
+				TID:           txId,
+				RequestID:     proto.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
+				CorrelationID: txId.CorrelationID(),
+				Participants:  append([]uint32(nil), hostIds...),
+				HasWrites:     len(writes) > 0,
+				CmpItems:      compareItemsForHost(hostId, compares, c.resolveHostId),
+				ReadItems:     reqReads,
+				WriteItems:    writeItemsForHost(hostId, writes, c.resolveHostId),
+				Epoch:         txId.Epoch,
+				Class:         class,
+				Generation:    c.generationFor(hostId),
 			}, respC: results}
 		}(hostId)
 	}
@@ -531,27 +515,12 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId proto.TransactionID,
 		}
 		c.observeEpoch(r.resp.CurrentEpoch)
 	}
-	if decideCommit && !comparisonsValidAt(compares, time.Now()) {
-		decideCommit = false
-		status = proto.VoteBadCmp
-	}
-	decisionWitness := uint32(0)
-	if decisionDeadlineNanos != 0 && len(writes) > 0 && allVotesOK(participantVotes, hostIds) {
-		var err error
-		decisionWitness, err = c.persistConditionalDecision(ctx, txId, hostIds, decideCommit)
-		if err != nil {
-			return ExecResult{Committed: false, UnknownOutcome: true, ReadResults: map[proto.ReadItem][]byte{}, Status: proto.VoteBadInternal, ParticipantVotes: participantVotes, TransportErr: err}, false
-		}
-	}
 	for _, hostId := range hostIds {
-		if hostId == decisionWitness {
-			continue
-		}
 		c.workersMu.Lock()
 		worker := c.workers[hostId]
 		c.workersMu.Unlock()
 		if worker != nil {
-			worker.commitCh <- commitDispatch{tid: txId, requestID: proto.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(hostId), 10)), correlationID: txId.CorrelationID(), actionCommit: decideCommit, generation: c.generationFor(hostId), deadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion}
+			worker.commitCh <- commitDispatch{tid: txId, requestID: proto.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(hostId), 10)), correlationID: txId.CorrelationID(), actionCommit: decideCommit, generation: c.generationFor(hostId)}
 		}
 	}
 
@@ -561,86 +530,6 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId proto.TransactionID,
 	return ExecResult{Committed: true, ReadResults: aggregatedReads, Status: proto.VoteOk, ParticipantVotes: participantVotes}, false
 }
 
-func (c *Coordinator) persistConditionalDecision(ctx context.Context, txId proto.TransactionID, hostIds []uint32, actionCommit bool) (uint32, error) {
-	ordered := append([]uint32(nil), hostIds...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
-	if len(ordered) == 0 {
-		return 0, ErrUnknownMemNode
-	}
-	witness := ordered[0]
-	c.workersMu.Lock()
-	worker := c.workers[witness]
-	c.workersMu.Unlock()
-	if worker == nil {
-		return 0, ErrUnknownMemNode
-	}
-	resp, err := worker.node.Commit(ctx, proto.CommitRequest{
-		TID: txId, RequestID: proto.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(witness), 10)),
-		CorrelationID: txId.CorrelationID(), ActionCommit: actionCommit, Generation: c.generationFor(witness),
-		DeadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion,
-	})
-	if err != nil {
-		return 0, err
-	}
-	if !resp.Ack {
-		return 0, errors.New("conditional decision was not acknowledged")
-	}
-	return witness, nil
-}
-
-func allVotesOK(votes map[uint32]proto.Vote, hostIds []uint32) bool {
-	for _, participant := range hostIds {
-		vote, ok := votes[participant]
-		if !ok || vote != proto.VoteOk {
-			return false
-		}
-	}
-	return true
-}
-
-func (c *Coordinator) requireDeadlineDecisionProtocol(ctx context.Context, hostIds []uint32) error {
-	ordered := append([]uint32(nil), hostIds...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
-	for _, hostId := range ordered {
-		node := c.nodes[hostId]
-		capable, ok := node.(deadlineDecisionCapable)
-		if !ok {
-			return fmt.Errorf("%w: memnode %d does not report capabilities", ErrDeadlineDecisionProtocolUpgradeRequired, hostId)
-		}
-		resp, err := capable.DescribeTransactionCapabilities(ctx, proto.DescribeTransactionCapabilitiesRequest{})
-		if err != nil {
-			return fmt.Errorf("%w: memnode %d: %v", ErrDeadlineDecisionProtocolUpgradeRequired, hostId, err)
-		}
-		if resp.DeadlineDecisionProtocolVersion < proto.DeadlineDecisionProtocolVersion {
-			return fmt.Errorf("%w: memnode %d reports version %d", ErrDeadlineDecisionProtocolUpgradeRequired, hostId, resp.DeadlineDecisionProtocolVersion)
-		}
-	}
-	return nil
-}
-
-func earliestDecisionDeadlineNanos(items []proto.CmpItem) int64 {
-	var earliest time.Time
-	for _, item := range items {
-		if item.ValidUntil.IsZero() || (!earliest.IsZero() && !item.ValidUntil.Before(earliest)) {
-			continue
-		}
-		earliest = item.ValidUntil
-	}
-	if earliest.IsZero() {
-		return 0
-	}
-	return earliest.UnixNano()
-}
-
-func comparisonsValidAt(items []proto.CmpItem, now time.Time) bool {
-	for _, item := range items {
-		if !item.ValidUntil.IsZero() && !now.Before(item.ValidUntil) {
-			return false
-		}
-	}
-	return true
-}
-
 func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId proto.TransactionID, hostId uint32, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
 	node, ok := c.nodes[hostId]
 	if !ok {
@@ -648,16 +537,15 @@ func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId proto.T
 	}
 	reqReads := readItemsForHost(hostId, reads, c.resolveHostId)
 	resp, err := node.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{
-		TID:                             txId,
-		RequestID:                       proto.RequestID(txId.CorrelationID() + ":1pc:" + strconv.FormatUint(uint64(hostId), 10)),
-		CorrelationID:                   txId.CorrelationID(),
-		CmpItems:                        compareItemsForHost(hostId, compares, c.resolveHostId),
-		ReadItems:                       reqReads,
-		WriteItems:                      writeItemsForHost(hostId, writes, c.resolveHostId),
-		Epoch:                           txId.Epoch,
-		Class:                           class,
-		Generation:                      c.generationFor(hostId),
-		DeadlineDecisionProtocolVersion: proto.DeadlineDecisionProtocolVersion,
+		TID:           txId,
+		RequestID:     proto.RequestID(txId.CorrelationID() + ":1pc:" + strconv.FormatUint(uint64(hostId), 10)),
+		CorrelationID: txId.CorrelationID(),
+		CmpItems:      compareItemsForHost(hostId, compares, c.resolveHostId),
+		ReadItems:     reqReads,
+		WriteItems:    writeItemsForHost(hostId, writes, c.resolveHostId),
+		Epoch:         txId.Epoch,
+		Class:         class,
+		Generation:    c.generationFor(hostId),
 	})
 	if err != nil {
 		var remoteErr *rpcwire.RemoteError

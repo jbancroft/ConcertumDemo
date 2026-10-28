@@ -1,10 +1,6 @@
 package proto
 
-import (
-	"time"
-
-	"github.com/jbancroft/ConcertumDemo/minitxn"
-)
+import "github.com/jbancroft/ConcertumDemo/minitxn"
 
 // TransactionID combines a coordinator ID, counter, and epoch to identify an attempt.
 type TransactionID struct {
@@ -32,13 +28,11 @@ func itoa64(v uint64) string {
 	return string(buf[i:])
 }
 
-// CmpItem requires the bytes at (MemID, Addr) to match Data. ValidUntil can also
-// put a deadline on the transaction decision, including during recovery.
+// CmpItem requires the bytes at (MemID, Addr) to match Data.
 type CmpItem struct {
-	MemID      uint32
-	Addr       uint64
-	Data       []byte
-	ValidUntil time.Time
+	MemID uint32
+	Addr  uint64
+	Data  []byte
 }
 
 func (i CmpItem) Offset() uint64 { return i.Addr }

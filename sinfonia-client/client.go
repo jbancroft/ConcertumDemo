@@ -106,11 +106,7 @@ func (c *Client) Write(ctx context.Context, hostId uint32, addr uint64, data []b
 func (c *Client) ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult {
 	tx := c.inner.NewMiniTransaction().WithClass(class)
 	for _, item := range compares {
-		if item.ValidUntil.IsZero() {
-			tx.Compare(item.HostId, item.Address, item.Data)
-		} else {
-			tx.CompareValidUntil(item.HostId, item.Address, item.Data, item.ValidUntil)
-		}
+		tx.Compare(item.HostId, item.Address, item.Data)
 	}
 	for _, item := range reads {
 		tx.Read(item.HostId, item.Address, item.Length)

@@ -32,7 +32,6 @@ func (n *Participant) RPCServer() *rpcwire.Server {
 		err := n.Write(proto.WithGeneration(ctx, req.Generation), req.Addr, req.Data)
 		return proto.WriteResponse{Ack: err == nil}, err
 	})
-	rpcwire.RegisterTyped(srv, proto.MethodTransactionCapabilities, n.DescribeTransactionCapabilities)
 	rpcwire.RegisterTyped(srv, proto.MethodExecPrepare, func(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
 		if err := n.requireRecoveryComplete(); err != nil {
 			return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, err

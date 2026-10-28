@@ -43,11 +43,6 @@ func (n *RPCParticipant) Write(ctx context.Context, addr uint64, data []byte) er
 	return n.rpc.Call(ctx, proto.MethodWrite, proto.WriteRequest{Addr: addr, Data: data, Generation: n.generation}, &out)
 }
 
-func (n *RPCParticipant) DescribeTransactionCapabilities(ctx context.Context, req proto.DescribeTransactionCapabilitiesRequest) (proto.DescribeTransactionCapabilitiesResponse, error) {
-	var out proto.DescribeTransactionCapabilitiesResponse
-	return out, n.rpc.Call(ctx, proto.MethodTransactionCapabilities, req, &out)
-}
-
 func (n *RPCParticipant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
 	var out proto.ExecPrepareResponse
 	if req.Generation == 0 {

@@ -69,8 +69,6 @@ func registerGobTypes() {
 		ReadResponse{},
 		WriteRequest{},
 		WriteResponse{},
-		DescribeTransactionCapabilitiesRequest{},
-		DescribeTransactionCapabilitiesResponse{},
 		ExecPrepareRequest{},
 		ExecPrepareResponse{},
 		CommitRequest{},

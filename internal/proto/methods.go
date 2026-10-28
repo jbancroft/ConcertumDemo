@@ -33,7 +33,6 @@ const (
 	MethodQueryTidStatus                 = "memnode.query_tid_status"
 	MethodConfigureReplication           = "memnode.configure_replication"
 	MethodReplicationStatus              = "memnode.replication_status"
-	MethodTransactionCapabilities        = "memnode.describe_transaction_capabilities"
 
 	MethodDirectory   = "dirserver.directory"
 	MethodResolve     = "dirserver.resolve"

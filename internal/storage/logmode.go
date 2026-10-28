@@ -21,10 +21,9 @@ import (
 )
 
 type RedoLogItem struct {
-	TransactionId         proto.TransactionID `json:"tid"`
-	HostIds               []uint32            `json:"participants"`
-	DecisionDeadlineNanos int64               `json:"decision_deadline_nanos,omitempty"`
-	WriteItems            []proto.WriteItem   `json:"write_items"`
+	TransactionId proto.TransactionID `json:"tid"`
+	HostIds       []uint32            `json:"participants"`
+	WriteItems    []proto.WriteItem   `json:"write_items"`
 }
 
 type DiskImage struct {

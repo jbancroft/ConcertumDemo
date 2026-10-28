@@ -5,7 +5,6 @@ import (
 	"math"
 	"slices"
 	"testing"
-	"time"
 )
 
 type recordingExecutor struct {
@@ -24,11 +23,10 @@ func TestMiniTransactionRetainsOperationsAndOwnsData(t *testing.T) {
 	executor := &recordingExecutor{}
 	tx := NewMiniTransaction(executor).WithClass("gofonia")
 	compareData, writeData := []byte("compare"), []byte("write")
-	deadline := time.Date(2026, time.October, 27, 12, 0, 0, 0, time.UTC)
 	// Separate calls catch gofonia's old value-receiver bug: operations must
 	// stay in the builder even when the caller ignores the return value.
 	tx.Compare(1, 4, compareData)
-	tx.CompareValidUntil(2, 8, []byte("other"), deadline)
+	tx.Compare(2, 8, []byte("other"))
 	tx.Read(2, 12, 4)
 	tx.Read(3, 16, 8)
 	tx.Write(1, 20, writeData)
@@ -72,8 +70,8 @@ func TestMiniTransactionRetainsOperationsAndOwnsData(t *testing.T) {
 	if len(executor.compares) != 2 || len(executor.reads) != 2 || len(executor.writes) != 2 {
 		t.Fatalf("executor lost operations: %+v", executor)
 	}
-	if string(executor.compares[0].Data) != "compare" || string(executor.writes[0].Data) != "write" || !executor.compares[1].ValidUntil.Equal(deadline) {
-		t.Fatal("buffered data or deadline changed through a caller-owned slice")
+	if string(executor.compares[0].Data) != "compare" || string(executor.compares[1].Data) != "other" || string(executor.writes[0].Data) != "write" {
+		t.Fatal("buffered data changed through a caller-owned slice")
 	}
 	if executor.reads[0].Address != 12 || executor.reads[0].Length != 4 {
 		t.Fatal("read projection mutated the transaction")
