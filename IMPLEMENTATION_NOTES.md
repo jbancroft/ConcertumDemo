@@ -1,5 +1,10 @@
 # Implementation notes
 
+## 2026-10-28: minitxn package
+
+Renamed the transaction package to `minitxn`. The builder is now in
+`minitxn/transaction.go`.
+
 ## 2026-10-28: Host ID sets
 
 Removed the `Int64Set` wrapper. The builder and coordinator deduplicate host IDs
@@ -35,7 +40,7 @@ Adapted the original transaction builder, host projections, `RangeItem`,
 `Int64Set`, vote names, and range-overlap checks from gofonia. Restored names
 including `MiniTransaction`, `CompareItem`, `HostId`, `Address`, `Participant`,
 `inDoubtTx`, `RedoLogItem`, `DecidedTransactionLog`, `ForcedAbortLog`, and `BTree`.
-The public client and SDK share the `mini_transaction` item definitions.
+The public client and SDK share the item definitions, now in `minitxn`.
 
 The working transaction, recovery, replication, and B+tree algorithms remain
 derived from Concertum. The overlap scan now checks earlier long read locks

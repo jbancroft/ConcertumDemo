@@ -1,4 +1,4 @@
-package mini_transaction
+package minitxn
 
 import "testing"
 

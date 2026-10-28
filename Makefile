@@ -8,8 +8,8 @@ prepare:
 check: fmt-check vet build test
 
 fmt-check:
-	@test -z "$$(gofmt -l cmd internal mini_transaction minuet-index minuet-sql pkg sinfonia-client)" || \
-		{ gofmt -l cmd internal mini_transaction minuet-index minuet-sql pkg sinfonia-client; exit 1; }
+	@test -z "$$(gofmt -l cmd internal minitxn minuet-index minuet-sql pkg sinfonia-client)" || \
+		{ gofmt -l cmd internal minitxn minuet-index minuet-sql pkg sinfonia-client; exit 1; }
 
 vet: prepare
 	go vet ./...

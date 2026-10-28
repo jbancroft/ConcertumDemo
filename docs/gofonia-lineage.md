@@ -29,10 +29,10 @@ the chronology of the original work.
 
 | Original gofonia code | Current use | Adaptations |
 | --- | --- | --- |
-| `mini_transaction/mini_transaction.go` | `mini_transaction/mini_transaction.go` | Builder and per-host projections use pointer receivers, copied byte slices, context-aware execution, and an explicit executor instead of global hosts. |
-| `compare_item.go`, `read_item.go`, `write_item.go` | `mini_transaction/items.go` | Retains `CompareItem`, `ReadItem`, `WriteItem`, `HostId`, `Address`, `Length`, and `Offset`/`Size`. Host IDs and addresses retain unsigned widths; compare/write lengths come from `Data`. |
+| `mini_transaction/mini_transaction.go` | `minitxn/transaction.go` | Builder and per-host projections use pointer receivers, copied byte slices, context-aware execution, and an explicit executor instead of global hosts. |
+| `compare_item.go`, `read_item.go`, `write_item.go` | `minitxn/items.go` | Retains `CompareItem`, `ReadItem`, `WriteItem`, `HostId`, `Address`, `Length`, and `Offset`/`Size`. Host IDs and addresses retain unsigned widths; compare/write lengths come from `Data`. |
 | `mini_transaction/int64_set.go` | Removed after the initial integration | Host discovery now uses local `map[uint32]struct{}` sets. `UniqueHostIds` returns sorted `[]uint32` IDs without converting them to `int64`. |
-| `mini_transaction/vote.go` | `mini_transaction/vote.go`, re-exported internally by `proto` | Retains `VoteOk` and printable names. Existing numeric wire values are preserved; `VoteUnknown` uses `-1` rather than displacing the existing success value. |
+| `mini_transaction/vote.go` | `minitxn/vote.go`, re-exported internally by `proto` | Retains `VoteOk` and printable names. Existing numeric wire values are preserved; `VoteUnknown` uses `-1` rather than displacing the existing success value. |
 | `mutex/range_lock.go` | `RangeLock.OverlapsWith` in the participant | Adapts the overlap predicate to existing endpoint-based locks and handles empty ranges explicitly. The existing participant mutex protects lock state. |
 | Range-lock tests | Corresponding participant tests | Retains useful boundary cases and adds the nested-reader regression. |
 
@@ -41,7 +41,7 @@ the chronology of the original work.
 returned collection cannot change the transaction. Execution also receives its
 own operation bytes. Gofonia's original builder returned slices into its state.
 
-The `Int64Set` wrapper and its tests were
+The package is now named `minitxn`. The `Int64Set` wrapper and its tests were
 removed; transaction tests cover unique host IDs, the unsigned ID range, and
 returned-slice ownership. The source manifest still records the earlier snapshot,
 including its original paths and set implementation.

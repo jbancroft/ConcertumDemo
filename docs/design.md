@@ -8,7 +8,7 @@ flowchart TD
     SQL --> SDK[sinfonia-client]
     Index --> SDK
     SDK --> API[pkg/concertum]
-    API --> Transaction[mini_transaction]
+    API --> Transaction[minitxn]
     Transaction --> Coordinator[internal/client]
     Coordinator --> Wire[internal/rpcwire + internal/proto]
     Wire --> Node[internal/memnode]

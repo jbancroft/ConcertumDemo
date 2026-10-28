@@ -3,7 +3,7 @@ package proto
 import (
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/mini_transaction"
+	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
 // TransactionID combines a coordinator ID, counter, and epoch to identify an attempt.
@@ -65,14 +65,14 @@ func (i WriteItem) Offset() uint64 { return i.Addr }
 func (i WriteItem) Size() uint64   { return uint64(len(i.Data)) }
 
 // Vote is a participant's answer to a prepare request.
-type Vote = mini_transaction.Vote
+type Vote = minitxn.Vote
 
 const (
-	VoteUnknown       = mini_transaction.VoteUnknown
-	VoteOk            = mini_transaction.VoteOk
-	VoteBadLock       = mini_transaction.VoteBadLock
-	VoteBadForced     = mini_transaction.VoteBadForced
-	VoteBadCmp        = mini_transaction.VoteBadCmp
-	VoteBadStaleEpoch = mini_transaction.VoteBadStaleEpoch
-	VoteBadInternal   = mini_transaction.VoteBadInternal
+	VoteUnknown       = minitxn.VoteUnknown
+	VoteOk            = minitxn.VoteOk
+	VoteBadLock       = minitxn.VoteBadLock
+	VoteBadForced     = minitxn.VoteBadForced
+	VoteBadCmp        = minitxn.VoteBadCmp
+	VoteBadStaleEpoch = minitxn.VoteBadStaleEpoch
+	VoteBadInternal   = minitxn.VoteBadInternal
 )

@@ -51,7 +51,7 @@ committed, so the API also has an explicit unknown result.
 | Start here | What to look for |
 | --- | --- |
 | [Demo](cmd/demo/main.go) | A complete example with checked results |
-| [Transaction builder](mini_transaction/mini_transaction.go) | The compare/read/write API and grouping work by host |
+| [Transaction builder](minitxn/transaction.go) | The compare/read/write API and grouping work by host |
 | [Coordinator](internal/client/coordinator.go) | Votes, retries, and sending decisions |
 | [Participant](internal/memnode/participant.go) | Locks, comparisons, logging, and recovery |
 | [B+tree](minuet-index/btree.go) | Pages, splits, merges, and range scans |

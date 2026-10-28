@@ -1,4 +1,4 @@
-package mini_transaction
+package minitxn
 
 // Vote is a participant's answer to a prepare request.
 // Keep the numeric values stable: existing wire messages use VoteOk == 0.

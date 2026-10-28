@@ -17,7 +17,7 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
 	"github.com/jbancroft/ConcertumDemo/internal/ratelimit"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
-	"github.com/jbancroft/ConcertumDemo/mini_transaction"
+	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
 var ErrOutOfBounds = errors.New("out of bounds")
@@ -205,7 +205,7 @@ func rangesOverlap(aStart, aEnd, bStart, bEnd uint64) bool {
 	return (RangeLock{start: aStart, end: aEnd}).OverlapsWith(RangeLock{start: bStart, end: bEnd})
 }
 
-func overlapsAnyWrite(item mini_transaction.RangeItem, writes []proto.WriteItem) bool {
+func overlapsAnyWrite(item minitxn.RangeItem, writes []proto.WriteItem) bool {
 	start, end := item.Offset(), item.Offset()+item.Size()
 	for _, w := range writes {
 		wStart, wEnd := w.Offset(), w.Offset()+w.Size()
@@ -1131,7 +1131,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 	n.recordTimelineLocked(req.TID, correlationID, "prepare_received", "")
 	acquired := make([]RangeLock, 0, len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems))
 
-	lockRead := func(item mini_transaction.RangeItem) (bool, *proto.LockConflict) {
+	lockRead := func(item minitxn.RangeItem) (bool, *proto.LockConflict) {
 		if item.Size() == 0 {
 			return true, nil
 		}
@@ -1143,7 +1143,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 		acquired = append(acquired, l)
 		return true, nil
 	}
-	lockWrite := func(item mini_transaction.RangeItem) (bool, *proto.LockConflict) {
+	lockWrite := func(item minitxn.RangeItem) (bool, *proto.LockConflict) {
 		if item.Size() == 0 {
 			return true, nil
 		}
@@ -1342,7 +1342,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
 	acquired := make([]RangeLock, 0, len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems))
-	lockRead := func(item mini_transaction.RangeItem) (bool, *proto.LockConflict) {
+	lockRead := func(item minitxn.RangeItem) (bool, *proto.LockConflict) {
 		if item.Size() == 0 {
 			return true, nil
 		}
@@ -1354,7 +1354,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 		acquired = append(acquired, l)
 		return true, nil
 	}
-	lockWrite := func(item mini_transaction.RangeItem) (bool, *proto.LockConflict) {
+	lockWrite := func(item minitxn.RangeItem) (bool, *proto.LockConflict) {
 		if item.Size() == 0 {
 			return true, nil
 		}

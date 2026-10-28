@@ -10,23 +10,23 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/client"
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
-	"github.com/jbancroft/ConcertumDemo/mini_transaction"
+	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
-type ReadKey = mini_transaction.ReadKey
-type Status = mini_transaction.Status
+type ReadKey = minitxn.ReadKey
+type Status = minitxn.Status
 
 const (
-	StatusUnknown   = mini_transaction.StatusUnknown
-	StatusCommitted = mini_transaction.StatusCommitted
-	StatusAborted   = mini_transaction.StatusAborted
+	StatusUnknown   = minitxn.StatusUnknown
+	StatusCommitted = minitxn.StatusCommitted
+	StatusAborted   = minitxn.StatusAborted
 )
 
-type CompareItem = mini_transaction.CompareItem
-type ReadItem = mini_transaction.ReadItem
-type WriteItem = mini_transaction.WriteItem
-type ExecResult = mini_transaction.ExecResult
-type MiniTransaction = mini_transaction.MiniTransaction
+type CompareItem = minitxn.CompareItem
+type ReadItem = minitxn.ReadItem
+type WriteItem = minitxn.WriteItem
+type ExecResult = minitxn.ExecResult
+type MiniTransaction = minitxn.MiniTransaction
 
 type RateWindows struct {
 	Short  float64 `json:"short"`
@@ -237,5 +237,5 @@ func (b *coordinatorBackend) FlushPendingCommits(ctx context.Context) error {
 }
 
 func (c *Client) NewMiniTransaction() *MiniTransaction {
-	return mini_transaction.NewMiniTransaction(c.backend)
+	return minitxn.NewMiniTransaction(c.backend)
 }

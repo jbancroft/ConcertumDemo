@@ -1,6 +1,6 @@
-// Package mini_transaction builds compare/read/write requests for the client.
+// Package minitxn builds compare/read/write requests for the client.
 // The builder and item names come from the earlier gofonia project.
-package mini_transaction
+package minitxn
 
 import "time"
 

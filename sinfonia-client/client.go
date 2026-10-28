@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/jbancroft/ConcertumDemo/mini_transaction"
+	"github.com/jbancroft/ConcertumDemo/minitxn"
 	"github.com/jbancroft/ConcertumDemo/pkg/concertum"
 )
 
-type CompareItem = mini_transaction.CompareItem
-type ReadItem = mini_transaction.ReadItem
-type WriteItem = mini_transaction.WriteItem
-type ReadKey = mini_transaction.ReadKey
+type CompareItem = minitxn.CompareItem
+type ReadItem = minitxn.ReadItem
+type WriteItem = minitxn.WriteItem
+type ReadKey = minitxn.ReadKey
 
 type ExecResult struct {
 	Committed      bool
