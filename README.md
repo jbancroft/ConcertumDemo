@@ -90,8 +90,7 @@ make bench       # a quick benchmark run, not a performance claim
 
 This grew out of my earlier gofonia experiments. Much of the newer code was built
 with AI assistance, with me directing many design choices. The working engine
-came from Concertum; helpers and names also came from gofonia. The
-[gofonia notes](docs/gofonia-lineage.md) describe that earlier code and what was reused.
+came from Concertum; helpers and names also came from gofonia.
 
 The papers behind the ideas are
 [Sinfonia](https://read.seas.harvard.edu/~kohler/class/08w-dsi/aguilera07sinfonia.pdf)

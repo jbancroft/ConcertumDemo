@@ -47,7 +47,7 @@ The source-level interface names changed. RPC method strings and registrations,
 stored record keys, numeric votes, and binary page layouts remain compatible.
 The benchmarks remain smoke checks rather than performance claims. The original
 gofonia server was not run or modified; its comparison was based on the source
-snapshot described in [gofonia-lineage.md](gofonia-lineage.md).
+snapshot recorded in [gofonia-source-manifest.json](gofonia-source-manifest.json).
 
 The separate prepared-state naming follow-up passed `make check` and `make race`
 on 2026-10-27. The updated destination hashes and original source hashes were
