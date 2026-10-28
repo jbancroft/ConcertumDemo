@@ -64,3 +64,14 @@ A targeted scan of 181 historical file blobs and the current tracked files found
 no contact addresses, home paths, private keys, or known credential-token patterns.
 The two pull-request discussions were checked for the same patterns. Git author
 metadata is separate from file contents and needs its own publication check.
+
+## 2026-10-28: Commit author correction
+
+The merge commit's author and committer now use the GitHub alias and verified
+no-reply address. Its replacement and all affected descendants have the same
+file trees and commit messages as before. Snapshot references were updated in
+the manifest, notes, and fixture comments. The historical target hashes still
+match their corrected revisions.
+
+The earlier metadata scan incorrectly flagged GitHub's service no-reply address
+as a personal email. The personal author name was the field that needed removal.

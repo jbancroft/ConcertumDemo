@@ -81,6 +81,11 @@ plainer language. The README also describes the AI assistance behind much of the
 newer code. No executable Go code changed. Both source manifests still describe
 their recorded snapshots, so current comments can differ from their file hashes.
 
+On 2026-10-28, one merge commit's author details were changed to the GitHub alias
+and no-reply address. That changed its ID and the IDs of later commits, while
+preserving their file contents. Local snapshot references were updated to the
+corrected history; the source repositories and recorded file hashes are unchanged.
+
 ## Interview use
 
 The demo and reading guide make this a smaller entry point into existing work.

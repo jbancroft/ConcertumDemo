@@ -10,7 +10,7 @@ import (
 )
 
 func TestRedoLogItemBeforeGofoniaRenaming(t *testing.T) {
-	// Captured from Concertum2 19414d4 before adopting gofonia's source names.
+	// Captured from Concertum2 8611b32 before adopting gofonia's source names.
 	data, err := os.ReadFile("testdata/redo_before_gofonia.json")
 	if err != nil {
 		t.Fatal(err)

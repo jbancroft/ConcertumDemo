@@ -3,9 +3,9 @@
   "source_branch": "master",
   "source_revision": "8e9284b78fa5e1a7032f09eafbd072d0b596bc29",
   "integration_date": "2026-10-27",
-  "concertum2_base_revision": "19414d45e1f92558b1c3f157d51b22e703f94b13",
-  "integration_revision": "50b2623a686057752c47b02b2b76053867ae23ab",
-  "target_revision": "aa74a0b4f7ae3d0b8fc969e96aa1c9f95b11e86c",
+  "concertum2_base_revision": "8611b32c0b8c9417ee251b35cee4ce26eeb188a7",
+  "integration_revision": "40f4c13f23b57040928202e6a40ef8bca8200d31",
+  "target_revision": "cb3f314b519a4d4f68393367fea84d9d221347cb",
   "naming_followup": {
     "inDoubtTx": "preparedTxn",
     "createdAt": "preparedAt",

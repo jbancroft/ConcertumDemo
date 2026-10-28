@@ -92,7 +92,7 @@ set of public transaction item definitions.
   `participants`. Redo writes retain the internal wire item representation.
 - Image filenames, decision/abort logs, replay formats, numeric vote values,
   and B+tree/catalog page formats are preserved. Fixed fixtures captured from
-  Concertum2 `19414d4` guard the old prepare-frame and redo-record layouts.
+  Concertum2 `8611b32` guard the old prepare-frame and redo-record layouts.
 - The B+tree remains a single-node, single-version, unsigned integer key/value
   index. Gofonia's byte-slice key skeleton is not a compatible replacement.
 

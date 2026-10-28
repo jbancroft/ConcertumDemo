@@ -8,7 +8,7 @@ import (
 )
 
 func TestPrepareFrameBeforeGofoniaRenaming(t *testing.T) {
-	// Captured from Concertum2 19414d4 before adopting gofonia's source names.
+	// Captured from Concertum2 8611b32 before adopting gofonia's source names.
 	f, err := os.Open("testdata/prepare_before_gofonia.gob")
 	if err != nil {
 		t.Fatal(err)
