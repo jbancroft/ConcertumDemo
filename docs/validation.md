@@ -24,8 +24,8 @@ delivery, generated transaction IDs, abort delivery, and abrupt subprocess exit
 after partial commit delivery through both batching and individual fallback.
 Both durable participants are reopened to verify recovery completes the writes.
 Comparison deadlines are checked at fixed times before, at, and after expiry.
-The source-hash comparison above describes the initial extraction snapshot;
-subsequent changes are recorded in [extraction.md](extraction.md).
+The source-hash comparison above describes the initial source snapshot.
+Later checks are described below.
 
 ## 2026-10-27: Gofonia integration
 

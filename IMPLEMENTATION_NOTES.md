@@ -51,10 +51,9 @@ checked without changing the coordinator's clock or waiting in real time.
 
 ## 2026-10-26: Focused Go extraction
 
-Concertum2 preserves the existing Go Sinfonia/Minuet implementation at the
-revision recorded in [docs/extraction.md](docs/extraction.md). The extraction
-renames the module and narrows the package set. Retained algorithms, wire
-types, and on-disk formats are unchanged.
+The demo keeps the existing Go Sinfonia/Minuet implementation from Concertum.
+The module name and package selection changed for this sample. Retained
+algorithms, wire types, and on-disk formats are unchanged.
 
 The papers were consulted for minitransaction/recovery lineage and transactional
 B-tree structure. Their complete systems are broader than this sample. The

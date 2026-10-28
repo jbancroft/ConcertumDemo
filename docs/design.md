@@ -119,6 +119,5 @@ multiple growing tables would need bounded regions or a shared page allocator.
 
 This sample keeps the Go transaction and index core. It leaves out the larger
 project's Rust code, filesystem adapters, other storage services, operator
-daemons, deployment tools, and hosted workflows. The
-[extraction notes](extraction.md) list the boundary and source revision. The
-[README](../README.md) links the papers that inspired it.
+daemons, deployment tools, and hosted workflows. The [README](../README.md)
+links the papers that inspired it.
