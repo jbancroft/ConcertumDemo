@@ -72,7 +72,7 @@ func (c *conflictInjectingClient) ExecuteAndCommit(ctx context.Context, class st
 	return c.base.ExecuteAndCommit(ctx, class, compares, reads, writes)
 }
 
-func newTestEngineWithClient(t *testing.T, client *memTxnClient) *Engine {
+func newTestEngineWithClient(t *testing.T, client sinfoniaclient.TxnClient) *Engine {
 	t.Helper()
 	e, err := NewEngine(Config{
 		HostId:    1,

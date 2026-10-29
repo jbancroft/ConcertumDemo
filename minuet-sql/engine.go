@@ -260,9 +260,15 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 			{HostId: e.cfg.HostId, Address: catalogAddr, Data: encodeCatalog(next)},
 			{HostId: e.cfg.HostId, Address: rec.indexBaseAddr, Data: make([]byte, minuetIndexSuperblockSize)},
 		}
-		if !e.cfg.TxnClient.ExecuteAndCommit(ctx, "minuet-sql:create-table", compares, nil, writes).Committed {
+		result := e.cfg.TxnClient.ExecuteAndCommit(ctx, "minuet-sql:create-table", compares, nil, writes)
+		switch result.Status {
+		case sinfoniaclient.StatusCommitted:
+			// Publish the table below only after a confirmed commit.
+		case sinfoniaclient.StatusAborted:
 			time.Sleep(e.cfg.RetryBackoff)
 			continue
+		default:
+			return sinfoniaclient.ErrUnknownOutcome
 		}
 		e.tables[name] = &table{
 			name:          rec.name,

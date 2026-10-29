@@ -208,7 +208,7 @@ func (idx *BTree) RangeScan(ctx context.Context, start, end uint64) (*Iterator, 
 	return &Iterator{entries: out}, nil
 }
 
-// mutate reloads the tree and retries if it can't commit the changed copy.
+// mutate retries confirmed aborts with a fresh working copy of the tree.
 func (idx *BTree) mutate(ctx context.Context, class string, fn func(*snapshot) error) error {
 	for attempt := 0; attempt < idx.cfg.MaxRetries; attempt++ {
 		s, err := idx.loadSnapshot(ctx)
@@ -218,8 +218,13 @@ func (idx *BTree) mutate(ctx context.Context, class string, fn func(*snapshot) e
 		if err := fn(s); err != nil {
 			return err
 		}
-		if idx.commitSnapshot(ctx, class, s) {
+		switch idx.commitSnapshot(ctx, class, s) {
+		case sinfoniaclient.StatusCommitted:
 			return nil
+		case sinfoniaclient.StatusAborted:
+			// Back off below, then reload before trying again.
+		default:
+			return sinfoniaclient.ErrUnknownOutcome
 		}
 		timer := time.NewTimer(idx.cfg.RetryBackoff)
 		select {
@@ -283,7 +288,7 @@ func (idx *BTree) readNodeRecursive(ctx context.Context, s *snapshot, pageID uin
 }
 
 // commitSnapshot checks the original bytes and writes the changed pages together.
-func (idx *BTree) commitSnapshot(ctx context.Context, class string, s *snapshot) bool {
+func (idx *BTree) commitSnapshot(ctx context.Context, class string, s *snapshot) sinfoniaclient.Status {
 	compares := []sinfoniaclient.CompareItem{{HostId: idx.cfg.HostId, Address: idx.cfg.BaseAddress, Data: s.rawSB}}
 	writes := []sinfoniaclient.WriteItem{{HostId: idx.cfg.HostId, Address: idx.cfg.BaseAddress, Data: encodeSuperblock(s.super)}}
 	for id, n := range s.nodes {
@@ -296,7 +301,7 @@ func (idx *BTree) commitSnapshot(ctx context.Context, class string, s *snapshot)
 		writes = append(writes, sinfoniaclient.WriteItem{HostId: idx.cfg.HostId, Address: addr, Data: encodeNode(n)})
 	}
 	res := idx.client.ExecuteAndCommit(ctx, "minuet-index:"+class, compares, nil, writes)
-	return res.Committed
+	return res.Status
 }
 
 func (idx *BTree) allocNode(s *snapshot, leaf bool) *BTreeNode {

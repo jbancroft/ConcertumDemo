@@ -2,6 +2,7 @@ package sinfoniaclient
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
@@ -20,6 +21,10 @@ const (
 	StatusCommitted = minitxn.StatusCommitted
 	StatusAborted   = minitxn.StatusAborted
 )
+
+// ErrUnknownOutcome reports an uncertain transaction result from the index or
+// SQL layer. The operation may have committed; callers must not retry blindly.
+var ErrUnknownOutcome = errors.New("sinfonia: transaction outcome unknown; operation may have committed")
 
 type CompareItem = minitxn.CompareItem
 type ReadItem = minitxn.ReadItem

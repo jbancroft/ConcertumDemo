@@ -103,7 +103,10 @@ merges.
 
 An update reads the reachable pages into a working copy and changes that copy.
 It then compares the original superblock and page bytes and writes the result
-in one minitransaction. If the comparisons fail, it reloads and tries again.
+in one minitransaction. A confirmed abort causes it to reload and try again.
+An unknown outcome returns `sinfoniaclient.ErrUnknownOutcome` immediately,
+because the update may already have committed. Automatic outcome resolution
+is not implemented.
 Reading the whole tree keeps this simple, but makes updates expensive.
 
 Searches and scans read pages without validating the whole set afterward. A
@@ -127,6 +130,13 @@ Writes to the same key through one engine are serialized. Each data change uses
 the index's transaction path; there's no general SQL transaction manager or
 `BEGIN`/`COMMIT` support. Concurrent table creation and consistent scans alongside
 writers aren't guaranteed.
+
+Table creation retries confirmed aborts and returns the same
+`sinfoniaclient.ErrUnknownOutcome` error on an uncertain result. It adds a table
+to the engine's in-memory catalog only after a confirmed commit. Inserts and
+deletes propagate the index's unknown-outcome error without retrying. Callers
+must treat any of these operations as potentially committed when they receive
+that error.
 
 The catalog reserves 1024 bytes between table base addresses. That isn't enough
 to keep growing indexes from overlapping. The demo uses one small table;

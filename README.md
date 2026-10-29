@@ -108,6 +108,9 @@ columns: `id` and `value`.
 Commit messages normally run in the background; `FlushPendingCommits` waits for
 delivery. A network failure can leave the caller unsure whether a transaction
 committed, so the API also has an explicit unknown result.
+Index and SQL mutations return `sinfoniaclient.ErrUnknownOutcome` in that case
+and stop retrying. The operation may have committed; callers can recognize this
+error with `errors.Is` and must not retry blindly.
 
 ## Where to read
 

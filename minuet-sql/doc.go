@@ -8,5 +8,7 @@
 //
 // One engine serializes writes to the same key. A duplicate insert returns
 // ErrDuplicateKey, deleting a missing row returns ErrRowNotFound, and running
-// out of index retries returns ErrBusy. Tests exercise the real coordinator path.
+// out of index retries returns ErrBusy. An uncertain mutation returns
+// sinfoniaclient.ErrUnknownOutcome without retrying. Tests exercise the real
+// coordinator path.
 package minuetsql
