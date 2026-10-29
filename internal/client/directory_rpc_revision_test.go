@@ -43,11 +43,11 @@ func TestDirectoryClientReconcilesExplicitUnknownOutcome(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			err := client.UpdateEntryCASRevision(ctx, 1, requested, 41, 7)
+			err := client.UpdateEntry(ctx, 1, requested, 41, 7)
 			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("err=%v want errors.Is(_, %v)", err, test.wantErr)
 			}
-			if observed.ExpectedGeneration != 41 || observed.ExpectedRevision != 7 || !observed.ExpectedRevisionSet {
+			if observed.ExpectedGeneration != 41 || observed.ExpectedRevision != 7 {
 				t.Fatalf("observed guards=%+v", observed)
 			}
 		})
@@ -61,7 +61,7 @@ func TestDirectoryClientReturnsExplicitDegradedOutcome(t *testing.T) {
 	defer closeServer()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	err := client.UpdateEntryCASRevision(ctx, 1, sinfonia.DirectoryEntry{Primary: sinfonia.Endpoint{RPC: "new:1"}}, 0, 11)
+	err := client.UpdateEntry(ctx, 1, sinfonia.DirectoryEntry{Primary: sinfonia.Endpoint{RPC: "new:1"}}, 0, 11)
 	if !errors.Is(err, ErrDirectoryStoreDegraded) {
 		t.Fatalf("err=%v want degraded", err)
 	}
@@ -70,20 +70,23 @@ func TestDirectoryClientReturnsExplicitDegradedOutcome(t *testing.T) {
 func TestDirectoryClientReconcilesTransportAmbiguity(t *testing.T) {
 	requested := sinfonia.DirectoryEntry{Primary: sinfonia.Endpoint{RPC: "new:1"}, Generation: 42}
 	for _, test := range []struct {
-		name     string
-		resolved sinfonia.ResolveResponse
-		wantErr  error
+		name             string
+		expectedRevision uint64
+		resolved         sinfonia.ResolveResponse
+		wantErr          error
 	}{
-		{"exact is success", sinfonia.ResolveResponse{Primary: requested.Primary, Generation: 42, DirectoryRevision: 8}, nil},
-		{"old stays unknown", sinfonia.ResolveResponse{Primary: sinfonia.Endpoint{RPC: "old:1"}, Generation: 41, DirectoryRevision: 7}, ErrDirectoryUpdateOutcomeUnknown},
-		{"different newer conflicts", sinfonia.ResolveResponse{Primary: sinfonia.Endpoint{RPC: "other:1"}, Generation: 43, DirectoryRevision: 9}, ErrDirectoryUpdateConflict},
+		{"exact is success", 7, sinfonia.ResolveResponse{Primary: requested.Primary, Generation: 42, DirectoryRevision: 8}, nil},
+		{"old stays unknown", 7, sinfonia.ResolveResponse{Primary: sinfonia.Endpoint{RPC: "old:1"}, Generation: 41, DirectoryRevision: 7}, ErrDirectoryUpdateOutcomeUnknown},
+		{"different newer conflicts", 7, sinfonia.ResolveResponse{Primary: sinfonia.Endpoint{RPC: "other:1"}, Generation: 43, DirectoryRevision: 9}, ErrDirectoryUpdateConflict},
+		{"revision zero stays unknown", 0, sinfonia.ResolveResponse{Primary: sinfonia.Endpoint{RPC: "old:1"}, Generation: 41, DirectoryRevision: 0}, ErrDirectoryUpdateOutcomeUnknown},
+		{"update since revision zero conflicts", 0, sinfonia.ResolveResponse{Primary: sinfonia.Endpoint{RPC: "other:1"}, Generation: 41, DirectoryRevision: 1}, ErrDirectoryUpdateConflict},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client, closeServer := transportAmbiguityTestDirectoryClient(t, test.resolved)
 			defer closeServer()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			err := client.UpdateEntryCASRevision(ctx, 1, requested, 41, 7)
+			err := client.UpdateEntry(ctx, 1, requested, 41, test.expectedRevision)
 			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("err=%v want errors.Is(_, %v)", err, test.wantErr)
 			}
@@ -110,7 +113,7 @@ func TestDirectoryClientReconcilesTransportTimeoutAfterCallerDeadline(t *testing
 	client := NewDirectoryClient(listener.Addr().String(), nil)
 	client.SetTimeout(time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
-	err = client.UpdateEntryCASRevision(ctx, 1, requested, 41, 7)
+	err = client.UpdateEntry(ctx, 1, requested, 41, 7)
 	cancel()
 	_ = client.rpc.Close()
 	_ = listener.Close()

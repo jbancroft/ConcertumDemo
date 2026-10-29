@@ -53,28 +53,16 @@ func (c *DirectoryClient) Resolve(ctx context.Context, hostId uint32) (sinfonia.
 	return out, c.rpc.Call(ctx, sinfonia.MethodResolve, sinfonia.ResolveRequest{MemID: hostId}, &out)
 }
 
-func (c *DirectoryClient) UpdateEntry(ctx context.Context, hostId uint32, entry sinfonia.DirectoryEntry) error {
-	return c.UpdateEntryCAS(ctx, hostId, entry, 0)
-}
-
-func (c *DirectoryClient) UpdateEntryCAS(ctx context.Context, hostId uint32, entry sinfonia.DirectoryEntry, expectedGeneration uint64) error {
-	return c.updateEntryCAS(ctx, hostId, entry, expectedGeneration, 0, false)
-}
-
-// UpdateEntryCASRevision only updates the entry if the directory revision still
-// matches, including revision zero for a new directory.
-func (c *DirectoryClient) UpdateEntryCASRevision(ctx context.Context, hostId uint32, entry sinfonia.DirectoryEntry, expectedGeneration, expectedRevision uint64) error {
-	return c.updateEntryCAS(ctx, hostId, entry, expectedGeneration, expectedRevision, true)
-}
-
-func (c *DirectoryClient) updateEntryCAS(ctx context.Context, hostId uint32, entry sinfonia.DirectoryEntry, expectedGeneration, expectedRevision uint64, expectedRevisionSet bool) error {
+// UpdateEntry requires the entry generation and directory revision to match
+// the caller's expected values. Revision zero identifies a new directory.
+func (c *DirectoryClient) UpdateEntry(ctx context.Context, hostId uint32, entry sinfonia.DirectoryEntry, expectedGeneration, expectedRevision uint64) error {
 	var out sinfonia.UpdateEntryResponse
-	if err := c.rpc.Call(ctx, sinfonia.MethodUpdateEntry, sinfonia.UpdateEntryRequest{MemID: hostId, Entry: entry, ExpectedGeneration: expectedGeneration, ExpectedRevision: expectedRevision, ExpectedRevisionSet: expectedRevisionSet}, &out); err != nil {
+	if err := c.rpc.Call(ctx, sinfonia.MethodUpdateEntry, sinfonia.UpdateEntryRequest{MemID: hostId, Entry: entry, ExpectedGeneration: expectedGeneration, ExpectedRevision: expectedRevision}, &out); err != nil {
 		var remote *rpcwire.RemoteError
 		if errors.As(err, &remote) {
 			return err
 		}
-		return c.reconcileTransportAmbiguity(ctx, hostId, entry, expectedRevision, expectedRevisionSet, err)
+		return c.reconcileTransportAmbiguity(ctx, hostId, entry, expectedRevision, err)
 	}
 	if out.OutcomeUnknown {
 		resolved, err := c.Resolve(ctx, hostId)
@@ -98,7 +86,7 @@ func (c *DirectoryClient) updateEntryCAS(ctx context.Context, hostId uint32, ent
 	return nil
 }
 
-func (c *DirectoryClient) reconcileTransportAmbiguity(ctx context.Context, hostId uint32, entry sinfonia.DirectoryEntry, expectedRevision uint64, expectedRevisionSet bool, transportErr error) error {
+func (c *DirectoryClient) reconcileTransportAmbiguity(ctx context.Context, hostId uint32, entry sinfonia.DirectoryEntry, expectedRevision uint64, transportErr error) error {
 	reconcileCtx := ctx
 	var timeoutErr net.Error
 	if ctx.Err() != nil || (errors.As(transportErr, &timeoutErr) && timeoutErr.Timeout()) {
@@ -113,7 +101,7 @@ func (c *DirectoryClient) reconcileTransportAmbiguity(ctx context.Context, hostI
 	if sameDirectoryEntry(entry, resolved) {
 		return nil
 	}
-	if !expectedRevisionSet || resolved.DirectoryRevision <= expectedRevision {
+	if resolved.DirectoryRevision <= expectedRevision {
 		return fmt.Errorf("%w: update transport: %v; selected revision %d", ErrDirectoryUpdateOutcomeUnknown, transportErr, resolved.DirectoryRevision)
 	}
 	return fmt.Errorf("%w: expected base revision %d, selected revision %d", ErrDirectoryUpdateConflict, expectedRevision, resolved.DirectoryRevision)

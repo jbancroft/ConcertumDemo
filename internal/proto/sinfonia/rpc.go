@@ -407,10 +407,8 @@ type UpdateEntryRequest struct {
 	MemID              uint32
 	Entry              DirectoryEntry
 	ExpectedGeneration uint64
-	// ExpectedRevisionSet makes zero an explicit expected revision, rather
-	// than the older request format's "check generation only" behavior.
-	ExpectedRevision    uint64
-	ExpectedRevisionSet bool
+	// ExpectedRevision must match the directory revision, including zero.
+	ExpectedRevision uint64
 }
 
 type UpdateEntryResponse struct {

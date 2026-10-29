@@ -37,8 +37,7 @@ type DirectoryRequest struct{}
 
 type DirectoryResponse struct {
 	Mappings map[uint32]DirectoryEntry
-	// Revision identifies this directory snapshot. Zero means a new directory,
-	// or an older server that doesn't report revisions.
+	// Revision identifies this directory snapshot. Zero means a new directory.
 	Revision uint64
 }
 
