@@ -302,9 +302,6 @@ type rpcWorker struct {
 }
 
 // FlushPendingCommits waits for queued commit/abort messages and reports errors.
-// ExecuteAndCommit returns once the decision is recoverable from participant
-// state. For deadline-bearing writes, it also saves the decision on a participant
-// before returning. Use this method when you need to wait for delivery too.
 func (c *Coordinator) FlushPendingCommits(ctx context.Context) error {
 	c.workersMu.Lock()
 	workers := make([]*rpcWorker, 0, len(c.workers))
