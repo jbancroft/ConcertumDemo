@@ -20,6 +20,16 @@ import (
 
 var coordinatorIDFallback atomic.Uint64
 
+const (
+	defaultMaxRetries  = 5
+	defaultBaseBackoff = 5 * time.Millisecond
+	defaultMaxBackoff  = 100 * time.Millisecond
+	prepareQueueSize   = 256
+	commitQueueSize    = 1024
+	commitBatchDelay   = 2 * time.Millisecond
+	commitBatchSize    = 64
+)
+
 // Participant is the node interface used by the coordinator.
 type Participant interface {
 	Read(ctx context.Context, addr uint64, length uint32) ([]byte, error)
@@ -46,10 +56,10 @@ type RandomBackoff struct {
 
 func (b RandomBackoff) Wait(ctx context.Context, attempt int) {
 	if b.Base <= 0 {
-		b.Base = 5 * time.Millisecond
+		b.Base = defaultBaseBackoff
 	}
 	if b.Max <= 0 {
-		b.Max = 100 * time.Millisecond
+		b.Max = defaultMaxBackoff
 	}
 	r := b.Rng
 	if r == nil {
@@ -90,7 +100,7 @@ func NewCoordinator(nodes map[uint32]Participant) *Coordinator {
 	for id, node := range nodes {
 		cpy[id] = node
 	}
-	c := &Coordinator{nodes: cpy, primaryFor: map[uint32]uint32{}, generations: map[uint32]uint64{}, coordID: newCoordinatorID(), epoch: sinfonia.EpochAt(time.Now()), backoff: RandomBackoff{}, maxRetries: 5, workers: map[uint32]*rpcWorker{}, stats: map[uint32]StatsReader{}}
+	c := &Coordinator{nodes: cpy, primaryFor: map[uint32]uint32{}, generations: map[uint32]uint64{}, coordID: newCoordinatorID(), epoch: sinfonia.EpochAt(time.Now()), backoff: RandomBackoff{}, maxRetries: defaultMaxRetries, workers: map[uint32]*rpcWorker{}, stats: map[uint32]StatsReader{}}
 	for id, node := range cpy {
 		c.workers[id] = newRPCWorker(id, node)
 	}
@@ -325,7 +335,7 @@ type prepareCall struct {
 }
 
 func newRPCWorker(hostId uint32, node Participant) *rpcWorker {
-	w := &rpcWorker{hostId: hostId, node: node, prepareCh: make(chan prepareCall, 256), commitCh: make(chan commitDispatch, 1024), batchDelay: 2 * time.Millisecond, batchMax: 64}
+	w := &rpcWorker{hostId: hostId, node: node, prepareCh: make(chan prepareCall, prepareQueueSize), commitCh: make(chan commitDispatch, commitQueueSize), batchDelay: commitBatchDelay, batchMax: commitBatchSize}
 	go w.runPrepare()
 	go w.runCommitBatcher()
 	return w

@@ -8,5 +8,5 @@ func EpochAt(t time.Time) uint64 {
 	if seconds < 0 {
 		return 0
 	}
-	return uint64(seconds / 3600)
+	return uint64(seconds / int64(time.Hour/time.Second))
 }

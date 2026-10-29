@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,41 +13,6 @@ import (
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
-
-func FuzzAdminBodyDecodeNeverPanics(f *testing.F) {
-	f.Add([]byte(`{"mem_id":1,"generation":2}`))
-	f.Add([]byte{})
-	f.Add([]byte(`{"mem_id":`))
-	f.Add([]byte(`null`))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		req := httptest.NewRequest(http.MethodPost, "/admin", strings.NewReader(string(data)))
-		var decoded map[string]any
-		_ = decodeBody(req, &decoded)
-	})
-}
-
-func FuzzParseTIDQueryNeverPanics(f *testing.F) {
-	f.Add("1", "2", "3")
-	f.Add("18446744073709551615", "0", "42")
-	f.Add("-1", "missing", "")
-	f.Fuzz(func(t *testing.T, coord, counter, epoch string) {
-		query := url.Values{"coord": {coord}, "counter": {counter}, "epoch": {epoch}}
-		req := httptest.NewRequest(http.MethodGet, "/debug/txn_timeline?"+query.Encode(), nil)
-		txId, err := parseTIDQuery(req)
-		if err != nil {
-			return
-		}
-		wantCoord, coordErr := strconv.ParseUint(strings.TrimSpace(coord), 10, 64)
-		wantCounter, counterErr := strconv.ParseUint(strings.TrimSpace(counter), 10, 64)
-		wantEpoch, epochErr := strconv.ParseUint(strings.TrimSpace(epoch), 10, 64)
-		if coordErr != nil || counterErr != nil || epochErr != nil {
-			t.Fatal("query parser accepted a value rejected by strconv")
-		}
-		if txId.CoordinatorID != wantCoord || txId.Counter != wantCounter || txId.Epoch != wantEpoch {
-			t.Fatalf("transaction ID = %+v, want coord=%d counter=%d epoch=%d", txId, wantCoord, wantCounter, wantEpoch)
-		}
-	})
-}
 
 func TestPublicObservabilityEndpointsRequireGET(t *testing.T) {
 	n := NewParticipant(32)

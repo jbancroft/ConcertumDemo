@@ -128,7 +128,7 @@ func (s *ReplayStore) SHA256() ([]byte, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	if _, err := io.CopyBuffer(h, f, make([]byte, 1<<20)); err != nil {
+	if _, err := io.CopyBuffer(h, f, make([]byte, fileCopyBufferSize)); err != nil {
 		return nil, err
 	}
 	return h.Sum(nil), nil

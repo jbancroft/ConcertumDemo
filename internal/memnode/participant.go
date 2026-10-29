@@ -309,7 +309,7 @@ type Participant struct {
 }
 
 func (n *Participant) initSafetyDefaults() {
-	n.maxInFlightPrepare = 256
+	n.maxInFlightPrepare = defaultMaxInFlightPrepare
 	n.maxInDoubtSoft = 0
 	n.maxInDoubtHard = 0
 	n.maxRequestBytes = 0
@@ -325,15 +325,8 @@ func NewParticipant(size int) *Participant {
 	n.metrics = newNodeMetrics()
 	n.recoveryComplete = true
 	n.replicaSynced = true
-	n.peerTimeout = 5 * time.Second
-	n.maxInFlightPrepare = 256
-	n.maxInDoubtSoft = 0
-	n.maxInDoubtHard = 0
-	n.maxRequestBytes = 0
-	n.maxItemsPerTxn = 0
-	n.maxReadBytesPerTxn = 0
-	n.maxWriteBytesPerTxn = 0
-	n.prepareSlots = make(chan struct{}, n.maxInFlightPrepare)
+	n.peerTimeout = defaultPeerTimeout
+	n.initSafetyDefaults()
 	n.cond = sync.NewCond(&n.mu)
 	n.localBarrierOwner = fmt.Sprintf("node/%p", n)
 	n.globalBarrierLeaseTTL = defaultGlobalBarrierLeaseTTL
@@ -416,7 +409,7 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 		metrics:          newNodeMetrics(),
 		recoveryComplete: false,
 		replicaSynced:    true,
-		peerTimeout:      5 * time.Second,
+		peerTimeout:      defaultPeerTimeout,
 	}
 	n.initSafetyDefaults()
 	n.cond = sync.NewCond(&n.mu)

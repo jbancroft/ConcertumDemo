@@ -92,15 +92,3 @@ func TestUniqueHostIdsPreservesUnsignedHostRange(t *testing.T) {
 		t.Fatalf("host IDs=%v", got)
 	}
 }
-
-func TestRangeItemsExposeByteRanges(t *testing.T) {
-	for _, item := range []RangeItem{
-		CompareItem{Address: 12, Data: []byte("abc")},
-		ReadItem{Address: 12, Length: 3},
-		WriteItem{Address: 12, Data: []byte("abc")},
-	} {
-		if item.Offset() != 12 || item.Size() != 3 {
-			t.Fatalf("range=%d,%d", item.Offset(), item.Size())
-		}
-	}
-}

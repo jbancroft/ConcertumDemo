@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
-	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -20,9 +19,11 @@ import (
 const unclassifiedTxnClass = "__unclassified__"
 const maxTxnClasses = 128
 const (
-	rateWindowShort  = 10 * time.Second
-	rateWindowMedium = time.Minute
-	rateWindowLong   = 5 * time.Minute
+	rateWindowShort    = 10 * time.Second
+	rateWindowMedium   = time.Minute
+	rateWindowLong     = 5 * time.Minute
+	maxRateEvents      = 20_000
+	retainedRateEvents = 10_000
 )
 
 type counter struct{ v atomic.Uint64 }
@@ -77,8 +78,8 @@ func (r *rollingWindow) Add(ts time.Time, v float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, timedValue{ts: ts, value: v})
-	if len(r.events) > 20000 {
-		r.events = append([]timedValue(nil), r.events[len(r.events)-10000:]...)
+	if len(r.events) > maxRateEvents {
+		r.events = append([]timedValue(nil), r.events[len(r.events)-retainedRateEvents:]...)
 	}
 }
 
@@ -503,17 +504,6 @@ func (n *Participant) HTTPHandler(enablePrometheus bool) http.Handler {
 		}))
 	}
 	return mux
-}
-
-func decodeBody(r *http.Request, out any) error {
-	b, err := io.ReadAll(r.Body)
-	if err != nil {
-		return err
-	}
-	if len(b) == 0 {
-		return nil
-	}
-	return json.Unmarshal(b, out)
 }
 
 func parseTIDQuery(r *http.Request) (sinfonia.TransactionID, error) {

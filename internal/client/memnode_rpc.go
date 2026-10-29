@@ -20,9 +20,6 @@ func NewRPCParticipant(addr string, tlsConfig *tls.Config, timeout time.Duration
 }
 
 func NewRPCParticipantWithGeneration(addr string, tlsConfig *tls.Config, timeout time.Duration, generation uint64) *RPCParticipant {
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
 	return &RPCParticipant{
 		rpc:        rpcwire.NewClient(strings.TrimSpace(addr), rpcwire.ClientOptions{TLS: tlsConfig, DialTimeout: timeout}),
 		generation: generation,

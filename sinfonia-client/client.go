@@ -10,6 +10,8 @@ import (
 	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
+const defaultNodeTimeout = 5 * time.Second
+
 type ReadKey = minitxn.ReadKey
 type Status = minitxn.Status
 
@@ -86,10 +88,10 @@ func NewClient(config map[uint32]NodeConfig) *Client {
 	stats := make(map[uint32]client.StatsReader)
 	generations := make(map[uint32]uint64, len(config))
 	for id, node := range config {
-		nodes[id] = client.NewRPCParticipantWithGeneration(node.RPCAddress, nil, 5*time.Second, node.Generation)
+		nodes[id] = client.NewRPCParticipantWithGeneration(node.RPCAddress, nil, defaultNodeTimeout, node.Generation)
 		generations[id] = node.Generation
 		if node.StatsURL != "" {
-			stats[id] = client.NewAdminHTTPClient(node.StatsURL, 5*time.Second)
+			stats[id] = client.NewAdminHTTPClient(node.StatsURL, defaultNodeTimeout)
 		}
 	}
 	coord := client.NewCoordinator(nodes)

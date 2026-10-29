@@ -10,6 +10,8 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 )
 
+const defaultStatsTimeout = 5 * time.Second
+
 type AdminHTTPClient struct {
 	baseURL string
 	hc      *http.Client
@@ -17,7 +19,7 @@ type AdminHTTPClient struct {
 
 func NewAdminHTTPClient(baseURL string, timeout time.Duration) *AdminHTTPClient {
 	if timeout <= 0 {
-		timeout = 5 * time.Second
+		timeout = defaultStatsTimeout
 	}
 	return &AdminHTTPClient{baseURL: strings.TrimRight(baseURL, "/"), hc: &http.Client{Timeout: timeout}}
 }

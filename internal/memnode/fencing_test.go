@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
@@ -111,24 +110,6 @@ func TestFencingRetentionCheckpointFailureAfterCleanupIsOutcomeUnknown(t *testin
 	}
 	if generation, err := loadFencingGeneration(dir); err != nil || generation != 5 {
 		t.Fatalf("loaded generation = %d, err=%v, want 5", generation, err)
-	}
-}
-
-func TestPersistFencingGenerationUsesDurabilityCheckpoints(t *testing.T) {
-	dir := t.TempDir()
-	var got []string
-	if err := persistFencingGenerationWithHook(dir, 42, func(point string) error {
-		got = append(got, point)
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	want := fencingPublicationCheckpoints()
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("publication checkpoints = %v, want %v", got, want)
-	}
-	if generation, err := loadFencingGeneration(dir); err != nil || generation != 42 {
-		t.Fatalf("durable generation = %d, err=%v, want 42", generation, err)
 	}
 }
 

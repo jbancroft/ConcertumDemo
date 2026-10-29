@@ -20,6 +20,14 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
+const (
+	fileCopyBufferSize     = 1 << 20
+	defaultRedoBatchWindow = 2 * time.Millisecond
+	defaultRedoBatchSize   = 32
+	redoAppendQueueSize    = 4096
+	redoBatchCapacity      = 64
+)
+
 type RedoLogItem struct {
 	TransactionId sinfonia.TransactionID `json:"tid"`
 	HostIds       []uint32               `json:"participants"`
@@ -126,7 +134,7 @@ func (d *DiskImage) SHA256() ([]byte, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	h := sha256.New()
-	buf := make([]byte, 1<<20)
+	buf := make([]byte, fileCopyBufferSize)
 	for offset := 0; offset < d.size; {
 		want := len(buf)
 		if remaining := d.size - offset; remaining < want {
@@ -179,7 +187,7 @@ func (d *DiskImage) ReplaceFrom(path string) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	buf := make([]byte, 1<<20)
+	buf := make([]byte, fileCopyBufferSize)
 	for offset := int64(0); offset < int64(d.size); {
 		want := len(buf)
 		if remaining := int64(d.size) - offset; remaining < int64(want) {
@@ -258,8 +266,8 @@ func OpenRedoLog(dir string) (*RedoLog, error) {
 		return nil, err
 	}
 	f.Close()
-	r := &RedoLog{path: p, entries: entries, batchWindow: 2 * time.Millisecond, batchMax: 32, fsyncFn: func(f *os.File) error { return f.Sync() }}
-	r.appendReqCh = make(chan appendReq, 4096)
+	r := &RedoLog{path: p, entries: entries, batchWindow: defaultRedoBatchWindow, batchMax: defaultRedoBatchSize, fsyncFn: func(f *os.File) error { return f.Sync() }}
+	r.appendReqCh = make(chan appendReq, redoAppendQueueSize)
 	go r.runAppender()
 	return r, nil
 }
@@ -321,7 +329,7 @@ func (r *RedoLog) runAppender() {
 	}
 	defer t.Stop()
 
-	batch := make([]appendReq, 0, 64)
+	batch := make([]appendReq, 0, redoBatchCapacity)
 	flush := func() {
 		if len(batch) == 0 {
 			return
@@ -549,10 +557,10 @@ func (s *ForcedAbortLog) AddItem(txId sinfonia.TransactionID) error {
 func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]sinfonia.TransactionID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if currentEpoch <= 2 {
+	if currentEpoch <= PublicRetryHorizon {
 		return nil, nil
 	}
-	threshold := currentEpoch - 2
+	threshold := currentEpoch - PublicRetryHorizon
 	changed := false
 	removed := make([]sinfonia.TransactionID, 0)
 	for key := range s.set {

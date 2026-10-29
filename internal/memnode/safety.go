@@ -8,6 +8,11 @@ import (
 
 var ErrResourceExhausted = errors.New("RESOURCE_EXHAUSTED")
 
+const (
+	defaultMaxInFlightPrepare = 256
+	defaultRateLimitBurst     = 100
+)
+
 type SafetyConfig struct {
 	MaxInFlightPrepare  int
 	MaxInDoubtSoft      int
@@ -51,7 +56,7 @@ func (n *Participant) ConfigureSafety(cfg SafetyConfig) {
 		n.maxWriteBytesPerTxn = cfg.MaxWriteBytesPerTxn
 	}
 	if cfg.Burst <= 0 {
-		cfg.Burst = 100
+		cfg.Burst = defaultRateLimitBurst
 	}
 	n.prepareLimiter = ratelimit.NewKeyedLimiter(cfg.PrepareRate, cfg.Burst)
 	n.commitLimiter = ratelimit.NewKeyedLimiter(cfg.CommitRate, cfg.Burst)

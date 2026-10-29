@@ -11,12 +11,30 @@ import (
 )
 
 const (
-	superblockSize  = 64
-	pageSize        = 512
-	superMagic      = uint32(0x4d4e5432) // ASCII "MNT2": marks the tree metadata.
-	pageMagic       = uint32(0x50414745) // ASCII "PAGE": marks a node's page.
-	maxLeafKeys     = 8
-	maxInternalKeys = 8
+	superblockSize      = 64
+	pageSize            = 512
+	superMagic          = uint32(0x4d4e5432) // ASCII "MNT2": marks the tree metadata.
+	pageMagic           = uint32(0x50414745) // ASCII "PAGE": marks a node's page.
+	maxLeafKeys         = 8
+	maxInternalKeys     = 8
+	defaultMaxRetries   = 8
+	defaultRetryBackoff = time.Millisecond
+)
+
+// Byte offsets and element sizes in the superblock and node pages.
+const (
+	superVersionOffset   = 8
+	superRootPageOffset  = 16
+	superNextPageOffset  = 20
+	nodeIDOffset         = 4
+	nodeLeafFlagOffset   = 8
+	nodeKeyCountOffset   = 10
+	nodeChildCountOffset = 12
+	nodeNextLeafOffset   = 16
+	nodeHeaderSize       = 24
+	keySize              = 8
+	valueSize            = 8
+	childIDSize          = 4
 )
 
 var (
@@ -85,10 +103,10 @@ func (it *Iterator) Next() (Entry, bool) {
 
 func NewBTree(client sinfoniaclient.TxnClient, cfg Config) *BTree {
 	if cfg.MaxRetries <= 0 {
-		cfg.MaxRetries = 8
+		cfg.MaxRetries = defaultMaxRetries
 	}
 	if cfg.RetryBackoff <= 0 {
-		cfg.RetryBackoff = time.Millisecond
+		cfg.RetryBackoff = defaultRetryBackoff
 	}
 	return &BTree{cfg: cfg, client: client}
 }
@@ -223,7 +241,7 @@ func (idx *BTree) loadSnapshot(ctx context.Context) (*snapshot, error) {
 		return nil, errors.New("minuet-index: truncated superblock")
 	}
 	s := &snapshot{nodes: map[uint32]*BTreeNode{}, raw: map[uint32][]byte{}, rawSB: rawSB}
-	if binary.BigEndian.Uint32(rawSB[0:4]) != superMagic {
+	if binary.BigEndian.Uint32(rawSB) != superMagic {
 		// This also treats damaged metadata as a new tree. A later write can
 		// overwrite old data; a safer version would separate create from open.
 		s.super = superblock{Version: 0, RootPage: 0, NextPage: 1}
@@ -478,86 +496,86 @@ func minInternalKeys() int { return (maxInternalKeys+1)/2 - 1 }
 
 func encodeSuperblock(sb superblock) []byte {
 	buf := make([]byte, superblockSize)
-	binary.BigEndian.PutUint32(buf[0:4], superMagic)
-	binary.BigEndian.PutUint64(buf[8:16], sb.Version+1)
-	binary.BigEndian.PutUint32(buf[16:20], sb.RootPage)
-	binary.BigEndian.PutUint32(buf[20:24], sb.NextPage)
+	binary.BigEndian.PutUint32(buf, superMagic)
+	binary.BigEndian.PutUint64(buf[superVersionOffset:], sb.Version+1)
+	binary.BigEndian.PutUint32(buf[superRootPageOffset:], sb.RootPage)
+	binary.BigEndian.PutUint32(buf[superNextPageOffset:], sb.NextPage)
 	return buf
 }
 
 func decodeSuperblock(buf []byte) superblock {
 	return superblock{
-		Version:  binary.BigEndian.Uint64(buf[8:16]),
-		RootPage: binary.BigEndian.Uint32(buf[16:20]),
-		NextPage: binary.BigEndian.Uint32(buf[20:24]),
+		Version:  binary.BigEndian.Uint64(buf[superVersionOffset:]),
+		RootPage: binary.BigEndian.Uint32(buf[superRootPageOffset:]),
+		NextPage: binary.BigEndian.Uint32(buf[superNextPageOffset:]),
 	}
 }
 
 func encodeNode(n *BTreeNode) []byte {
 	buf := make([]byte, pageSize)
-	binary.BigEndian.PutUint32(buf[0:4], pageMagic)
-	binary.BigEndian.PutUint32(buf[4:8], n.ID)
+	binary.BigEndian.PutUint32(buf, pageMagic)
+	binary.BigEndian.PutUint32(buf[nodeIDOffset:], n.ID)
 	if n.isLeaf {
-		buf[8] = 1
+		buf[nodeLeafFlagOffset] = 1
 	}
-	binary.BigEndian.PutUint16(buf[10:12], uint16(len(n.keys)))
-	binary.BigEndian.PutUint16(buf[12:14], uint16(len(n.children)))
-	binary.BigEndian.PutUint32(buf[16:20], n.NextLeaf)
-	off := 24
+	binary.BigEndian.PutUint16(buf[nodeKeyCountOffset:], uint16(len(n.keys)))
+	binary.BigEndian.PutUint16(buf[nodeChildCountOffset:], uint16(len(n.children)))
+	binary.BigEndian.PutUint32(buf[nodeNextLeafOffset:], n.NextLeaf)
+	off := nodeHeaderSize
 	for _, k := range n.keys {
-		binary.BigEndian.PutUint64(buf[off:off+8], k)
-		off += 8
+		binary.BigEndian.PutUint64(buf[off:], k)
+		off += keySize
 	}
 	if n.isLeaf {
 		for _, v := range n.values {
-			binary.BigEndian.PutUint64(buf[off:off+8], v)
-			off += 8
+			binary.BigEndian.PutUint64(buf[off:], v)
+			off += valueSize
 		}
 	} else {
 		for _, c := range n.children {
-			binary.BigEndian.PutUint32(buf[off:off+4], c)
-			off += 4
+			binary.BigEndian.PutUint32(buf[off:], c)
+			off += childIDSize
 		}
 	}
 	return buf
 }
 
 func decodeNode(buf []byte) (*BTreeNode, error) {
-	if len(buf) < 24 {
+	if len(buf) < nodeHeaderSize {
 		return nil, errors.New("minuet-index: truncated page header")
 	}
-	if binary.BigEndian.Uint32(buf[0:4]) != pageMagic {
+	if binary.BigEndian.Uint32(buf) != pageMagic {
 		return nil, errors.New("minuet-index: invalid page")
 	}
-	n := &BTreeNode{ID: binary.BigEndian.Uint32(buf[4:8]), isLeaf: buf[8] == 1, NextLeaf: binary.BigEndian.Uint32(buf[16:20])}
-	keyCount := int(binary.BigEndian.Uint16(buf[10:12]))
-	childCount := int(binary.BigEndian.Uint16(buf[12:14]))
-	off := 24
-	itemBytes := keyCount * 8
+	n := &BTreeNode{ID: binary.BigEndian.Uint32(buf[nodeIDOffset:]), isLeaf: buf[nodeLeafFlagOffset] == 1, NextLeaf: binary.BigEndian.Uint32(buf[nodeNextLeafOffset:])}
+	keyCount := int(binary.BigEndian.Uint16(buf[nodeKeyCountOffset:]))
+	childCount := int(binary.BigEndian.Uint16(buf[nodeChildCountOffset:]))
+	off := nodeHeaderSize
+	itemBytes := keyCount * keySize
 	if n.isLeaf {
-		itemBytes *= 2
+		itemBytes += keyCount * valueSize
 	} else {
-		itemBytes += childCount * 4
+		itemBytes += childCount * childIDSize
 	}
 	if itemBytes > len(buf)-off {
 		return nil, errors.New("minuet-index: truncated page payload")
 	}
 	n.keys = make([]uint64, keyCount)
 	for i := 0; i < keyCount; i++ {
-		n.keys[i] = binary.BigEndian.Uint64(buf[off : off+8])
-		off += 8
+		n.keys[i] = binary.BigEndian.Uint64(buf[off:])
+		off += keySize
 	}
 	if n.isLeaf {
 		n.values = make([]uint64, keyCount)
 		for i := 0; i < keyCount; i++ {
-			n.values[i] = binary.BigEndian.Uint64(buf[off : off+8])
-			off += 8
+			n.values[i] = binary.BigEndian.Uint64(buf[off:])
+			off += valueSize
 		}
 	} else {
 		n.children = make([]uint32, childCount)
 		for i := 0; i < childCount; i++ {
-			n.children[i] = binary.BigEndian.Uint32(buf[off : off+4])
-			off += 4
+			n.children[i] = binary.BigEndian.Uint32(buf[off:])
+			off += childIDSize
 		}
 	}
 	return n, nil

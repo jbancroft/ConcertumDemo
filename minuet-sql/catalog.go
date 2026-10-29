@@ -12,11 +12,24 @@ const (
 	catalogHeaderSize           = 32
 	catalogRecordSize           = 80
 	catalogMaxRecords           = (catalogSize - catalogHeaderSize) / catalogRecordSize
-	catalogMaxNameLen           = 56
+	catalogMaxNameLen           = catalogRecordSize - catalogRecordNameOffset
 	catalogSchemaVersionCurrent = uint32(1)
 	minuetIndexSuperblockSize   = 64
 	minuetIndexRegionSize       = 1024
 	defaultCatalogNextBase      = 1024
+)
+
+// Byte offsets in the catalog header and table records.
+const (
+	catalogVersionOffset        = 4
+	catalogNextTableIDOffset    = 8
+	catalogNextBaseAddrOffset   = 16
+	catalogTableCountOffset     = 24
+	catalogRecordBaseAddrOffset = 8
+	catalogRecordSchemaOffset   = 16
+	catalogRecordActiveOffset   = 20
+	catalogRecordNameLenOffset  = 21
+	catalogRecordNameOffset     = 24
 )
 
 type catalogState struct {
@@ -33,7 +46,7 @@ type catalogTableRecord struct {
 }
 
 func decodeCatalog(raw []byte, cfgNextBase uint64) catalogState {
-	if len(raw) < catalogSize || binary.BigEndian.Uint32(raw[0:4]) != catalogMagic {
+	if len(raw) < catalogSize || binary.BigEndian.Uint32(raw) != catalogMagic {
 		base := cfgNextBase
 		if base < defaultCatalogNextBase {
 			base = defaultCatalogNextBase
@@ -43,13 +56,13 @@ func decodeCatalog(raw []byte, cfgNextBase uint64) catalogState {
 		}
 		return catalogState{nextTableID: 1, nextBaseAddr: alignUp(base, minuetIndexRegionSize)}
 	}
-	tableCount := int(binary.BigEndian.Uint32(raw[24:28]))
+	tableCount := int(binary.BigEndian.Uint32(raw[catalogTableCountOffset:]))
 	if tableCount > catalogMaxRecords {
 		tableCount = catalogMaxRecords
 	}
 	out := catalogState{
-		nextTableID:  binary.BigEndian.Uint64(raw[8:16]),
-		nextBaseAddr: binary.BigEndian.Uint64(raw[16:24]),
+		nextTableID:  binary.BigEndian.Uint64(raw[catalogNextTableIDOffset:]),
+		nextBaseAddr: binary.BigEndian.Uint64(raw[catalogNextBaseAddrOffset:]),
 		tables:       make([]catalogTableRecord, 0, tableCount),
 	}
 	if out.nextTableID == 0 {
@@ -65,21 +78,21 @@ func decodeCatalog(raw []byte, cfgNextBase uint64) catalogState {
 	for i := 0; i < tableCount && off+catalogRecordSize <= len(raw); i++ {
 		recRaw := raw[off : off+catalogRecordSize]
 		off += catalogRecordSize
-		if recRaw[20] != 1 {
+		if recRaw[catalogRecordActiveOffset] != 1 {
 			continue
 		}
-		nameLen := int(recRaw[21])
+		nameLen := int(recRaw[catalogRecordNameLenOffset])
 		if nameLen > catalogMaxNameLen {
 			nameLen = catalogMaxNameLen
 		}
-		name := normalizeName(string(recRaw[24 : 24+nameLen]))
+		name := normalizeName(string(recRaw[catalogRecordNameOffset : catalogRecordNameOffset+nameLen]))
 		if name == "" {
 			continue
 		}
 		out.tables = append(out.tables, catalogTableRecord{
-			tableID:       binary.BigEndian.Uint64(recRaw[0:8]),
-			indexBaseAddr: binary.BigEndian.Uint64(recRaw[8:16]),
-			schemaVersion: binary.BigEndian.Uint32(recRaw[16:20]),
+			tableID:       binary.BigEndian.Uint64(recRaw),
+			indexBaseAddr: binary.BigEndian.Uint64(recRaw[catalogRecordBaseAddrOffset:]),
+			schemaVersion: binary.BigEndian.Uint32(recRaw[catalogRecordSchemaOffset:]),
 			name:          name,
 		})
 	}
@@ -88,11 +101,11 @@ func decodeCatalog(raw []byte, cfgNextBase uint64) catalogState {
 
 func encodeCatalog(c catalogState) []byte {
 	buf := make([]byte, catalogSize)
-	binary.BigEndian.PutUint32(buf[0:4], catalogMagic)
-	binary.BigEndian.PutUint32(buf[4:8], catalogFormatVersion)
-	binary.BigEndian.PutUint64(buf[8:16], c.nextTableID)
-	binary.BigEndian.PutUint64(buf[16:24], c.nextBaseAddr)
-	binary.BigEndian.PutUint32(buf[24:28], uint32(len(c.tables)))
+	binary.BigEndian.PutUint32(buf, catalogMagic)
+	binary.BigEndian.PutUint32(buf[catalogVersionOffset:], catalogFormatVersion)
+	binary.BigEndian.PutUint64(buf[catalogNextTableIDOffset:], c.nextTableID)
+	binary.BigEndian.PutUint64(buf[catalogNextBaseAddrOffset:], c.nextBaseAddr)
+	binary.BigEndian.PutUint32(buf[catalogTableCountOffset:], uint32(len(c.tables)))
 	off := catalogHeaderSize
 	for _, rec := range c.tables {
 		if off+catalogRecordSize > len(buf) {
@@ -100,16 +113,16 @@ func encodeCatalog(c catalogState) []byte {
 		}
 		r := buf[off : off+catalogRecordSize]
 		off += catalogRecordSize
-		binary.BigEndian.PutUint64(r[0:8], rec.tableID)
-		binary.BigEndian.PutUint64(r[8:16], rec.indexBaseAddr)
-		binary.BigEndian.PutUint32(r[16:20], rec.schemaVersion)
-		r[20] = 1
+		binary.BigEndian.PutUint64(r, rec.tableID)
+		binary.BigEndian.PutUint64(r[catalogRecordBaseAddrOffset:], rec.indexBaseAddr)
+		binary.BigEndian.PutUint32(r[catalogRecordSchemaOffset:], rec.schemaVersion)
+		r[catalogRecordActiveOffset] = 1
 		name := []byte(rec.name)
 		if len(name) > catalogMaxNameLen {
 			name = name[:catalogMaxNameLen]
 		}
-		r[21] = byte(len(name))
-		copy(r[24:24+len(name)], name)
+		r[catalogRecordNameLenOffset] = byte(len(name))
+		copy(r[catalogRecordNameOffset:], name)
 	}
 	return buf
 }

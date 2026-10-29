@@ -14,6 +14,12 @@ import (
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
+const (
+	defaultHostID       = 1
+	defaultMaxRetries   = 8
+	defaultRetryBackoff = time.Millisecond
+)
+
 var (
 	ErrTableExists    = errors.New("minuet-sql: table already exists")
 	ErrTableNotFound  = errors.New("minuet-sql: table not found")
@@ -96,16 +102,16 @@ func NewEngine(cfg Config) (*Engine, error) {
 		return nil, errors.New("minuet-sql: index factory is required")
 	}
 	if cfg.HostId == 0 {
-		cfg.HostId = 1
+		cfg.HostId = defaultHostID
 	}
 	if cfg.NextBaseAddr == 0 {
 		cfg.NextBaseAddr = defaultCatalogNextBase
 	}
 	if cfg.MaxRetries <= 0 {
-		cfg.MaxRetries = 8
+		cfg.MaxRetries = defaultMaxRetries
 	}
 	if cfg.RetryBackoff <= 0 {
-		cfg.RetryBackoff = time.Millisecond
+		cfg.RetryBackoff = defaultRetryBackoff
 	}
 	e := &Engine{cfg: cfg, tables: map[string]*table{}}
 	if err := e.loadCatalog(context.Background()); err != nil {

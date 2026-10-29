@@ -22,12 +22,12 @@ type memTxnClient struct {
 func newMemTxnClient() *memTxnClient { return &memTxnClient{ram: make([]byte, 1<<20)} }
 
 func TestDecodeNodeRejectsTruncatedPages(t *testing.T) {
-	if _, err := decodeNode(make([]byte, 23)); err == nil {
+	if _, err := decodeNode(make([]byte, nodeHeaderSize-1)); err == nil {
 		t.Fatal("expected truncated header error")
 	}
 	page := make([]byte, pageSize)
-	binary.BigEndian.PutUint32(page[0:4], pageMagic)
-	binary.BigEndian.PutUint16(page[10:12], ^uint16(0))
+	binary.BigEndian.PutUint32(page, pageMagic)
+	binary.BigEndian.PutUint16(page[nodeKeyCountOffset:], ^uint16(0))
 	if _, err := decodeNode(page); err == nil {
 		t.Fatal("expected truncated payload error")
 	}

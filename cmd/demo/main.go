@@ -22,6 +22,13 @@ import (
 
 const balanceAddr = 768 // Separate from the SQL catalog and index pages.
 
+const (
+	demoTimeout     = 30 * time.Second
+	shutdownTimeout = 5 * time.Second
+	nodeMemorySize  = 2 << 20
+	indexBaseAddr   = 64 << 10
+)
+
 func main() {
 	dataRoot := flag.String("data-dir", "tmp/demo", "parent directory for a fresh demo run")
 	flag.Parse()
@@ -32,7 +39,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), demoTimeout)
 	defer cancel()
 	if err := run(ctx, dir, os.Stdout); err != nil {
 		fail(err)
@@ -161,7 +168,7 @@ func checkBalances(ctx context.Context, api *sinfoniaclient.Client) error {
 
 func newIndex(api *sinfoniaclient.Client) *minuetindex.BTree {
 	return minuetindex.NewBTree(api,
-		minuetindex.Config{HostId: 1, BaseAddress: 64 * 1024})
+		minuetindex.Config{HostId: 1, BaseAddress: indexBaseAddr})
 }
 
 func checkIndex(ctx context.Context, index *minuetindex.BTree) error {
@@ -220,7 +227,7 @@ func openCluster(ctx context.Context, dir string) (_ *cluster, err error) {
 	}()
 	nodes := map[uint32]sinfoniaclient.NodeConfig{}
 	for id := uint32(1); id <= 2; id++ {
-		node, err := memnode.NewDurableParticipant(id, 2<<20, filepath.Join(dir, fmt.Sprint(id)))
+		node, err := memnode.NewDurableParticipant(id, nodeMemorySize, filepath.Join(dir, fmt.Sprint(id)))
 		if err != nil {
 			return nil, err
 		}
@@ -252,7 +259,7 @@ func (c *cluster) close() error {
 	if c == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	var result error
 	if c.api != nil {

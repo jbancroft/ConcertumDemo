@@ -17,7 +17,7 @@ func FuzzDecodeCatalogNeverPanics(f *testing.F) {
 		}},
 	})
 	oversizedCount := append([]byte(nil), valid...)
-	binary.BigEndian.PutUint32(oversizedCount[24:28], ^uint32(0))
+	binary.BigEndian.PutUint32(oversizedCount[catalogTableCountOffset:], ^uint32(0))
 	f.Add([]byte{}, uint64(0))
 	f.Add(valid, uint64(defaultCatalogNextBase))
 	f.Add(oversizedCount, ^uint64(0))

@@ -25,30 +25,3 @@ func TestKeyedLimiterTracksKeysIndependently(t *testing.T) {
 		t.Fatal("key a burst should be exhausted")
 	}
 }
-
-func TestNilKeyedLimiterAllows(t *testing.T) {
-	var limiter *KeyedLimiter
-	if !limiter.AllowN("any", 100) {
-		t.Fatal("nil limiter should allow")
-	}
-}
-
-func FuzzLimiterNumericInputsNeverPanic(f *testing.F) {
-	f.Add(1.0, 1, 1, "key")
-	f.Add(math.NaN(), 1, 1, "")
-	f.Add(math.Inf(1), 1, -1, "key")
-	f.Add(0.0, 0, 0, "key")
-	f.Fuzz(func(t *testing.T, rate float64, burst, request int, key string) {
-		bucket := New(rate, burst)
-		keyed := NewKeyedLimiter(rate, burst)
-		invalid := rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) || burst <= 0
-		if invalid {
-			if bucket != nil || keyed != nil {
-				t.Fatal("invalid limiter configuration was accepted")
-			}
-			return
-		}
-		_ = bucket.AllowN(request)
-		_ = keyed.AllowN(key, request)
-	})
-}

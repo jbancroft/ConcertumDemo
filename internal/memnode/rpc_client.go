@@ -14,6 +14,11 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
+const (
+	defaultPeerTimeout  = 5 * time.Second
+	rpcPeerOwnerIDBytes = 16
+)
+
 type RPCPeer struct {
 	rpc   *rpcwire.Client
 	owner string
@@ -21,11 +26,11 @@ type RPCPeer struct {
 
 func NewRPCPeer(addr string, tlsConfig *tls.Config, timeout time.Duration) *RPCPeer {
 	if timeout <= 0 {
-		timeout = 5 * time.Second
+		timeout = defaultPeerTimeout
 	}
 	addr = strings.TrimSpace(addr)
 	owner := fmt.Sprintf("rpcpeer/%s", addr)
-	var raw [16]byte
+	var raw [rpcPeerOwnerIDBytes]byte
 	if _, err := cryptorand.Read(raw[:]); err == nil {
 		owner += "/" + hex.EncodeToString(raw[:])
 	}
