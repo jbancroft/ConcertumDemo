@@ -2,8 +2,6 @@ package sinfoniaclient
 
 import (
 	"context"
-	"crypto/tls"
-	"errors"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
@@ -71,82 +69,60 @@ type TxnClient interface {
 	Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
 }
 
-// Backend supplies the reads, writes, stats, and transactions used by Client.
-type Backend interface {
-	Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error)
-	Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
-	GetStats(hostId uint32) (Stats, error)
-	ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult
-}
-
-// Client sends operations to its transaction backend.
+// Client coordinates minitransactions across configured memory nodes.
 type Client struct {
-	backend Backend
+	coordinator *client.Coordinator
 }
 
-func NewClient(backend any) *Client {
-	switch b := backend.(type) {
-	case Backend:
-		return &Client{backend: b}
-	case interface {
-		Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error)
-		Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
-		GetStats(hostId uint32) (memnode.StatsResponse, error)
-		ExecuteAndCommit(ctx context.Context, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) client.ExecResult
-	}:
-		return &Client{backend: &coordinatorBackend{inner: b}}
-	default:
-		panic("sinfoniaclient.NewClient: unsupported backend")
-	}
+type NodeConfig struct {
+	RPCAddress string
+	StatsURL   string // Optional HTTP base URL for node statistics.
+	Generation uint64 // Fencing generation expected by the node.
 }
 
-func NewDirectoryBackedClient(ctx context.Context, dirAddr string, tlsConfig *tls.Config, timeout, refreshTTL time.Duration) (*Client, error) {
-	coord, err := client.NewDirectoryBackedCoordinator(ctx, dirAddr, tlsConfig, timeout, refreshTTL)
-	if err != nil {
-		return nil, err
+// NewClient configures the coordinator from explicit memory node addresses.
+func NewClient(config map[uint32]NodeConfig) *Client {
+	nodes := make(map[uint32]client.Participant, len(config))
+	stats := make(map[uint32]client.StatsReader)
+	generations := make(map[uint32]uint64, len(config))
+	for id, node := range config {
+		nodes[id] = client.NewRPCParticipantWithGeneration(node.RPCAddress, nil, 5*time.Second, node.Generation)
+		generations[id] = node.Generation
+		if node.StatsURL != "" {
+			stats[id] = client.NewAdminHTTPClient(node.StatsURL, 5*time.Second)
+		}
 	}
-	return &Client{backend: &coordinatorBackend{inner: coord}}, nil
+	coord := client.NewCoordinator(nodes)
+	coord.SetGenerations(generations)
+	coord.SetStatsReaders(stats)
+	return &Client{coordinator: coord}
 }
 
 func (c *Client) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
-	return c.backend.Read(ctx, hostId, addr, length)
+	return c.coordinator.Read(ctx, hostId, addr, length)
 }
 
 func (c *Client) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
-	return c.backend.Write(ctx, hostId, addr, data)
-}
-
-// ExecuteAndCommit submits the operations as one minitransaction.
-func (c *Client) ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult {
-	return c.backend.ExecuteAndCommit(ctx, class, compares, reads, writes)
+	return c.coordinator.Write(ctx, hostId, addr, data)
 }
 
 func (c *Client) GetStats(hostId uint32) (Stats, error) {
-	return c.backend.GetStats(hostId)
+	stats, err := c.coordinator.GetStats(hostId)
+	if err != nil {
+		return Stats{}, err
+	}
+	return statsFromInternal(stats), nil
 }
 
 func (c *Client) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff time.Duration) error {
-	type retryConfigurable interface {
-		SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff time.Duration) error
-	}
-	if cfg, ok := c.backend.(retryConfigurable); ok {
-		return cfg.SetRetryPolicy(maxRetries, baseBackoff, maxBackoff)
-	}
-	return errors.New("retry policy is not supported by this backend")
+	return c.coordinator.SetRetryPolicy(maxRetries, baseBackoff, maxBackoff)
 }
 
 // FlushPendingCommits waits for queued commit/abort messages to reach the nodes.
 // ExecuteAndCommit can return once the decision is recoverable, before those
 // messages finish. Flush when you need to wait for delivery and check its errors.
-// This does nothing if a custom backend doesn't provide a flush operation.
 func (c *Client) FlushPendingCommits(ctx context.Context) error {
-	type commitFlusher interface {
-		FlushPendingCommits(context.Context) error
-	}
-	if flusher, ok := c.backend.(commitFlusher); ok {
-		return flusher.FlushPendingCommits(ctx)
-	}
-	return nil
+	return c.coordinator.FlushPendingCommits(ctx)
 }
 
 func txnRateGroupFromInternal(in memnode.TxnRateGroup) TxnRateGroup {
@@ -174,32 +150,8 @@ func statsFromInternal(stats memnode.StatsResponse) Stats {
 	return out
 }
 
-type coordinatorBackend struct {
-	inner interface {
-		Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error)
-		Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
-		GetStats(hostId uint32) (memnode.StatsResponse, error)
-		ExecuteAndCommit(ctx context.Context, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) client.ExecResult
-	}
-}
-
-func (b *coordinatorBackend) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
-	return b.inner.Read(ctx, hostId, addr, length)
-}
-
-func (b *coordinatorBackend) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
-	return b.inner.Write(ctx, hostId, addr, data)
-}
-
-func (b *coordinatorBackend) GetStats(hostId uint32) (Stats, error) {
-	stats, err := b.inner.GetStats(hostId)
-	if err != nil {
-		return Stats{}, err
-	}
-	return statsFromInternal(stats), nil
-}
-
-func (b *coordinatorBackend) ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult {
+// ExecuteAndCommit submits the operations as one minitransaction.
+func (c *Client) ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult {
 	internalCmp := make([]sinfonia.CmpItem, 0, len(compares))
 	for _, item := range compares {
 		internalCmp = append(internalCmp, sinfonia.CmpItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
@@ -212,7 +164,7 @@ func (b *coordinatorBackend) ExecuteAndCommit(ctx context.Context, class string,
 	for _, item := range writes {
 		internalWrites = append(internalWrites, sinfonia.WriteItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
 	}
-	res := b.inner.ExecuteAndCommit(ctx, class, internalCmp, internalReads, internalWrites)
+	res := c.coordinator.ExecuteAndCommit(ctx, class, internalCmp, internalReads, internalWrites)
 	readsOut := make(map[ReadKey][]byte, len(res.ReadResults))
 	for k, v := range res.ReadResults {
 		readsOut[ReadKey{HostId: k.MemID, Address: k.Addr, Length: k.Len}] = append([]byte(nil), v...)
@@ -228,24 +180,6 @@ func (b *coordinatorBackend) ExecuteAndCommit(ctx context.Context, class string,
 		return ExecResult{Committed: false, ReadResults: map[ReadKey][]byte{}, Status: StatusAborted, ParticipantVotes: votes}
 	}
 	return ExecResult{Committed: true, ReadResults: readsOut, Status: StatusCommitted, ParticipantVotes: votes}
-}
-
-func (b *coordinatorBackend) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff time.Duration) error {
-	if cfg, ok := b.inner.(interface {
-		SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff time.Duration) error
-	}); ok {
-		return cfg.SetRetryPolicy(maxRetries, baseBackoff, maxBackoff)
-	}
-	return errors.New("retry policy is not supported by backend implementation")
-}
-
-func (b *coordinatorBackend) FlushPendingCommits(ctx context.Context) error {
-	if flusher, ok := b.inner.(interface {
-		FlushPendingCommits(context.Context) error
-	}); ok {
-		return flusher.FlushPendingCommits(ctx)
-	}
-	return nil
 }
 
 func (c *Client) NewMiniTransaction() *MiniTransaction {

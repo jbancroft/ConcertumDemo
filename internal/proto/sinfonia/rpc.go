@@ -403,22 +403,6 @@ type CompleteBackupPhaseResponse struct {
 	SnapshotSHA256 string
 }
 
-type UpdateEntryRequest struct {
-	MemID              uint32
-	Entry              DirectoryEntry
-	ExpectedGeneration uint64
-	// ExpectedRevision must match the directory revision, including zero.
-	ExpectedRevision uint64
-}
-
-type UpdateEntryResponse struct {
-	Ack               bool
-	CurrentGeneration uint64
-	Revision          uint64
-	OutcomeUnknown    bool
-	Degraded          bool
-}
-
 // Ideas for additional recovery and notification RPCs:
 // - RecoverVoteQuery(tid)
 // - AppliedTidsNotify(fromMemID, tids[])

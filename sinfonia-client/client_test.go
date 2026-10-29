@@ -1,15 +1,16 @@
-package sinfoniaclient_test
+package sinfoniaclient
 
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
-	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
 type backoffFunc func(context.Context, int)
@@ -21,11 +22,11 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 		name      string
 		compare   string
 		committed bool
-		status    sinfoniaclient.Status
+		status    Status
 		vote      sinfonia.Vote
 	}{
-		{name: "commit", compare: "a", committed: true, status: sinfoniaclient.StatusCommitted, vote: sinfonia.VoteOk},
-		{name: "compare abort", compare: "stale", status: sinfoniaclient.StatusAborted, vote: sinfonia.VoteBadCmp},
+		{name: "commit", compare: "a", committed: true, status: StatusCommitted, vote: sinfonia.VoteOk},
+		{name: "compare abort", compare: "stale", status: StatusAborted, vote: sinfonia.VoteBadCmp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -33,16 +34,16 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 			coord := client.NewCoordinator(map[uint32]client.Participant{
 				1: memnode.NewParticipant(16), 2: memnode.NewParticipant(16),
 			})
-			c := sinfoniaclient.NewClient(coord)
+			c := &Client{coordinator: coord}
 			for i, value := range []string{"a", "b"} {
 				if err := c.Write(ctx, uint32(i+1), 0, []byte(value)); err != nil {
 					t.Fatal(err)
 				}
 			}
 			result := c.ExecuteAndCommit(ctx, "direct",
-				[]sinfoniaclient.CompareItem{{HostId: 1, Address: 0, Data: []byte(tc.compare)}},
-				[]sinfoniaclient.ReadItem{{HostId: 1, Address: 0, Length: 1}, {HostId: 2, Address: 0, Length: 1}},
-				[]sinfoniaclient.WriteItem{{HostId: 1, Address: 0, Data: []byte("x")}, {HostId: 2, Address: 0, Data: []byte("y")}},
+				[]CompareItem{{HostId: 1, Address: 0, Data: []byte(tc.compare)}},
+				[]ReadItem{{HostId: 1, Address: 0, Length: 1}, {HostId: 2, Address: 0, Length: 1}},
+				[]WriteItem{{HostId: 1, Address: 0, Data: []byte("x")}, {HostId: 2, Address: 0, Data: []byte("y")}},
 			)
 			if result.Committed != tc.committed || result.Status != tc.status || result.UnknownOutcome {
 				t.Fatalf("unexpected transaction result: %+v", result)
@@ -52,7 +53,7 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 			}
 			if tc.committed {
 				for i, want := range []string{"a", "b"} {
-					key := sinfoniaclient.ReadKey{HostId: uint32(i + 1), Address: 0, Length: 1}
+					key := ReadKey{HostId: uint32(i + 1), Address: 0, Length: 1}
 					if got := string(result.ReadResults[key]); got != want {
 						t.Errorf("read result for node %d = %q, want %q", key.HostId, got, want)
 					}
@@ -92,9 +93,9 @@ func (n *lostOnePCReplyParticipant) ExecCommit1PC(ctx context.Context, req sinfo
 func TestExecuteAndCommitReportsUnknownAfterLostReply(t *testing.T) {
 	ctx := context.Background()
 	n := &lostOnePCReplyParticipant{Participant: memnode.NewParticipant(16)}
-	c := sinfoniaclient.NewClient(client.NewCoordinator(map[uint32]client.Participant{1: n}))
-	result := c.ExecuteAndCommit(ctx, "", nil, nil, []sinfoniaclient.WriteItem{{HostId: 1, Address: 0, Data: []byte("x")}})
-	if result.Committed || !result.UnknownOutcome || result.Status != sinfoniaclient.StatusUnknown {
+	c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: n})}
+	result := c.ExecuteAndCommit(ctx, "", nil, nil, []WriteItem{{HostId: 1, Address: 0, Data: []byte("x")}})
+	if result.Committed || !result.UnknownOutcome || result.Status != StatusUnknown {
 		t.Fatalf("lost reply should produce an unknown outcome: %+v", result)
 	}
 	if got, err := c.Read(ctx, 1, 0, 1); err != nil || string(got) != "x" {
@@ -106,7 +107,7 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 	n1 := memnode.NewParticipant(16)
 	n2 := memnode.NewParticipant(16)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
-	c := sinfoniaclient.NewClient(coord)
+	c := &Client{coordinator: coord}
 
 	if err := c.Write(context.Background(), 1, 0, []byte("a")); err != nil {
 		t.Fatal(err)
@@ -122,7 +123,7 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 		Write(2, 1, []byte("y")).
 		ExecuteAndCommit(context.Background())
 
-	if !committed || status != sinfoniaclient.StatusCommitted {
+	if !committed || status != StatusCommitted {
 		t.Fatalf("expected committed, got committed=%v status=%v", committed, status)
 	}
 
@@ -133,7 +134,7 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 func TestCompareAbortNoWritesApplied(t *testing.T) {
 	n1 := memnode.NewParticipant(16)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
-	c := sinfoniaclient.NewClient(coord)
+	c := &Client{coordinator: coord}
 	if err := c.Write(context.Background(), 1, 0, []byte("seed")); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +143,7 @@ func TestCompareAbortNoWritesApplied(t *testing.T) {
 	if committed {
 		t.Fatalf("expected abort")
 	}
-	if status != sinfoniaclient.StatusAborted {
+	if status != StatusAborted {
 		t.Fatalf("expected aborted status, got %v", status)
 	}
 	data, err := c.Read(context.Background(), 1, 0, 4)
@@ -168,7 +169,7 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}))
 	coord.SetMaxRetriesForTest(3)
-	c := sinfoniaclient.NewClient(coord)
+	c := &Client{coordinator: coord}
 
 	if err := c.Write(context.Background(), 1, 0, []byte("ab")); err != nil {
 		t.Fatal(err)
@@ -184,7 +185,7 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 		Write(2, 0, []byte("zw")).
 		ExecuteAndCommit(context.Background())
 
-	if !committed || status != sinfoniaclient.StatusCommitted {
+	if !committed || status != StatusCommitted {
 		t.Fatalf("expected commit after retry, got committed=%v status=%v", committed, status)
 	}
 	awaitValue(t, c, 1, 0, []byte("cd"))
@@ -193,10 +194,20 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 
 func TestMTxWithClassExposesClassStats(t *testing.T) {
 	n1 := memnode.NewParticipant(32)
-	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
-	c := sinfoniaclient.NewClient(coord)
+	defer n1.Close()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go n1.RPCServer().Serve(listener)
+	statsServer := httptest.NewServer(n1.HTTPHandler(false))
+	defer statsServer.Close()
+	c := NewClient(map[uint32]NodeConfig{
+		1: {RPCAddress: listener.Addr().String(), StatsURL: statsServer.URL},
+	})
 	committed, _, status := c.NewMiniTransaction().WithClass("inventory").Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
-	if !committed || status != sinfoniaclient.StatusCommitted {
+	if !committed || status != StatusCommitted {
 		t.Fatalf("expected committed inventory transaction")
 	}
 	stats, err := c.GetStats(1)
@@ -215,9 +226,9 @@ func TestMTxWithClassExposesClassStats(t *testing.T) {
 func TestMTxWithoutClassFallsBackToUnclassified(t *testing.T) {
 	n1 := memnode.NewParticipant(32)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
-	c := sinfoniaclient.NewClient(coord)
+	c := &Client{coordinator: coord}
 	committed, _, status := c.NewMiniTransaction().Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
-	if !committed || status != sinfoniaclient.StatusCommitted {
+	if !committed || status != StatusCommitted {
 		t.Fatalf("expected committed unclassified transaction")
 	}
 	stats, err := c.GetStats(1)
@@ -233,7 +244,7 @@ func TestMTxWithoutClassFallsBackToUnclassified(t *testing.T) {
 	}
 }
 
-func awaitValue(t *testing.T, c *sinfoniaclient.Client, hostId uint32, addr uint64, expected []byte) {
+func awaitValue(t *testing.T, c *Client, hostId uint32, addr uint64, expected []byte) {
 	t.Helper()
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for time.Now().Before(deadline) {

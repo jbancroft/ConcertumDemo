@@ -10,7 +10,6 @@ import (
 
 func TestPublicAPISignaturesDoNotExposeInternalPackages(t *testing.T) {
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.NewClient))
-	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.NewDirectoryBackedClient))
 	checkNoInternalType(t, reflect.TypeOf(&sinfoniaclient.Client{}))
 	checkNoInternalType(t, reflect.TypeOf(&sinfoniaclient.MiniTransaction{}))
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.Stats{}))
@@ -23,7 +22,6 @@ func TestPublicAPISignaturesDoNotExposeInternalPackages(t *testing.T) {
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.TxnRateGroup{}))
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.TxnClassStats{}))
 	checkNoInternalType(t, reflect.TypeOf((*sinfoniaclient.TxnClient)(nil)).Elem())
-	checkNoInternalType(t, reflect.TypeOf((*sinfoniaclient.Backend)(nil)).Elem())
 }
 
 var _ sinfoniaclient.TxnClient = (*sinfoniaclient.Client)(nil)
@@ -51,7 +49,9 @@ func checkNoInternalType(t *testing.T, typ reflect.Type) {
 			walk(cur.Elem())
 		case reflect.Struct:
 			for i := 0; i < cur.NumField(); i++ {
-				walk(cur.Field(i).Type)
+				if field := cur.Field(i); field.IsExported() {
+					walk(field.Type)
+				}
 			}
 		case reflect.Interface:
 			for i := 0; i < cur.NumMethod(); i++ {

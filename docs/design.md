@@ -21,6 +21,10 @@ library provides reads, writes, transactions, and node stats. Index and SQL code
 use the same client and transaction result types; the coordinator and RPC details
 are internal implementation packages.
 
+`sinfonia-client.NewClient` takes a map from memory node IDs to `NodeConfig`
+values and creates the coordinator for those nodes. Each configuration supplies
+an RPC address, with optional statistics URL and fencing generation.
+
 `MiniTransaction` holds comparisons, reads, and writes. It copies the supplied
 bytes so changing the caller's buffer won't change the transaction. Its host
 helpers return copies too. An `Executor` connects the builder to the client;

@@ -4,7 +4,7 @@ import "context"
 
 type generationContextKey struct{}
 
-// WithGeneration attaches the directory's fencing token to a direct node call,
+// WithGeneration attaches the fencing token to a direct node call,
 // where there is no RPC message to carry it.
 func WithGeneration(ctx context.Context, generation uint64) context.Context {
 	return context.WithValue(ctx, generationContextKey{}, generation)

@@ -16,6 +16,10 @@ type epochRecordingNode struct {
 	tids []sinfonia.TransactionID
 }
 
+type epochRetryBackoff func(context.Context, int)
+
+func (f epochRetryBackoff) Wait(ctx context.Context, attempt int) { f(ctx, attempt) }
+
 func (n *epochRecordingNode) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
 	n.tids = append(n.tids, req.TID)
 	return n.Participant.ExecAndPrepare(ctx, req)
@@ -57,6 +61,12 @@ func TestCoordinatorRetriesStaleEpochWithFreshID(t *testing.T) {
 				}
 				coord := NewCoordinator(nodes)
 				coord.maxRetries = retries
+				coord.backoff = epochRetryBackoff(func(ctx context.Context, _ int) {
+					// Deliver the failed attempt's abort before testing the epoch retry.
+					if err := coord.FlushPendingCommits(ctx); err != nil {
+						t.Fatal(err)
+					}
+				})
 				// Even a long-idle coordinator refreshes its epoch before sending.
 				coord.epoch = 1
 				result := coord.ExecuteAndCommit(ctx, "", nil, nil, writes)

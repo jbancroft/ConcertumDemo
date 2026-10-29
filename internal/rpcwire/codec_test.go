@@ -51,10 +51,6 @@ func TestFrameRoundTripForAllRegisteredRPCBodies(t *testing.T) {
 		sinfonia.NotifyAppliedResponse{Ack: true},
 		sinfonia.QueryTidStatusRequest{TID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 16, Epoch: 3}},
 		sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeCommit, VotedOK: true},
-		sinfonia.DirectoryRequest{},
-		sinfonia.DirectoryResponse{Mappings: map[uint32]sinfonia.DirectoryEntry{1: {Primary: sinfonia.Endpoint{RPC: "127.0.0.1:4001", HTTP: "http://127.0.0.1:7001"}}}},
-		sinfonia.ResolveRequest{MemID: 1},
-		sinfonia.ResolveResponse{MemID: 1, Primary: sinfonia.Endpoint{RPC: "127.0.0.1:4001", HTTP: "http://127.0.0.1:7001"}},
 	}
 
 	for _, body := range bodies {

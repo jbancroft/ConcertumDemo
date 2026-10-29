@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/client"
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	minuetindex "github.com/jbancroft/ConcertumDemo/minuet-index"
 	minuetsql "github.com/jbancroft/ConcertumDemo/minuet-sql"
@@ -219,7 +218,7 @@ func openCluster(ctx context.Context, dir string) (_ *cluster, err error) {
 			err = errors.Join(err, c.close())
 		}
 	}()
-	participants := map[uint32]client.Participant{}
+	nodes := map[uint32]sinfoniaclient.NodeConfig{}
 	for id := uint32(1); id <= 2; id++ {
 		node, err := memnode.NewDurableParticipant(id, 2<<20, filepath.Join(dir, fmt.Sprint(id)))
 		if err != nil {
@@ -235,7 +234,7 @@ func openCluster(ctx context.Context, dir string) (_ *cluster, err error) {
 		finished := make(chan error, 1)
 		c.servers = append(c.servers, finished)
 		go func() { finished <- node.RPCServer().Serve(tracked) }()
-		participants[id] = client.NewRPCParticipant(listener.Addr().String(), nil, 5*time.Second)
+		nodes[id] = sinfoniaclient.NodeConfig{RPCAddress: listener.Addr().String()}
 	}
 	// Recovery peers call each other directly; client requests go over local TCP.
 	c.nodes[0].SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: c.nodes[1]})
@@ -245,7 +244,7 @@ func openCluster(ctx context.Context, dir string) (_ *cluster, err error) {
 			return nil, err
 		}
 	}
-	c.api = sinfoniaclient.NewClient(client.NewCoordinator(participants))
+	c.api = sinfoniaclient.NewClient(nodes)
 	return c, nil
 }
 
