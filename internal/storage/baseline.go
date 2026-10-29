@@ -11,13 +11,11 @@ import (
 )
 
 const (
-	baselineJournalDirName   = ".baseline-install"
-	baselineTempPrefix       = ".baseline-install.tmp-"
-	baselineRestorePrefix    = ".baseline-restore.tmp-"
-	baselineTransferPrefix   = ".baseline-transfer-"
-	baselineTombstonePrefix  = ".baseline-install.done-"
-	baselineJournalVersion   = 2
-	baselineJournalVersionV1 = 1
+	baselineJournalDirName  = ".baseline-install"
+	baselineTempPrefix      = ".baseline-install.tmp-"
+	baselineRestorePrefix   = ".baseline-restore.tmp-"
+	baselineTransferPrefix  = ".baseline-transfer-"
+	baselineTombstonePrefix = ".baseline-install.done-"
 )
 
 var ErrBaselineInstallInProgress = errors.New("replication baseline install recovery is required")
@@ -31,17 +29,8 @@ var baselineInstallFiles = []string{
 	"replay.log",
 }
 
-var baselineInstallFilesV1 = []string{
-	"image.bin",
-	"redo.log",
-	"decided.log",
-	"forced_abort.log",
-	"processed.ptr",
-}
-
 type baselineJournal struct {
-	Version int                   `json:"version"`
-	Files   []baselineJournalFile `json:"files"`
+	Files []baselineJournalFile `json:"files"`
 }
 
 type baselineJournalFile struct {
@@ -83,7 +72,7 @@ func BeginBaselineInstall(dir string) (*BaselineInstallJournal, error) {
 		}
 	}()
 
-	manifest := baselineJournal{Version: baselineJournalVersion, Files: make([]baselineJournalFile, 0, len(baselineInstallFiles))}
+	manifest := baselineJournal{Files: make([]baselineJournalFile, 0, len(baselineInstallFiles))}
 	for _, name := range baselineInstallFiles {
 		path := filepath.Join(dir, name)
 		info, statErr := os.Stat(path)
@@ -175,20 +164,11 @@ func recoverJournal(dir, journalPath string) error {
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return err
 	}
-	var installFiles []string
-	switch manifest.Version {
-	case baselineJournalVersionV1:
-		installFiles = baselineInstallFilesV1
-	case baselineJournalVersion:
-		installFiles = baselineInstallFiles
-	default:
-		return fmt.Errorf("unsupported baseline journal version or file set")
+	if len(manifest.Files) != len(baselineInstallFiles) {
+		return errors.New("baseline journal contains an invalid file set")
 	}
-	if len(manifest.Files) != len(installFiles) {
-		return fmt.Errorf("unsupported baseline journal version or file set")
-	}
-	known := make(map[string]struct{}, len(installFiles))
-	for _, name := range installFiles {
+	known := make(map[string]struct{}, len(baselineInstallFiles))
+	for _, name := range baselineInstallFiles {
 		known[name] = struct{}{}
 	}
 	seen := make(map[string]struct{}, len(manifest.Files))

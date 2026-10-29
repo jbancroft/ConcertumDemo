@@ -9,8 +9,8 @@ import (
 func FuzzRecoverBaselineJournalNeverPanics(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte("not json"))
-	f.Add([]byte(`{"version":2,"files":[]}`))
-	f.Add([]byte(`{"version":2,"files":[{"name":"../image.bin","exists":true}]}`))
+	f.Add([]byte(`{"files":[]}`))
+	f.Add([]byte(`{"files":[{"name":"../image.bin","exists":true}]}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		dir := t.TempDir()
 		journal := filepath.Join(dir, baselineJournalDirName)
