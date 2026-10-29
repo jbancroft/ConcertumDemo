@@ -129,18 +129,12 @@ const (
 	ReplicationRoleReplica ReplicationRole = "replica"
 )
 
-// ReplicationFencingProtocolVersion identifies managers that understand an
-// uncertain result when saving a fencing generation. Durable nodes require it
-// before accepting a new generation.
-const ReplicationFencingProtocolVersion uint16 = 1
-
 type ConfigureReplicationRequest struct {
-	Role                   ReplicationRole
-	PartnerRPC             string
-	PartnerHTTP            string
-	MarkSynced             bool
-	Generation             uint64
-	FencingProtocolVersion uint16
+	Role        ReplicationRole
+	PartnerRPC  string
+	PartnerHTTP string
+	MarkSynced  bool
+	Generation  uint64
 }
 
 type ConfigureReplicationResponse struct {

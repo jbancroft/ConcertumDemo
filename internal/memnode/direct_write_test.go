@@ -83,9 +83,8 @@ func TestDurableDirectWritePreservesFencingPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := n.ConfigureReplication(ctx, sinfonia.ConfigureReplicationRequest{
-		Role:                   sinfonia.ReplicationRoleSingle,
-		Generation:             42,
-		FencingProtocolVersion: sinfonia.ReplicationFencingProtocolVersion,
+		Role:       sinfonia.ReplicationRoleSingle,
+		Generation: 42,
 	}); err != nil {
 		t.Fatal(err)
 	}

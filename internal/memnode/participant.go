@@ -34,7 +34,6 @@ const (
 var ErrReplicaRejectsCoordinator = errors.New("replica rejects direct coordinator requests")
 var ErrReplicationRequiresDurability = errors.New("replication requires durable storage")
 var ErrStaleGeneration = errors.New("stale or missing fencing generation")
-var ErrReplicationFencingProtocolUpgradeRequired = errors.New("replication fencing protocol upgrade required")
 var ErrDirectWriteRequiresMiniTransaction = errors.New("durable direct write requires a minitransaction")
 var ErrReplicationBaselineRequiresGlobalLock = errors.New("replication baseline requires the global write lock")
 var ErrReplicationBaselineLease = errors.New("replication baseline global lock lease is invalid")
@@ -694,9 +693,6 @@ func (n *Participant) ConfigureReplication(ctx context.Context, req sinfonia.Con
 	}
 	if n.generation != 0 && req.Generation < n.generation {
 		return sinfonia.ConfigureReplicationResponse{Ack: false}, ErrStaleGeneration
-	}
-	if n.storageDir != "" && req.Generation > n.generation && req.FencingProtocolVersion < sinfonia.ReplicationFencingProtocolVersion {
-		return sinfonia.ConfigureReplicationResponse{Ack: false}, ErrReplicationFencingProtocolUpgradeRequired
 	}
 	if req.Generation > n.generation {
 		if n.storageDir != "" {
