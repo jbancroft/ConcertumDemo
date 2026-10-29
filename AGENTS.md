@@ -1,10 +1,32 @@
 # Repository guidelines
 
-- **No tautological tests.** Tests should catch plausible bugs, not repeat the
-  implementation or verify trivial behavior.
+This is a small Go demo of distributed transactions, indexing, and SQL.
+Prioritize clear code, correct demonstrated behavior, and easy local execution.
 
-- **No legacy or backward compatibility unless explicitly requested.** Maintain
-  one current API, implementation, and data format.
+- Keep the demo self-contained and standard-library-only. Add dependencies,
+  configuration, or abstractions only when the requested behavior requires them.
 
-- **No magic numbers.** Use named constants unless a literal is self-explanatory
-  or has a clear reason to stay inline.
+- Tests should catch plausible behavioral bugs. Assert observable results and
+  invariants rather than reproducing the implementation. For transaction,
+  storage, and recovery changes, cover relevant failure and boundary cases.
+
+- Maintain one current API, implementation, and data format. Add legacy or
+  backward compatibility only when explicitly requested.
+
+- Name constants for non-obvious protocol values, storage layouts, limits,
+  and durations. Self-explanatory literals and simple example data may stay inline.
+
+- Consult docs/design.md when changing transaction semantics, storage formats,
+  recovery, or index invariants. Keep deliberate limitations documented.
+
+- For implementation requests, finish the in-scope changes and relevant local
+  validation. Resolve routine implementation choices independently and report
+  material assumptions.
+
+- During development, use focused tests. Before finishing Go code changes,
+  run make check; also run make race for concurrency changes and make demo
+  when the demonstrated behavior changes. Repeat passing checks only when
+  further changes or unresolved concerns justify it.
+
+- Update README.md when demo commands, observable behavior, or limitations change.
+  Finish with a concise account of what changed, verification, and remaining issues.
