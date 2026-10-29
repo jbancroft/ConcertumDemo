@@ -44,14 +44,14 @@ func TestMutationUnknownOutcomeIsNotRetried(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			base := newMemTxnClient()
-			reader := NewBTree(base, Config{HostId: 1})
+			reader := newTestBTree(t, base, Config{HostId: 1})
 			if test.delete {
 				if err := reader.Insert(ctx, 7, 70); err != nil {
 					t.Fatal(err)
 				}
 			}
 			client := &unknownOutcomeClient{TxnClient: base, applyWrites: test.applyWrites}
-			idx := NewBTree(client, Config{HostId: 1})
+			idx := newTestBTree(t, client, Config{HostId: 1})
 			var err error
 			if test.delete {
 				err = idx.Delete(ctx, 7)

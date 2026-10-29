@@ -20,7 +20,7 @@ const (
 
 func benchmarkIndex(b *testing.B) (*BTree, context.Context) {
 	b.Helper()
-	idx := NewBTree(newMemTxnClient(), Config{HostId: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
+	idx := newTestBTree(b, newMemTxnClient(), Config{HostId: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
 	return idx, context.Background()
 }
 

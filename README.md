@@ -135,16 +135,28 @@ directly.
 - This is experimental code for small examples. It isn't ready for production.
 - Operations and HTTP endpoints have no authentication or authorization.
 - A tree lives on one node, reads the whole reachable tree for updates, and never
-  reuses deleted pages. Searches and scans can be inconsistent during writes.
+  reuses deleted pages. Reads retry if a writer changes the tree during loading
+  and return `ErrBusy` if the retry budget runs out.
   There are no multiversion snapshots or writable clones.
-- A bad superblock currently looks like an empty tree; a later update can
-  overwrite existing data.
+- Trees require an explicit byte region. Nonzero invalid metadata and changed
+  region bounds are rejected; all-zero metadata still means unused storage.
 - SQL has a few `CREATE TABLE`, `INSERT`, `SELECT`, and `DELETE` forms. No joins,
   custom schemas, or multi-statement transactions. The catalog holds six tables;
-  creating another returns `ErrCatalogFull`. Table regions aren't sized for
-  arbitrary growth; the demo uses one small table.
+  creating another returns `ErrCatalogFull`. Each table has a fixed region
+  (64 KiB by default). A split that cannot fit returns `ErrTableFull` without
+  changing storage. `CREATE TABLE` returns `ErrStorageFull` if the configured
+  node memory cannot fit another region. Regions do not grow or reclaim pages.
 - Replication helpers are included, but automatic failover and the services to
   manage a cluster aren't. Real power-loss safety hasn't been tested here.
+
+When constructing a SQL engine, set `MemorySize` to the node's usable memory
+limit and optionally set `TableRegionSize` for new tables. SQL owns table storage
+from byte 1024 up to that limit. Saved tables retain their original bounds when
+reopened, even if the default region size changes. Direct index users supply
+`BaseAddress` and `RegionSize` to `NewBTree`, which now returns a tree and an error.
+
+The bounded tree and catalog formats require fresh data; earlier saved images
+are rejected. `make demo` creates a fresh directory on each run.
 
 [Design notes](docs/design.md) go into the details and tradeoffs.
 

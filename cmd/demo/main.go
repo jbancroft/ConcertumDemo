@@ -20,9 +20,10 @@ import (
 const balanceAddr = 768 // Separate from the SQL catalog and index pages.
 
 const (
-	demoTimeout    = time.Minute
-	nodeMemorySize = 2 << 20  // 2 MiB
-	indexBaseAddr  = 64 << 10 // 64 KiB
+	demoTimeout     = time.Minute
+	nodeMemorySize  = 2 << 20  // 2 MiB
+	indexBaseAddr   = 64 << 10 // 64 KiB
+	indexRegionSize = 64 << 10
 )
 
 func main() {
@@ -80,7 +81,10 @@ func run(ctx context.Context, executable, dir string, out io.Writer) (err error)
 	}
 	fmt.Fprintln(out, "Sinfonia: transfer committed; stale compare aborted; balances = 75, 125")
 
-	index := newIndex(c.Client)
+	index, err := newIndex(c.Client)
+	if err != nil {
+		return err
+	}
 	for key := uint64(1); key <= 40; key++ {
 		if err := index.Insert(ctx, key, key*10); err != nil {
 			return err
@@ -123,7 +127,11 @@ func run(ctx context.Context, executable, dir string, out io.Writer) (err error)
 	if err := checkBalances(ctx, c.Client); err != nil {
 		return err
 	}
-	if err := checkIndex(ctx, newIndex(c.Client)); err != nil {
+	index, err = newIndex(c.Client)
+	if err != nil {
+		return err
+	}
+	if err := checkIndex(ctx, index); err != nil {
 		return err
 	}
 	sql, err = newSQL(c.Client)
@@ -163,9 +171,9 @@ func checkBalances(ctx context.Context, api *sinfoniaclient.Client) error {
 	return nil
 }
 
-func newIndex(api *sinfoniaclient.Client) *minuetindex.BTree {
+func newIndex(api *sinfoniaclient.Client) (*minuetindex.BTree, error) {
 	return minuetindex.NewBTree(api,
-		minuetindex.Config{HostId: 1, BaseAddress: indexBaseAddr})
+		minuetindex.Config{HostId: 1, BaseAddress: indexBaseAddr, RegionSize: indexRegionSize})
 }
 
 func checkIndex(ctx context.Context, index *minuetindex.BTree) error {
@@ -190,10 +198,7 @@ func checkIndex(ctx context.Context, index *minuetindex.BTree) error {
 }
 
 func newSQL(api *sinfoniaclient.Client) (*minuetsql.Engine, error) {
-	return minuetsql.NewEngine(minuetsql.Config{HostId: 2, TxnClient: api,
-		BTreeFactory: func(id uint32, base uint64) *minuetindex.BTree {
-			return minuetindex.NewBTree(api, minuetindex.Config{HostId: id, BaseAddress: base})
-		}})
+	return minuetsql.NewEngine(minuetsql.Config{HostId: 2, TxnClient: api, MemorySize: nodeMemorySize})
 }
 
 func checkSQL(ctx context.Context, engine *minuetsql.Engine) error {

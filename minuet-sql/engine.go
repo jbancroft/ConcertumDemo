@@ -15,14 +15,18 @@ import (
 )
 
 const (
-	defaultHostID       = 1
-	defaultMaxRetries   = 8
-	defaultRetryBackoff = time.Millisecond
+	defaultHostID          = 1
+	defaultMaxRetries      = 8
+	defaultRetryBackoff    = time.Millisecond
+	defaultTableRegionSize = 64 << 10 // 64 KiB, including index metadata.
 )
 
 var (
 	ErrTableExists    = errors.New("minuet-sql: table already exists")
 	ErrCatalogFull    = errors.New("minuet-sql: catalog full")
+	ErrStorageFull    = errors.New("minuet-sql: no space for another table region")
+	ErrTableFull      = errors.New("minuet-sql: table region full")
+	ErrInvalidCatalog = errors.New("minuet-sql: invalid catalog")
 	ErrTableNotFound  = errors.New("minuet-sql: table not found")
 	ErrRowNotFound    = errors.New("minuet-sql: row not found")
 	ErrDuplicateKey   = errors.New("minuet-sql: duplicate key")
@@ -39,20 +43,18 @@ type QueryResult struct {
 	Rows []Row
 }
 
-type BTreeFactory func(hostId uint32, baseAddr uint64) *minuetindex.BTree
-
 type QuotaEnforcer interface {
 	CheckAndConsumeQuota(ctx context.Context, resource string, delta int64) error
 }
 
 type Config struct {
-	HostId       uint32
-	NextBaseAddr uint64
-	TxnClient    sinfoniaclient.TxnClient
-	BTreeFactory BTreeFactory
-	MaxRetries   int
-	RetryBackoff time.Duration
-	Quota        QuotaEnforcer
+	HostId          uint32
+	MemorySize      uint64 // Required upper bound on addresses used by SQL; must fit the node.
+	TableRegionSize uint64 // Bytes reserved for each new table; defaults to 64 KiB.
+	TxnClient       sinfoniaclient.TxnClient
+	MaxRetries      int
+	RetryBackoff    time.Duration
+	Quota           QuotaEnforcer
 }
 
 type Engine struct {
@@ -61,12 +63,8 @@ type Engine struct {
 }
 
 type table struct {
-	name          string
-	tableID       uint64
-	schemaVersion uint32
-	indexBaseAddr uint64
-	index         *minuetindex.BTree
-	keyLocks      keyLocker
+	index    *minuetindex.BTree
+	keyLocks keyLocker
 }
 
 type keyLocker struct {
@@ -99,14 +97,14 @@ func NewEngine(cfg Config) (*Engine, error) {
 	if cfg.TxnClient == nil {
 		return nil, errors.New("minuet-sql: txn client is required")
 	}
-	if cfg.BTreeFactory == nil {
-		return nil, errors.New("minuet-sql: index factory is required")
+	if cfg.MemorySize < defaultCatalogNextBase {
+		return nil, errors.New("minuet-sql: memory size must include the catalog reservation")
 	}
 	if cfg.HostId == 0 {
 		cfg.HostId = defaultHostID
 	}
-	if cfg.NextBaseAddr == 0 {
-		cfg.NextBaseAddr = defaultCatalogNextBase
+	if cfg.TableRegionSize == 0 {
+		cfg.TableRegionSize = defaultTableRegionSize
 	}
 	if cfg.MaxRetries <= 0 {
 		cfg.MaxRetries = defaultMaxRetries
@@ -115,6 +113,13 @@ func NewEngine(cfg Config) (*Engine, error) {
 		cfg.RetryBackoff = defaultRetryBackoff
 	}
 	e := &Engine{cfg: cfg, tables: map[string]*table{}}
+	// Validate the default for future tables, even if the catalog is empty.
+	if _, err := e.openTable(catalogTableRecord{indexBaseAddr: defaultCatalogNextBase, regionSize: cfg.TableRegionSize}); err != nil {
+		return nil, err
+	}
+	if _, err := cfg.TxnClient.Read(context.Background(), cfg.HostId, cfg.MemorySize-1, 1); err != nil {
+		return nil, fmt.Errorf("minuet-sql: memory limit is not readable: %w", err)
+	}
 	if err := e.loadCatalog(context.Background()); err != nil {
 		return nil, err
 	}
@@ -153,13 +158,13 @@ func (e *Engine) execute(ctx context.Context, p planNode) (QueryResult, error) {
 		return t.keyLocks.withLock(n.row.ID, func() (QueryResult, error) {
 			_, found, err := t.index.Search(ctx, n.row.ID)
 			if err != nil {
-				return QueryResult{}, mapBusy(err)
+				return QueryResult{}, mapIndexError(err)
 			}
 			if found {
 				return QueryResult{}, ErrDuplicateKey
 			}
 			if err := t.index.Insert(ctx, n.row.ID, n.row.Value); err != nil {
-				return QueryResult{}, mapBusy(err)
+				return QueryResult{}, mapIndexError(err)
 			}
 			return QueryResult{}, nil
 		})
@@ -171,13 +176,13 @@ func (e *Engine) execute(ctx context.Context, p planNode) (QueryResult, error) {
 		return t.keyLocks.withLock(n.id, func() (QueryResult, error) {
 			_, found, err := t.index.Search(ctx, n.id)
 			if err != nil {
-				return QueryResult{}, mapBusy(err)
+				return QueryResult{}, mapIndexError(err)
 			}
 			if !found {
 				return QueryResult{}, ErrRowNotFound
 			}
 			if err := t.index.Delete(ctx, n.id); err != nil {
-				return QueryResult{}, mapBusy(err)
+				return QueryResult{}, mapIndexError(err)
 			}
 			return QueryResult{}, nil
 		})
@@ -189,7 +194,7 @@ func (e *Engine) execute(ctx context.Context, p planNode) (QueryResult, error) {
 		if n.byID {
 			value, found, err := t.index.Search(ctx, n.id)
 			if err != nil {
-				return QueryResult{}, mapBusy(err)
+				return QueryResult{}, mapIndexError(err)
 			}
 			if !found {
 				return QueryResult{Rows: nil}, nil
@@ -198,7 +203,7 @@ func (e *Engine) execute(ctx context.Context, p planNode) (QueryResult, error) {
 		}
 		it, err := t.index.RangeScan(ctx, 0, math.MaxUint64)
 		if err != nil {
-			return QueryResult{}, mapBusy(err)
+			return QueryResult{}, mapIndexError(err)
 		}
 		out := make([]Row, 0)
 		for {
@@ -220,17 +225,17 @@ func (e *Engine) loadCatalog(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	catalog := decodeCatalog(raw, e.cfg.NextBaseAddr)
+	catalog, err := decodeCatalog(raw, e.cfg.MemorySize)
+	if err != nil {
+		return err
+	}
 	tables := make(map[string]*table, len(catalog.tables))
 	for _, rec := range catalog.tables {
-		tables[rec.name] = &table{
-			name:          rec.name,
-			tableID:       rec.tableID,
-			schemaVersion: rec.schemaVersion,
-			indexBaseAddr: rec.indexBaseAddr,
-			index:         e.cfg.BTreeFactory(e.cfg.HostId, rec.indexBaseAddr),
-			keyLocks:      keyLocker{},
+		t, err := e.openTable(rec)
+		if err != nil {
+			return err
 		}
+		tables[rec.name] = t
 	}
 	e.tables = tables
 	return nil
@@ -247,14 +252,24 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 		if err != nil {
 			return err
 		}
-		catalog := decodeCatalog(raw, e.cfg.NextBaseAddr)
+		catalog, err := decodeCatalog(raw, e.cfg.MemorySize)
+		if err != nil {
+			return err
+		}
 		if _, exists := catalog.tableByName(name); exists {
 			return ErrTableExists
 		}
 		if len(catalog.tables) >= catalogMaxRecords {
 			return ErrCatalogFull
 		}
-		rec := catalog.newTableRecord(name)
+		if e.cfg.TableRegionSize > e.cfg.MemorySize-catalog.nextBaseAddr {
+			return ErrStorageFull
+		}
+		rec := catalog.newTableRecord(name, e.cfg.TableRegionSize)
+		t, err := e.openTable(rec)
+		if err != nil {
+			return err
+		}
 		next := catalog.cloneWithTable(rec)
 		compares := []sinfoniaclient.CompareItem{
 			{HostId: e.cfg.HostId, Address: catalogAddr, Data: raw},
@@ -274,22 +289,29 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 		default:
 			return sinfoniaclient.ErrUnknownOutcome
 		}
-		e.tables[name] = &table{
-			name:          rec.name,
-			tableID:       rec.tableID,
-			schemaVersion: rec.schemaVersion,
-			indexBaseAddr: rec.indexBaseAddr,
-			index:         e.cfg.BTreeFactory(e.cfg.HostId, rec.indexBaseAddr),
-			keyLocks:      keyLocker{},
-		}
+		e.tables[name] = t
 		return nil
 	}
 	return ErrBusy
 }
 
-func mapBusy(err error) error {
+func (e *Engine) openTable(rec catalogTableRecord) (*table, error) {
+	index, err := minuetindex.NewBTree(e.cfg.TxnClient, minuetindex.Config{
+		HostId: e.cfg.HostId, BaseAddress: rec.indexBaseAddr, RegionSize: rec.regionSize,
+		MaxRetries: e.cfg.MaxRetries, RetryBackoff: e.cfg.RetryBackoff,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &table{index: index}, nil
+}
+
+func mapIndexError(err error) error {
 	if errors.Is(err, minuetindex.ErrBusy) {
 		return ErrBusy
+	}
+	if errors.Is(err, minuetindex.ErrRegionFull) {
+		return ErrTableFull
 	}
 	return err
 }

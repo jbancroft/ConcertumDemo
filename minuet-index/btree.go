@@ -1,9 +1,11 @@
 package minuetindex
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
+	"math"
 	"sort"
 	"time"
 
@@ -13,7 +15,7 @@ import (
 const (
 	superblockSize      = 64
 	pageSize            = 512
-	superMagic          = uint32(0x4d4e5432) // ASCII "MNT2": marks the tree metadata.
+	superMagic          = uint32(0x4d4e5433) // ASCII "MNT3": marks the bounded tree metadata.
 	pageMagic           = uint32(0x50414745) // ASCII "PAGE": marks a node's page.
 	maxLeafKeys         = 8
 	maxInternalKeys     = 8
@@ -23,28 +25,36 @@ const (
 
 // Byte offsets and element sizes in the superblock and node pages.
 const (
-	superVersionOffset   = 8
-	superRootPageOffset  = 16
-	superNextPageOffset  = 20
-	nodeIDOffset         = 4
-	nodeLeafFlagOffset   = 8
-	nodeKeyCountOffset   = 10
-	nodeChildCountOffset = 12
-	nodeNextLeafOffset   = 16
-	nodeHeaderSize       = 24
-	keySize              = 8
-	valueSize            = 8
-	childIDSize          = 4
+	superVersionOffset    = 8
+	superRootPageOffset   = 16
+	superNextPageOffset   = 20
+	superRegionSizeOffset = 24
+	nodeIDOffset          = 4
+	nodeLeafFlagOffset    = 8
+	nodeKeyCountOffset    = 10
+	nodeChildCountOffset  = 12
+	nodeNextLeafOffset    = 16
+	nodeHeaderSize        = 24
+	keySize               = 8
+	valueSize             = 8
+	childIDSize           = 4
 )
 
 var (
-	ErrNotFound = errors.New("minuet-index: key not found")
-	ErrBusy     = errors.New("minuet-index: retry budget exhausted")
+	ErrNotFound      = errors.New("minuet-index: key not found")
+	ErrBusy          = errors.New("minuet-index: retry budget exhausted")
+	ErrRegionFull    = errors.New("minuet-index: region full")
+	ErrInvalidRegion = errors.New("minuet-index: invalid region")
+	ErrCorrupt       = errors.New("minuet-index: corrupt tree metadata")
 )
+
+// MinRegionSize holds a superblock and one leaf page.
+const MinRegionSize = superblockSize + pageSize
 
 type Config struct {
 	HostId       uint32
 	BaseAddress  uint64
+	RegionSize   uint64 // Required byte limit, including the superblock.
 	MaxRetries   int
 	RetryBackoff time.Duration
 }
@@ -63,9 +73,10 @@ type BTree struct {
 // superblock is the tree's starting point: which page is the root and where to
 // allocate next. Version is an update counter, not a storage-format version.
 type superblock struct {
-	Version  uint64
-	RootPage uint32
-	NextPage uint32
+	Version    uint64
+	RootPage   uint32
+	NextPage   uint32
+	RegionSize uint64
 }
 
 // BTreeNode holds either leaf key/value pairs or internal keys and child IDs.
@@ -78,8 +89,8 @@ type BTreeNode struct {
 	NextLeaf uint32
 }
 
-// snapshot is a working copy. raw and rawSB keep the original bytes for the
-// commit comparisons; the reads themselves aren't a consistent snapshot.
+// snapshot is a working copy. Loading rechecks the superblock to detect changes
+// during the reads; raw and rawSB keep the original bytes for commit comparisons.
 type snapshot struct {
 	super superblock
 	nodes map[uint32]*BTreeNode
@@ -101,14 +112,21 @@ func (it *Iterator) Next() (Entry, bool) {
 	return e, true
 }
 
-func NewBTree(client sinfoniaclient.TxnClient, cfg Config) *BTree {
+// NewBTree requires an exclusive region on the selected node. It checks the
+// bounds here; operations validate saved metadata when they read the tree.
+func NewBTree(client sinfoniaclient.TxnClient, cfg Config) (*BTree, error) {
+	// NextPage must still fit uint32 when the final page has been allocated.
+	if cfg.RegionSize < MinRegionSize || cfg.RegionSize > math.MaxUint64-cfg.BaseAddress ||
+		(cfg.RegionSize-superblockSize)/pageSize >= math.MaxUint32 {
+		return nil, ErrInvalidRegion
+	}
 	if cfg.MaxRetries <= 0 {
 		cfg.MaxRetries = defaultMaxRetries
 	}
 	if cfg.RetryBackoff <= 0 {
 		cfg.RetryBackoff = defaultRetryBackoff
 	}
-	return &BTree{cfg: cfg, client: client}
+	return &BTree{cfg: cfg, client: client}, nil
 }
 
 func (idx *BTree) Search(ctx context.Context, key uint64) (uint64, bool, error) {
@@ -134,7 +152,10 @@ func (idx *BTree) Search(ctx context.Context, key uint64) (uint64, bool, error) 
 func (idx *BTree) Insert(ctx context.Context, key, value uint64) error {
 	return idx.mutate(ctx, "insert", func(s *snapshot) error {
 		if s.super.RootPage == 0 {
-			root := idx.allocNode(s, true)
+			root, err := idx.allocNode(s, true)
+			if err != nil {
+				return err
+			}
 			root.keys = []uint64{key}
 			root.values = []uint64{value}
 			s.super.RootPage = root.ID
@@ -145,7 +166,10 @@ func (idx *BTree) Insert(ctx context.Context, key, value uint64) error {
 			return err
 		}
 		if split {
-			newRoot := idx.allocNode(s, false)
+			newRoot, err := idx.allocNode(s, false)
+			if err != nil {
+				return err
+			}
 			newRoot.keys = []uint64{splitKey}
 			newRoot.children = []uint32{s.super.RootPage, splitChild}
 			s.super.RootPage = newRoot.ID
@@ -190,7 +214,12 @@ func (idx *BTree) RangeScan(ctx context.Context, start, end uint64) (*Iterator, 
 		i := sort.Search(len(n.keys), func(i int) bool { return start < n.keys[i] })
 		n = s.nodes[n.children[i]]
 	}
+	visited := make(map[uint32]bool)
 	for {
+		if n == nil || !n.isLeaf || visited[n.ID] {
+			return nil, ErrCorrupt
+		}
+		visited[n.ID] = true
 		for i := range n.keys {
 			if n.keys[i] < start {
 				continue
@@ -218,7 +247,11 @@ func (idx *BTree) mutate(ctx context.Context, class string, fn func(*snapshot) e
 		if err := fn(s); err != nil {
 			return err
 		}
-		switch idx.commitSnapshot(ctx, class, s) {
+		status, err := idx.commitSnapshot(ctx, class, s)
+		if err != nil {
+			return err
+		}
+		switch status {
 		case sinfoniaclient.StatusCommitted:
 			return nil
 		case sinfoniaclient.StatusAborted:
@@ -226,18 +259,54 @@ func (idx *BTree) mutate(ctx context.Context, class string, fn func(*snapshot) e
 		default:
 			return sinfoniaclient.ErrUnknownOutcome
 		}
-		timer := time.NewTimer(idx.cfg.RetryBackoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
+		if err := idx.waitForRetry(ctx); err != nil {
+			return err
 		}
 	}
 	return ErrBusy
 }
 
 func (idx *BTree) loadSnapshot(ctx context.Context) (*snapshot, error) {
+	for attempt := 0; attempt < idx.cfg.MaxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		s, err := idx.readSnapshot(ctx)
+		if s == nil || (err != nil && !errors.Is(err, ErrCorrupt)) {
+			return nil, err
+		}
+		// A concurrent split can make new page pointers look invalid against
+		// an older superblock. Every mutation updates the superblock, so only
+		// accept the pages (or report corruption) if those bytes still match.
+		current, readErr := idx.client.Read(ctx, idx.cfg.HostId, idx.cfg.BaseAddress, superblockSize)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if bytes.Equal(s.rawSB, current) {
+			if err != nil {
+				return nil, err
+			}
+			return s, nil
+		}
+		if err := idx.waitForRetry(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return nil, ErrBusy
+}
+
+func (idx *BTree) waitForRetry(ctx context.Context) error {
+	timer := time.NewTimer(idx.cfg.RetryBackoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (idx *BTree) readSnapshot(ctx context.Context) (*snapshot, error) {
 	rawSB, err := idx.client.Read(ctx, idx.cfg.HostId, idx.cfg.BaseAddress, superblockSize)
 	if err != nil {
 		return nil, err
@@ -246,27 +315,38 @@ func (idx *BTree) loadSnapshot(ctx context.Context) (*snapshot, error) {
 		return nil, errors.New("minuet-index: truncated superblock")
 	}
 	s := &snapshot{nodes: map[uint32]*BTreeNode{}, raw: map[uint32][]byte{}, rawSB: rawSB}
-	if binary.BigEndian.Uint32(rawSB) != superMagic {
-		// This also treats damaged metadata as a new tree. A later write can
-		// overwrite old data; a safer version would separate create from open.
-		s.super = superblock{Version: 0, RootPage: 0, NextPage: 1}
+	if allZero(rawSB) {
+		s.super = superblock{NextPage: 1, RegionSize: idx.cfg.RegionSize}
 		return s, nil
 	}
+	if binary.BigEndian.Uint32(rawSB) != superMagic {
+		return nil, ErrCorrupt
+	}
 	s.super = decodeSuperblock(rawSB)
+	if s.super.RegionSize != idx.cfg.RegionSize {
+		return nil, ErrInvalidRegion
+	}
+	if s.super.NextPage == 0 || uint64(s.super.NextPage)-1 > idx.maxPages() || s.super.RootPage >= s.super.NextPage {
+		return nil, ErrCorrupt
+	}
 	if s.super.RootPage == 0 {
 		return s, nil
 	}
-	if err := idx.readNodeRecursive(ctx, s, s.super.RootPage); err != nil {
-		return nil, err
-	}
-	return s, nil
+	err = idx.readNodeRecursive(ctx, s, s.super.RootPage)
+	return s, err
 }
 
 func (idx *BTree) readNodeRecursive(ctx context.Context, s *snapshot, pageID uint32) error {
 	if _, ok := s.nodes[pageID]; ok {
-		return nil
+		return ErrCorrupt // A tree cannot contain a cycle or a shared child.
 	}
-	addr := idx.pageAddr(pageID)
+	if pageID >= s.super.NextPage {
+		return ErrCorrupt
+	}
+	addr, err := idx.pageAddr(pageID)
+	if err != nil {
+		return err
+	}
 	raw, err := idx.client.Read(ctx, idx.cfg.HostId, addr, pageSize)
 	if err != nil {
 		return err
@@ -274,6 +354,9 @@ func (idx *BTree) readNodeRecursive(ctx context.Context, s *snapshot, pageID uin
 	n, err := decodeNode(raw)
 	if err != nil {
 		return err
+	}
+	if n.ID != pageID || n.NextLeaf >= s.super.NextPage {
+		return ErrCorrupt
 	}
 	s.nodes[pageID] = n
 	s.raw[pageID] = raw
@@ -288,11 +371,14 @@ func (idx *BTree) readNodeRecursive(ctx context.Context, s *snapshot, pageID uin
 }
 
 // commitSnapshot checks the original bytes and writes the changed pages together.
-func (idx *BTree) commitSnapshot(ctx context.Context, class string, s *snapshot) sinfoniaclient.Status {
+func (idx *BTree) commitSnapshot(ctx context.Context, class string, s *snapshot) (sinfoniaclient.Status, error) {
 	compares := []sinfoniaclient.CompareItem{{HostId: idx.cfg.HostId, Address: idx.cfg.BaseAddress, Data: s.rawSB}}
 	writes := []sinfoniaclient.WriteItem{{HostId: idx.cfg.HostId, Address: idx.cfg.BaseAddress, Data: encodeSuperblock(s.super)}}
 	for id, n := range s.nodes {
-		addr := idx.pageAddr(id)
+		addr, err := idx.pageAddr(id)
+		if err != nil {
+			return sinfoniaclient.StatusUnknown, err
+		}
 		old := s.raw[id]
 		if old == nil {
 			old = make([]byte, pageSize)
@@ -301,15 +387,18 @@ func (idx *BTree) commitSnapshot(ctx context.Context, class string, s *snapshot)
 		writes = append(writes, sinfoniaclient.WriteItem{HostId: idx.cfg.HostId, Address: addr, Data: encodeNode(n)})
 	}
 	res := idx.client.ExecuteAndCommit(ctx, "minuet-index:"+class, compares, nil, writes)
-	return res.Status
+	return res.Status, nil
 }
 
-func (idx *BTree) allocNode(s *snapshot, leaf bool) *BTreeNode {
+func (idx *BTree) allocNode(s *snapshot, leaf bool) (*BTreeNode, error) {
 	id := s.super.NextPage
+	if id == 0 || uint64(id) > idx.maxPages() {
+		return nil, ErrRegionFull
+	}
 	s.super.NextPage++
 	n := &BTreeNode{ID: id, isLeaf: leaf}
 	s.nodes[id] = n
-	return n
+	return n, nil
 }
 
 func (idx *BTree) insertRec(s *snapshot, pageID uint32, key, value uint64) (uint64, uint32, bool, error) {
@@ -328,7 +417,10 @@ func (idx *BTree) insertRec(s *snapshot, pageID uint32, key, value uint64) (uint
 		if len(n.keys) <= maxLeafKeys {
 			return 0, 0, false, nil
 		}
-		right := idx.allocNode(s, true)
+		right, err := idx.allocNode(s, true)
+		if err != nil {
+			return 0, 0, false, err
+		}
 		mid := len(n.keys) / 2
 		right.keys = append(right.keys, n.keys[mid:]...)
 		right.values = append(right.values, n.values[mid:]...)
@@ -352,7 +444,10 @@ func (idx *BTree) insertRec(s *snapshot, pageID uint32, key, value uint64) (uint
 	if len(n.keys) <= maxInternalKeys {
 		return 0, 0, false, nil
 	}
-	right := idx.allocNode(s, false)
+	right, err := idx.allocNode(s, false)
+	if err != nil {
+		return 0, 0, false, err
+	}
 	mid := len(n.keys) / 2
 	promote := n.keys[mid]
 	right.keys = append(right.keys, n.keys[mid+1:]...)
@@ -505,14 +600,16 @@ func encodeSuperblock(sb superblock) []byte {
 	binary.BigEndian.PutUint64(buf[superVersionOffset:], sb.Version+1)
 	binary.BigEndian.PutUint32(buf[superRootPageOffset:], sb.RootPage)
 	binary.BigEndian.PutUint32(buf[superNextPageOffset:], sb.NextPage)
+	binary.BigEndian.PutUint64(buf[superRegionSizeOffset:], sb.RegionSize)
 	return buf
 }
 
 func decodeSuperblock(buf []byte) superblock {
 	return superblock{
-		Version:  binary.BigEndian.Uint64(buf[superVersionOffset:]),
-		RootPage: binary.BigEndian.Uint32(buf[superRootPageOffset:]),
-		NextPage: binary.BigEndian.Uint32(buf[superNextPageOffset:]),
+		Version:    binary.BigEndian.Uint64(buf[superVersionOffset:]),
+		RootPage:   binary.BigEndian.Uint32(buf[superRootPageOffset:]),
+		NextPage:   binary.BigEndian.Uint32(buf[superNextPageOffset:]),
+		RegionSize: binary.BigEndian.Uint64(buf[superRegionSizeOffset:]),
 	}
 }
 
@@ -555,6 +652,11 @@ func decodeNode(buf []byte) (*BTreeNode, error) {
 	n := &BTreeNode{ID: binary.BigEndian.Uint32(buf[nodeIDOffset:]), isLeaf: buf[nodeLeafFlagOffset] == 1, NextLeaf: binary.BigEndian.Uint32(buf[nodeNextLeafOffset:])}
 	keyCount := int(binary.BigEndian.Uint16(buf[nodeKeyCountOffset:]))
 	childCount := int(binary.BigEndian.Uint16(buf[nodeChildCountOffset:]))
+	if buf[nodeLeafFlagOffset] > 1 ||
+		(n.isLeaf && (keyCount > maxLeafKeys || childCount != 0)) ||
+		(!n.isLeaf && (keyCount > maxInternalKeys || childCount != keyCount+1)) {
+		return nil, ErrCorrupt
+	}
 	off := nodeHeaderSize
 	itemBytes := keyCount * keySize
 	if n.isLeaf {
@@ -586,6 +688,22 @@ func decodeNode(buf []byte) (*BTreeNode, error) {
 	return n, nil
 }
 
-func (idx *BTree) pageAddr(pageID uint32) uint64 {
-	return idx.cfg.BaseAddress + superblockSize + uint64(pageID-1)*pageSize
+func (idx *BTree) pageAddr(pageID uint32) (uint64, error) {
+	if pageID == 0 || uint64(pageID) > idx.maxPages() {
+		return 0, ErrCorrupt
+	}
+	return idx.cfg.BaseAddress + superblockSize + uint64(pageID-1)*pageSize, nil
+}
+
+func (idx *BTree) maxPages() uint64 {
+	return (idx.cfg.RegionSize - superblockSize) / pageSize
+}
+
+func allZero(data []byte) bool {
+	for _, b := range data {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	minuetindex "github.com/jbancroft/ConcertumDemo/minuet-index"
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
@@ -18,11 +17,16 @@ type memTxnClient struct {
 	ram []byte
 }
 
-func newMemTxnClient() *memTxnClient { return &memTxnClient{ram: make([]byte, 1<<22)} }
+const testMemorySize = 1 << 22
+
+func newMemTxnClient() *memTxnClient { return &memTxnClient{ram: make([]byte, testMemorySize)} }
 
 func (m *memTxnClient) Read(_ context.Context, _ uint32, addr uint64, length uint32) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if addr > uint64(len(m.ram)) || uint64(length) > uint64(len(m.ram))-addr {
+		return nil, errors.New("memory read out of bounds")
+	}
 	out := make([]byte, length)
 	copy(out, m.ram[int(addr):int(addr)+int(length)])
 	return out, nil
@@ -76,11 +80,10 @@ func (c *conflictInjectingClient) ExecuteAndCommit(ctx context.Context, class st
 func newTestEngineWithClient(t *testing.T, client sinfoniaclient.TxnClient) *Engine {
 	t.Helper()
 	e, err := NewEngine(Config{
-		HostId:    1,
-		TxnClient: client,
-		BTreeFactory: func(hostId uint32, baseAddr uint64) *minuetindex.BTree {
-			return minuetindex.NewBTree(client, minuetindex.Config{HostId: hostId, BaseAddress: baseAddr, MaxRetries: 8, RetryBackoff: time.Microsecond})
-		},
+		HostId:       1,
+		TxnClient:    client,
+		MemorySize:   testMemorySize,
+		RetryBackoff: time.Microsecond,
 	})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -323,12 +326,11 @@ func TestEngineConflictRetryBudgetMapsToErrBusy(t *testing.T) {
 	ctx := context.Background()
 	client := &conflictInjectingClient{base: newMemTxnClient(), rejectFirstN: 0}
 	e, err := NewEngine(Config{
-		HostId:     1,
-		TxnClient:  client,
-		MaxRetries: 8,
-		BTreeFactory: func(hostId uint32, baseAddr uint64) *minuetindex.BTree {
-			return minuetindex.NewBTree(client, minuetindex.Config{HostId: hostId, BaseAddress: baseAddr, MaxRetries: 2, RetryBackoff: time.Microsecond})
-		},
+		HostId:       1,
+		TxnClient:    client,
+		MaxRetries:   2,
+		MemorySize:   testMemorySize,
+		RetryBackoff: time.Microsecond,
 	})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)

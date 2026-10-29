@@ -90,9 +90,10 @@ The demos don't test automatic failover or sudden power loss.
 
 ## The B+tree
 
-Each tree sits on one participant, at a chosen base address. A 64-byte superblock
-holds the root page ID, next page ID, and update counter. Nodes use 512-byte pages
-with up to eight keys each.
+Each tree sits on one participant, inside an exclusive byte region specified by
+`BaseAddress` and `RegionSize`. `NewBTree` returns an error for invalid bounds.
+A 64-byte superblock holds the root page ID, next page ID, update counter, and
+region size. Nodes use 512-byte pages with up to eight keys each.
 Leaves store sorted `uint64` keys and values plus a link to the next leaf;
 internal nodes store separator keys and child page IDs.
 
@@ -109,29 +110,43 @@ because the update may already have committed. Automatic outcome resolution
 is not implemented.
 Reading the whole tree keeps this simple, but makes updates expensive.
 
-Searches and scans read pages without validating the whole set afterward. A
-concurrent writer can therefore make those reads inconsistent. The iterator
-holds all scan results in memory. There are no multiversion snapshots, writable
-clones, proxy caches, or trees split across participants.
+Loading a tree reads the superblock again after its pages. Every mutation updates
+the superblock's counter, so matching bytes mean the pages came from one stable
+tree state. If the superblock changed, loading retries with backoff, including
+when new page pointers initially looked corrupt against older metadata. An
+unchanged superblock preserves a corruption error. Repeated changes can exhaust
+the retry budget and return `ErrBusy`; waiting also honors context cancellation.
+Searches and scans use this same loading path. The iterator holds all scan results
+in memory. There are no multiversion snapshots, writable clones, proxy caches,
+or trees split across participants.
 
-Page IDs only increase; deleted pages aren't reused. Repeated updates can run
-out of address space even when the live tree is small. Also, an invalid superblock
-currently looks like an uninitialized tree. A later update can overwrite old
-data. A safer design would separate creating a tree from opening an existing one
-and report damaged metadata as an error.
+Every page address is checked against the region, and allocation returns
+`ErrRegionFull` when another complete page cannot fit. Splits happen only in the
+working copy: if a leaf split succeeds there but an internal split or new root
+cannot fit, the whole operation returns without attempting a transaction.
+Updates that fit existing pages and deletes can still succeed at capacity.
+Page IDs only increase; deleted or merged pages aren't reused, so repeated
+insert/delete cycles can exhaust a region even when the live tree is small.
+
+Only an all-zero superblock is treated as uninitialized. Nonzero metadata with
+an invalid format, impossible page pointers, or a region size different from the
+configured size is rejected. These checks do not detect every form of corruption;
+there are no page checksums. In particular, erased metadata is indistinguishable
+from unused storage. The bounded format uses the `MNT3` magic; older tree images
+are rejected.
 
 ## The SQL layer
 
 Tables have two unsigned columns: `id` and `value`. A 512-byte catalog holds up to
-six table names and index base addresses. Creating a new table when all six slots
-are occupied returns `ErrCatalogFull` before attempting a write. Creating an
+six table names, index base addresses, and region sizes. Creating a new table
+when all six slots are occupied returns `ErrCatalogFull` before attempting a write. Creating an
 existing table still returns `ErrTableExists`. The parser supports `CREATE TABLE`,
 `INSERT`, `SELECT` with an optional ID filter, and `DELETE` by ID.
 
 Writes to the same key through one engine are serialized. Each data change uses
 the index's transaction path; there's no general SQL transaction manager or
-`BEGIN`/`COMMIT` support. Concurrent table creation and consistent scans alongside
-writers aren't guaranteed.
+`BEGIN`/`COMMIT` support. Concurrent table creation through one engine isn't
+supported.
 
 Table creation retries confirmed aborts and returns the same
 `sinfoniaclient.ErrUnknownOutcome` error on an uncertain result. It adds a table
@@ -140,9 +155,28 @@ deletes propagate the index's unknown-outcome error without retrying. Callers
 must treat any of these operations as potentially committed when they receive
 that error.
 
-The catalog reserves 1024 bytes between table base addresses. That isn't enough
-to keep growing indexes from overlapping. The demo uses one small table;
-multiple growing tables would need bounded regions or a shared page allocator.
+SQL reserves the first 1024 bytes for the catalog and demo metadata, then
+allocates a contiguous region for each table. `Config.MemorySize` is required
+and limits the addresses SQL can use on that node; opening the engine checks
+that its final byte is readable. The caller must dedicate the table storage
+range to SQL. `TableRegionSize` defaults to 64 KiB, including the superblock,
+which leaves room for 127 pages. This is a page budget, not a fixed row limit:
+splits, internal nodes, and unreclaimed pages all consume it.
+
+`CREATE TABLE` returns `ErrStorageFull` before writing if another whole region
+cannot fit. The catalog comparison and new record commit together, so a retry
+allocates from a fresh catalog. SQL constructs each index using the saved bounds
+and maps `ErrRegionFull` to `ErrTableFull`, without retrying it. Reopening validates
+the append-only layout and node limit. Changing `TableRegionSize` affects only
+new tables; existing regions cannot grow or move.
+
+Catalog format 2 keeps the 32-byte header and six 80-byte records. Each record
+stores an 8-byte table ID, 8-byte base, 8-byte region size, and a 56-byte zero-padded
+name. Old formats and malformed catalog metadata are rejected. There is no
+migration path; use fresh data when moving from the previous format. The demo
+already creates a fresh directory for every run. Tests grow adjacent tables,
+exhaust a region without changing stored bytes, and reopen those tables after
+restarting the durable memnode processes.
 
 ## What's left out
 
