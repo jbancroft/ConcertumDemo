@@ -89,6 +89,8 @@ a free port. Repeat `-peer ID=ADDRESS` for each other participant whose evidence
 may be needed during recovery. Nodes start recovery RPC service before finishing
 their own recovery, so they can restart together; recovery fails after 30 seconds
 if required evidence is still unavailable. Stop a standalone node with Ctrl-C.
+Shutdown cancels RPC handler contexts and closes client connections, then waits
+for handlers to finish before closing storage.
 Use the printed addresses in `sinfonia-client.NewClient`'s `NodeConfig` map.
 
 ## How it fits together

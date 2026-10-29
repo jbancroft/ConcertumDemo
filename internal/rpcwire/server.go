@@ -10,6 +10,7 @@ import (
 	"sync"
 )
 
+// Handler must observe context cancellation when waiting for work or resources.
 type Handler func(context.Context, any) (any, error)
 
 type Server struct {
@@ -46,14 +47,15 @@ func RegisterTyped[Req any, Resp any](s *Server, method string, fn func(context.
 }
 
 func (s *Server) Serve(listener net.Listener) error {
-	// Closing the listener also drains its handlers before the caller closes
-	// participant storage. Idle client connections must not prevent shutdown.
+	// Closing the listener cancels blocked handlers and closes idle connections.
+	// Drain all handlers before the caller closes participant storage.
 	var mu sync.Mutex
 	var handlers sync.WaitGroup
-	connections := make(map[net.Conn]struct{})
+	connections := make(map[net.Conn]context.CancelFunc)
 	defer func() {
 		mu.Lock()
-		for conn := range connections {
+		for conn, cancel := range connections {
+			cancel()
 			_ = conn.Close()
 		}
 		mu.Unlock()
@@ -67,30 +69,32 @@ func (s *Server) Serve(listener net.Listener) error {
 			}
 			return err
 		}
+		ctx := context.Background()
+		if s.connContext != nil {
+			if connCtx := s.connContext(conn); connCtx != nil {
+				ctx = connCtx
+			}
+		}
+		ctx, cancel := context.WithCancel(ctx)
 		mu.Lock()
-		connections[conn] = struct{}{}
+		connections[conn] = cancel
 		mu.Unlock()
 		handlers.Add(1)
 		go func() {
 			defer handlers.Done()
+			defer cancel()
 			defer func() {
 				mu.Lock()
 				delete(connections, conn)
 				mu.Unlock()
 			}()
-			s.serveConn(conn)
+			s.serveConn(ctx, conn)
 		}()
 	}
 }
 
-func (s *Server) serveConn(conn net.Conn) {
+func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
-	ctx := context.Background()
-	if s.connContext != nil {
-		if connCtx := s.connContext(conn); connCtx != nil {
-			ctx = connCtx
-		}
-	}
 	for {
 		var req Request
 		if err := readFrame(conn, &req); err != nil {

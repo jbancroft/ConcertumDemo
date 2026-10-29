@@ -175,7 +175,7 @@ func TestServerDoesNotDispatchMalformedRequest(t *testing.T) {
 
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go server.serveConn(serverConn)
+	go server.serveConn(context.Background(), serverConn)
 	if _, err := clientConn.Write(testFrame([]byte{0xff})); err != nil {
 		t.Fatalf("write malformed request: %v", err)
 	}
