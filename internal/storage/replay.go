@@ -57,7 +57,7 @@ func OpenReplayStore(dir string) (*ReplayStore, error) {
 
 // ReplayRetention decides which saved replies are too old to need anymore.
 // A reply can be dropped when Epoch + RetryHorizon <= CurrentEpoch, matching
-// the node's rule for rejecting old retries. Keep legacy IDs with Epoch == 0.
+// the node's rule for rejecting old retries.
 // A zero RetryHorizon keeps everything. The caller supplies an epoch that only
 // moves forward; the store doesn't guess it from the clock.
 type ReplayRetention struct {
@@ -67,15 +67,15 @@ type ReplayRetention struct {
 	RetryHorizon uint64
 }
 
-// Expired says whether a transaction is too old to retry. Legacy IDs with
-// Epoch == 0 are always kept, as are all IDs when RetryHorizon == 0.
+// Expired says whether a transaction is too old to retry.
+// A zero RetryHorizon disables expiration.
 func (r ReplayRetention) Expired(txId sinfonia.TransactionID) bool {
-	if txId.Epoch == 0 || r.RetryHorizon == 0 {
+	if r.RetryHorizon == 0 {
 		return false
 	}
 	// Subtract instead of adding to Epoch so uint64 can't overflow.
-	// If the current epoch hasn't passed the retry window, keep everything.
-	if r.CurrentEpoch <= r.RetryHorizon {
+	// If the current epoch hasn't reached the retry window, keep everything.
+	if r.CurrentEpoch < r.RetryHorizon {
 		return false
 	}
 	return txId.Epoch <= r.CurrentEpoch-r.RetryHorizon
@@ -215,8 +215,8 @@ func (s *ReplayStore) ReplaceFrom(path string) error {
 
 // Compact drops replies that are too old to retry. It writes a temporary file
 // and renames it, so a crash leaves either the old log or the new one.
-// Keep legacy IDs and replies still inside the retry window. A zero retry
-// window, or a current epoch no greater than the window, removes nothing.
+// Keep replies still inside the retry window. A zero retry window, or a current
+// epoch smaller than the window, removes nothing.
 func (s *ReplayStore) Compact(retention ReplayRetention) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

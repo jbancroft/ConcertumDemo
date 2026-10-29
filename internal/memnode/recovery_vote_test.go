@@ -177,6 +177,48 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 	}
 }
 
+func TestParticipantRejectsEpochZeroAtStaleBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		onePC bool
+	}{
+		{name: "prepare"},
+		{name: "one-phase", onePC: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			node := memnode.NewParticipant(64)
+			t.Cleanup(func() { _ = node.Close() })
+			now := time.Unix(1_000, 0)
+			node.SetEpochSourceForTest(time.Hour, func() time.Time { return now })
+			now = now.Add(time.Hour) // Current epoch is 2; epoch 0 is two epochs behind.
+			tid := sinfonia.TransactionID{CoordinatorID: 82, Counter: 1, Epoch: 0}
+			writes := []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}
+			var vote sinfonia.Vote
+			var err error
+			if tc.onePC {
+				var resp sinfonia.ExecCommit1PCResponse
+				resp, err = node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, WriteItems: writes})
+				vote = resp.Vote
+			} else {
+				var resp sinfonia.ExecPrepareResponse
+				resp, err = node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1}, HasWrites: true, WriteItems: writes})
+				vote = resp.Vote
+			}
+			if err != nil || vote != sinfonia.VoteBadStaleEpoch {
+				t.Fatalf("vote=%v err=%v, want stale-epoch vote", vote, err)
+			}
+			got, err := node.Read(ctx, 0, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got[0] != 0 {
+				t.Fatalf("stale request changed memory: %q", got)
+			}
+		})
+	}
+}
+
 func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

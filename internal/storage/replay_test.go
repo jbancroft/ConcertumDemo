@@ -264,12 +264,12 @@ func TestReplayStoreCompactPreservesRetryableTID(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Retry horizon is 8, current epoch 10. A TID is expired (dropped) iff
-	// Epoch + 8 <= 10, i.e. Epoch <= 2. Epoch 0 is legacy and always kept.
+	// Epoch + 8 <= 10, i.e. Epoch <= 2.
 	wellExpired := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1} // 1+8=9 <= 10 -> dropped
 	edgeExpired := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 2} // 2+8=10 <= 10 -> dropped (boundary)
 	edgeKept := sinfonia.TransactionID{CoordinatorID: 1, Counter: 3, Epoch: 3}    // 3+8=11 > 10 -> kept (just inside)
 	deepKept := sinfonia.TransactionID{CoordinatorID: 1, Counter: 4, Epoch: 9}    // 9+8=17 > 10 -> kept
-	legacy := sinfonia.TransactionID{CoordinatorID: 1, Counter: 5, Epoch: 0}      // legacy -> always kept
+	zeroEpoch := sinfonia.TransactionID{CoordinatorID: 1, Counter: 5, Epoch: 0}   // 0+8=8 <= 10 -> dropped
 	if err := store.AppendPrepare(wellExpired, sinfonia.ExecPrepareResponse{RequestID: "w", Vote: sinfonia.VoteBadCmp}); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestReplayStoreCompactPreservesRetryableTID(t *testing.T) {
 	if err := store.AppendPrepare(deepKept, sinfonia.ExecPrepareResponse{RequestID: "d", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendOnePC(legacy, sinfonia.ExecCommit1PCResponse{RequestID: "l", Vote: sinfonia.VoteOk}); err != nil {
+	if err := store.AppendOnePC(zeroEpoch, sinfonia.ExecCommit1PCResponse{RequestID: "zero", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Compact(storage.ReplayRetention{CurrentEpoch: 10, RetryHorizon: 8}); err != nil {
@@ -300,8 +300,8 @@ func TestReplayStoreCompactPreservesRetryableTID(t *testing.T) {
 	if _, ok := store.GetPrepare(deepKept); !ok {
 		t.Fatal("deep-kept TID dropped by compaction")
 	}
-	if _, ok := store.GetOnePC(legacy); !ok {
-		t.Fatal("legacy Epoch==0 TID dropped by compaction")
+	if _, ok := store.GetOnePC(zeroEpoch); ok {
+		t.Fatal("expired epoch-zero TID retained after compaction")
 	}
 	// Reopen and check that the saved log contains the expected records.
 	reopened, err := storage.OpenReplayStore(dir)
@@ -314,8 +314,8 @@ func TestReplayStoreCompactPreservesRetryableTID(t *testing.T) {
 	if _, ok := reopened.GetPrepare(edgeKept); !ok {
 		t.Fatal("edge-kept TID lost after restart")
 	}
-	if _, ok := reopened.GetOnePC(legacy); !ok {
-		t.Fatal("legacy TID lost after restart")
+	if _, ok := reopened.GetOnePC(zeroEpoch); ok {
+		t.Fatal("expired epoch-zero TID survived after restart")
 	}
 }
 
