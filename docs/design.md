@@ -80,10 +80,13 @@ Before discarding old replies or forced-abort records, a durable node saves an
 epoch floor. Restarts and replication baselines preserve that floor so a clock
 rollback cannot make a forgotten transaction eligible to execute again.
 
-In the demo, recovery peers call each other directly inside one process. Client
-requests use TCP on local, automatically assigned ports. Reopening the saved
-files demonstrates an orderly restart. The demo doesn't test a real cluster,
-automatic failover, or sudden power loss.
+Both demos launch the standalone `cmd/memnode` executable in separate processes.
+Client requests and recovery peer requests use TCP on local, automatically
+assigned ports. Each node serves recovery RPCs before announcing readiness, so
+durable participants can restart together and exchange evidence. The full demo
+restarts both processes with their saved files to demonstrate an orderly restart.
+Tests also restart nodes with prepared transactions whose coordinator vanished.
+The demos don't test automatic failover or sudden power loss.
 
 ## The B+tree
 

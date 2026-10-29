@@ -1,0 +1,77 @@
+package rpcwire
+
+import (
+	"context"
+	"net"
+	"testing"
+	"time"
+)
+
+func TestServeClosesIdleConnectionsAndDrainsHandlers(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	server := NewServer(nil, nil)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	server.Register("ping", func(context.Context, any) (any, error) { return "pong", nil })
+	server.Register("block", func(context.Context, any) (any, error) {
+		close(entered)
+		<-release
+		return "done", nil
+	})
+	finished := make(chan error, 1)
+	go func() { finished <- server.Serve(listener) }()
+	dial := func() net.Conn {
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		return conn
+	}
+	idle := dial()
+	if err := writeFrame(idle, Request{Method: "ping"}); err != nil {
+		t.Fatal(err)
+	}
+	var reply Response
+	if err := readFrame(idle, &reply); err != nil {
+		t.Fatal(err)
+	}
+	active := dial()
+	if err := writeFrame(active, Request{Method: "block"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not start")
+	}
+	_ = listener.Close()
+	if err := readFrame(idle, &reply); err == nil {
+		t.Fatal("idle connection survived listener shutdown")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("idle connection was not closed")
+	}
+	select {
+	case <-finished:
+		t.Fatal("Serve returned before its active handler completed")
+	default:
+	}
+	// Release via a value so the deferred close still handles an early failure.
+	release <- struct{}{}
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not finish after draining its handler")
+	}
+}

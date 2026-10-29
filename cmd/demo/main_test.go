@@ -3,16 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestDemoOverTCPAndDurableReopen(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), demoTimeout)
 	defer cancel()
 	var output bytes.Buffer
-	if err := run(ctx, t.TempDir(), &output); err != nil {
+	if err := run(ctx, os.Getenv("MEMNODE_BIN"), t.TempDir(), &output); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{

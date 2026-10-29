@@ -12,15 +12,15 @@ You need Go 1.22 or newer. Everything uses the standard library; there's nothing
 else to install or start.
 
 ```sh
-go run ./cmd/demo
+make demo
 ```
 
-The demo starts two nodes in one process and talks to them over local TCP. It
+The demo starts two standalone memnode processes and talks to them over local TCP. It
 transfers 25 between two balances, rejects an update based on a stale balance,
 inserts and deletes index entries, runs a SQL query, then reopens the saved data.
 
 ```text
-Two durable participants listening on loopback TCP
+Two durable memnode processes listening on loopback TCP
 Sinfonia: transfer committed; stale compare aborted; balances = 75, 125
 Minuet: inserted 40 keys; deleted 32; ordered range = 33..40
 SQL: SELECT id, value FROM scores -> [{1 100} {2 250}]
@@ -29,6 +29,67 @@ Recovery: reopened both nodes; balances, index, and SQL catalog/data verified
 
 Files are left under `tmp/demo/`; use `-data-dir <parent>` to choose another spot.
 The demo does an orderly restart. Tests cover crashes at specific points.
+The Makefile builds `bin/memnode` before launching either demo. Each demo starts
+the prebuilt executable, waits for the child nodes to finish recovery, and stops
+the processes on exit. To run a demo directly, first run `make memnode`, then use
+`go run ./cmd/demo` or `go run ./demo/sinfonia-client-demo` from the repository
+root. Use `-memnode-bin /path/to/memnode` to select a different executable.
+
+For a smaller example focused on the Sinfonia client API:
+
+```sh
+make sinfonia-client-demo
+```
+
+It starts two in-memory memnode processes on loopback TCP, initializes balances with direct
+writes, reads them back, transfers 25 with a compare/write minitransaction, and
+checks that a stale comparison aborts both writes:
+
+```text
+Two in-memory memnode processes listening on loopback TCP
+Initial balances: 100, 100
+After transferring 25: 75, 125
+Stale comparison aborted; balances unchanged: 75, 125
+```
+
+This example keeps node data in memory. Client usage is in
+[main.go](demo/sinfonia-client-demo/main.go); process
+startup is shared by both demos in [democluster](internal/democluster/cluster.go).
+It waits for background commit
+delivery before reading results and checks transaction statuses, including an
+unknown transfer outcome. It does not simulate network failures or recovery.
+
+## Run a memnode on its own
+
+```sh
+make memnode
+./bin/memnode -id 1 -listen 127.0.0.1:7001
+```
+
+You can also use `go run ./cmd/memnode` with the same flags. By default, a node
+has a 2 MiB memory image and keeps data in memory. Set `-size` to change the size
+in bytes, or `-data-dir` to save data across restarts. Each node needs a unique
+nonzero ID and its own storage directory.
+
+For two durable nodes, run these in separate terminals:
+
+```sh
+# Terminal 1
+./bin/memnode -id 1 -listen 127.0.0.1:7001 \
+  -data-dir tmp/node-1 -peer 2=127.0.0.1:7002
+
+# Terminal 2
+./bin/memnode -id 2 -listen 127.0.0.1:7002 \
+  -data-dir tmp/node-2 -peer 1=127.0.0.1:7001
+```
+
+The node prints one JSON record containing its ID and RPC address when recovery
+has finished and it is ready for client requests. `-listen 127.0.0.1:0` selects
+a free port. Repeat `-peer ID=ADDRESS` for each other participant whose evidence
+may be needed during recovery. Nodes start recovery RPC service before finishing
+their own recovery, so they can restart together; recovery fails after 30 seconds
+if required evidence is still unavailable. Stop a standalone node with Ctrl-C.
+Use the printed addresses in `sinfonia-client.NewClient`'s `NodeConfig` map.
 
 ## How it fits together
 
@@ -51,6 +112,8 @@ committed, so the API also has an explicit unknown result.
 | Start here | What to look for |
 | --- | --- |
 | [Demo](cmd/demo/main.go) | A complete example with checked results |
+| [Sinfonia client demo](demo/sinfonia-client-demo/main.go) | Direct reads/writes, a two-node transfer, and a comparison abort |
+| [Memnode command](cmd/memnode/main.go) | Standalone participant startup, recovery peers, and shutdown |
 | [Sinfonia user library](sinfonia-client/client.go) | Reads, writes, transactions, and node stats from an application |
 | [Transaction builder](minitxn/transaction.go) | The compare/read/write API and grouping work by host |
 | [Coordinator](internal/client/coordinator.go) | Votes, retries, and sending decisions |
@@ -84,9 +147,16 @@ directly.
 ```sh
 make check       # formatting, go vet, build, and tests
 make race        # tests with the Go race detector
+make memnode     # build bin/memnode for standalone use
 make demo
+make sinfonia-client-demo
 make bench       # a quick benchmark run, not a performance claim
 ```
+
+The test targets build the memnode executable used by the process integration
+tests; `make race` builds it with the race detector too. For direct `go test`
+invocations, first build it with `make memnode` and set
+`MEMNODE_BIN="$PWD/bin/memnode"` in the test environment.
 
 ## Where it came from
 

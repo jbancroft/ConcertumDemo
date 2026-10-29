@@ -1,6 +1,8 @@
-.PHONY: prepare check fmt-check vet build test race demo bench
+.PHONY: prepare check fmt-check vet build test race memnode demo sinfonia-client-demo bench
 
 export TMPDIR := $(CURDIR)/tmp
+MEMNODE_BIN := $(CURDIR)/bin/memnode
+MEMNODE_RACE_BIN := $(CURDIR)/bin/memnode-race
 
 prepare:
 	@mkdir -p tmp
@@ -8,23 +10,30 @@ prepare:
 check: fmt-check vet build test
 
 fmt-check:
-	@test -z "$$(gofmt -l cmd internal minitxn minuet-index minuet-sql sinfonia-client)" || \
-		{ gofmt -l cmd internal minitxn minuet-index minuet-sql sinfonia-client; exit 1; }
+	@test -z "$$(gofmt -l cmd demo internal minitxn minuet-index minuet-sql sinfonia-client)" || \
+		{ gofmt -l cmd demo internal minitxn minuet-index minuet-sql sinfonia-client; exit 1; }
 
 vet: prepare
 	go vet ./...
 
-build: prepare
+build: memnode
 	go build ./...
 
-test: prepare
-	go test ./...
+test: memnode
+	MEMNODE_BIN="$(MEMNODE_BIN)" go test ./...
 
 race: prepare
-	go test -race ./...
+	go build -race -o "$(MEMNODE_RACE_BIN)" ./cmd/memnode
+	MEMNODE_BIN="$(MEMNODE_RACE_BIN)" go test -race ./...
 
-demo: prepare
-	go run ./cmd/demo
+memnode: prepare
+	go build -o "$(MEMNODE_BIN)" ./cmd/memnode
+
+demo: memnode
+	go run ./cmd/demo -memnode-bin "$(MEMNODE_BIN)"
+
+sinfonia-client-demo: memnode
+	go run ./demo/sinfonia-client-demo -memnode-bin "$(MEMNODE_BIN)"
 
 bench: prepare
 	go test ./minuet-index -run '^$$' -bench '^BenchmarkMinuetIndex' -benchtime=1x -benchmem

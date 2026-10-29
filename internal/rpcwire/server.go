@@ -46,6 +46,19 @@ func RegisterTyped[Req any, Resp any](s *Server, method string, fn func(context.
 }
 
 func (s *Server) Serve(listener net.Listener) error {
+	// Closing the listener also drains its handlers before the caller closes
+	// participant storage. Idle client connections must not prevent shutdown.
+	var mu sync.Mutex
+	var handlers sync.WaitGroup
+	connections := make(map[net.Conn]struct{})
+	defer func() {
+		mu.Lock()
+		for conn := range connections {
+			_ = conn.Close()
+		}
+		mu.Unlock()
+		handlers.Wait()
+	}()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -54,7 +67,19 @@ func (s *Server) Serve(listener net.Listener) error {
 			}
 			return err
 		}
-		go s.serveConn(conn)
+		mu.Lock()
+		connections[conn] = struct{}{}
+		mu.Unlock()
+		handlers.Add(1)
+		go func() {
+			defer handlers.Done()
+			defer func() {
+				mu.Lock()
+				delete(connections, conn)
+				mu.Unlock()
+			}()
+			s.serveConn(conn)
+		}()
 	}
 }
 

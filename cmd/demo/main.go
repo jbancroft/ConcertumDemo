@@ -8,13 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"path/filepath"
-	"sync"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/memnode"
+	"github.com/jbancroft/ConcertumDemo/internal/democluster"
 	minuetindex "github.com/jbancroft/ConcertumDemo/minuet-index"
 	minuetsql "github.com/jbancroft/ConcertumDemo/minuet-sql"
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
@@ -23,13 +20,13 @@ import (
 const balanceAddr = 768 // Separate from the SQL catalog and index pages.
 
 const (
-	demoTimeout     = 30 * time.Second
-	shutdownTimeout = 5 * time.Second
-	nodeMemorySize  = 2 << 20  // 2 MiB
-	indexBaseAddr   = 64 << 10 // 64 KiB
+	demoTimeout    = time.Minute
+	nodeMemorySize = 2 << 20  // 2 MiB
+	indexBaseAddr  = 64 << 10 // 64 KiB
 )
 
 func main() {
+	executable := flag.String("memnode-bin", "bin/memnode", "path to the prebuilt memnode executable")
 	dataRoot := flag.String("data-dir", "tmp/demo", "parent directory for a fresh demo run")
 	flag.Parse()
 	if err := os.MkdirAll(*dataRoot, 0o755); err != nil {
@@ -41,7 +38,7 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), demoTimeout)
 	defer cancel()
-	if err := run(ctx, dir, os.Stdout); err != nil {
+	if err := run(ctx, *executable, dir, os.Stdout); err != nil {
 		fail(err)
 	}
 	fmt.Printf("Demo data retained in %s\n", dir)
@@ -52,38 +49,38 @@ func fail(err error) {
 	os.Exit(1)
 }
 
-func run(ctx context.Context, dir string, out io.Writer) (err error) {
-	c, err := openCluster(ctx, dir)
+func run(ctx context.Context, executable, dir string, out io.Writer) (err error) {
+	c, err := democluster.Start(ctx, executable, dir, nodeMemorySize)
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, c.close()) }()
-	fmt.Fprintln(out, "Two durable participants listening on loopback TCP")
+	defer func() { err = errors.Join(err, c.Close()) }()
+	fmt.Fprintln(out, "Two durable memnode processes listening on loopback TCP")
 
-	if err := commit(ctx, c.api, c.api.NewMiniTransaction().
+	if err := commit(ctx, c.Client, c.Client.NewMiniTransaction().
 		Write(1, balanceAddr, number(100)).Write(2, balanceAddr, number(100))); err != nil {
 		return err
 	}
-	if err := commit(ctx, c.api, c.api.NewMiniTransaction().
+	if err := commit(ctx, c.Client, c.Client.NewMiniTransaction().
 		Compare(1, balanceAddr, number(100)).Compare(2, balanceAddr, number(100)).
 		Write(1, balanceAddr, number(75)).Write(2, balanceAddr, number(125))); err != nil {
 		return err
 	}
 	// The balance is now 75, so comparing it with 100 must reject both writes.
-	ok, _, status := c.api.NewMiniTransaction().Compare(1, balanceAddr, number(100)).
+	ok, _, status := c.Client.NewMiniTransaction().Compare(1, balanceAddr, number(100)).
 		Write(1, balanceAddr, number(0)).Write(2, balanceAddr, number(0)).ExecuteAndCommit(ctx)
 	if ok || status != sinfoniaclient.StatusAborted {
 		return fmt.Errorf("stale compare: committed=%t status=%d", ok, status)
 	}
-	if err := c.api.FlushPendingCommits(ctx); err != nil {
+	if err := c.Client.FlushPendingCommits(ctx); err != nil {
 		return err
 	}
-	if err := checkBalances(ctx, c.api); err != nil {
+	if err := checkBalances(ctx, c.Client); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "Sinfonia: transfer committed; stale compare aborted; balances = 75, 125")
 
-	index := newIndex(c.api)
+	index := newIndex(c.Client)
 	for key := uint64(1); key <= 40; key++ {
 		if err := index.Insert(ctx, key, key*10); err != nil {
 			return err
@@ -99,7 +96,7 @@ func run(ctx context.Context, dir string, out io.Writer) (err error) {
 	}
 	fmt.Fprintln(out, "Minuet: inserted 40 keys; deleted 32; ordered range = 33..40")
 
-	sql, err := newSQL(c.api)
+	sql, err := newSQL(c.Client)
 	if err != nil {
 		return err
 	}
@@ -116,20 +113,20 @@ func run(ctx context.Context, dir string, out io.Writer) (err error) {
 	}
 	fmt.Fprintln(out, "SQL: SELECT id, value FROM scores -> [{1 100} {2 250}]")
 
-	if err := c.close(); err != nil {
+	if err := c.Close(); err != nil {
 		return err
 	}
-	c, err = openCluster(ctx, dir)
+	c, err = democluster.Start(ctx, executable, dir, nodeMemorySize)
 	if err != nil {
 		return err
 	}
-	if err := checkBalances(ctx, c.api); err != nil {
+	if err := checkBalances(ctx, c.Client); err != nil {
 		return err
 	}
-	if err := checkIndex(ctx, newIndex(c.api)); err != nil {
+	if err := checkIndex(ctx, newIndex(c.Client)); err != nil {
 		return err
 	}
-	sql, err = newSQL(c.api)
+	sql, err = newSQL(c.Client)
 	if err != nil {
 		return err
 	}
@@ -209,113 +206,4 @@ func checkSQL(ctx context.Context, engine *minuetsql.Engine) error {
 		return fmt.Errorf("unexpected SQL rows: %+v", result.Rows)
 	}
 	return nil
-}
-
-type cluster struct {
-	nodes     []*memnode.Participant
-	listeners []*closingListener
-	servers   []chan error
-	api       *sinfoniaclient.Client
-}
-
-func openCluster(ctx context.Context, dir string) (_ *cluster, err error) {
-	c := &cluster{}
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, c.close())
-		}
-	}()
-	nodes := map[uint32]sinfoniaclient.NodeConfig{}
-	for id := uint32(1); id <= 2; id++ {
-		node, err := memnode.NewDurableParticipant(id, nodeMemorySize, filepath.Join(dir, fmt.Sprint(id)))
-		if err != nil {
-			return nil, err
-		}
-		c.nodes = append(c.nodes, node)
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return nil, err
-		}
-		tracked := &closingListener{Listener: listener}
-		c.listeners = append(c.listeners, tracked)
-		finished := make(chan error, 1)
-		c.servers = append(c.servers, finished)
-		go func() { finished <- node.RPCServer().Serve(tracked) }()
-		nodes[id] = sinfoniaclient.NodeConfig{RPCAddress: listener.Addr().String()}
-	}
-	// Recovery peers call each other directly; client requests go over local TCP.
-	c.nodes[0].SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: c.nodes[1]})
-	c.nodes[1].SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: c.nodes[0]})
-	for _, node := range c.nodes {
-		if err := node.Recover(ctx); err != nil {
-			return nil, err
-		}
-	}
-	c.api = sinfoniaclient.NewClient(nodes)
-	return c, nil
-}
-
-func (c *cluster) close() error {
-	if c == nil {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	var result error
-	if c.api != nil {
-		result = errors.Join(result, c.api.FlushPendingCommits(ctx))
-		c.api = nil
-	}
-	for _, node := range c.nodes {
-		node.FlushAppliedNotifications(ctx)
-	}
-	for _, listener := range c.listeners {
-		result = errors.Join(result, listener.Close())
-	}
-	for _, finished := range c.servers {
-		result = errors.Join(result, <-finished)
-	}
-	for _, node := range c.nodes {
-		result = errors.Join(result, node.Close())
-	}
-	c.nodes, c.listeners, c.servers = nil, nil, nil
-	return result
-}
-
-// closingListener closes accepted connections as well as the listening socket,
-// so restarting the demo never leaves pooled connections attached to old nodes.
-type closingListener struct {
-	net.Listener
-	mu     sync.Mutex
-	closed bool
-	conns  []net.Conn
-}
-
-func (l *closingListener) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		return nil, err
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.closed {
-		_ = conn.Close()
-		return nil, net.ErrClosed
-	}
-	l.conns = append(l.conns, conn)
-	return conn, nil
-}
-
-func (l *closingListener) Close() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.closed {
-		return nil
-	}
-	l.closed = true
-	err := l.Listener.Close()
-	for _, conn := range l.conns {
-		_ = conn.Close()
-	}
-	return err
 }
