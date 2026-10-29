@@ -1,9 +1,6 @@
 package sinfonia
 
-import (
-	"encoding/gob"
-	"reflect"
-)
+import "encoding/gob"
 
 type ReadRequest struct {
 	Addr       uint64
@@ -62,8 +59,6 @@ func init() {
 }
 
 func registerGobTypes() {
-	// Keep the original gob names so moving these types between packages or
-	// renaming the module doesn't change the messages sent over the wire.
 	for _, body := range []any{
 		ReadRequest{},
 		ReadResponse{},
@@ -138,7 +133,6 @@ func registerGobTypes() {
 		UpdateEntryRequest{},
 		UpdateEntryResponse{},
 	} {
-		name := "github.com/jbancroft/concertum2/internal/proto." + reflect.TypeOf(body).Name()
-		gob.RegisterName(name, body)
+		gob.Register(body)
 	}
 }

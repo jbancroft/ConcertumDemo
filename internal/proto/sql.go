@@ -1,9 +1,6 @@
 package proto
 
-import (
-	"encoding/gob"
-	"reflect"
-)
+import "encoding/gob"
 
 const SQLRPCVersion1 uint16 = 1
 
@@ -59,7 +56,6 @@ type SQLRow struct {
 }
 
 func init() {
-	// Preserve the original gob names independently of the module path.
 	for _, body := range []any{
 		SQLExecRequest{},
 		SQLExecResponse{},
@@ -70,7 +66,6 @@ func init() {
 		SQLCapabilities{},
 		SQLRow{},
 	} {
-		name := "github.com/jbancroft/concertum2/internal/proto." + reflect.TypeOf(body).Name()
-		gob.RegisterName(name, body)
+		gob.Register(body)
 	}
 }

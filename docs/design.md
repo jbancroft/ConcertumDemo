@@ -25,7 +25,7 @@ are internal implementation packages.
 bytes so changing the caller's buffer won't change the transaction. Its host
 helpers return copies too. An `Executor` connects the builder to the client;
 there's no global list of hosts. Public items use `HostId`, `Address`, and
-`Length`; the wire messages keep their older field names for compatibility.
+`Length`; internal messages use `MemID`, `Addr`, and `Len`.
 
 ## A transaction
 
