@@ -1,4 +1,4 @@
-package proto
+package sinfonia
 
 // RequestID labels a request delivery attempt within a transaction.
 type RequestID string

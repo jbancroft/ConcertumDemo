@@ -8,7 +8,7 @@ import (
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
@@ -21,28 +21,28 @@ type countingNode struct {
 	commitBatchN   int
 }
 
-func (n *countingNode) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
+func (n *countingNode) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
 	n.mu.Lock()
 	n.execPrepareN++
 	n.mu.Unlock()
 	return n.Participant.ExecAndPrepare(ctx, req)
 }
 
-func (n *countingNode) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
+func (n *countingNode) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
 	n.mu.Lock()
 	n.execCommit1PCN++
 	n.mu.Unlock()
 	return n.Participant.ExecCommit1PC(ctx, req)
 }
 
-func (n *countingNode) Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error) {
+func (n *countingNode) Commit(ctx context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
 	n.mu.Lock()
 	n.commitN++
 	n.mu.Unlock()
 	return n.Participant.Commit(ctx, req)
 }
 
-func (n *countingNode) CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
+func (n *countingNode) CommitBatch(ctx context.Context, req sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error) {
 	n.mu.Lock()
 	n.commitBatchN++
 	n.mu.Unlock()

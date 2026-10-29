@@ -1,4 +1,4 @@
-package proto
+package sinfonia
 
 import "github.com/jbancroft/ConcertumDemo/minitxn"
 

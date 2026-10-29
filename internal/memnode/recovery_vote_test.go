@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
@@ -26,18 +26,18 @@ func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = b.Close() })
 
-	txId := proto.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
 	participants := []uint32{1, 2}
-	if resp, err := a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+	if resp, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID: txId, Participants: participants, HasWrites: true,
-		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
-	}); err != nil || resp.Vote != proto.VoteOk {
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
+	}); err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("prepare a failed vote=%v err=%v", resp.Vote, err)
 	}
-	if resp, err := b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+	if resp, err := b.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID: txId, Participants: participants, HasWrites: true,
-		WriteItems: []proto.WriteItem{{MemID: 2, Addr: 0, Data: []byte("B")}},
-	}); err != nil || resp.Vote != proto.VoteOk {
+		WriteItems: []sinfonia.WriteItem{{MemID: 2, Addr: 0, Data: []byte("B")}},
+	}); err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("prepare b failed vote=%v err=%v", resp.Vote, err)
 	}
 
@@ -78,22 +78,22 @@ func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = b.Close() })
 
-	txId := proto.TransactionID{CoordinatorID: 44, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 44, Counter: 1, Epoch: 1}
 	participants := []uint32{1, 2}
 	for _, prepared := range []struct {
 		node   *memnode.Participant
 		hostId uint32
 		data   string
 	}{{a, 1, "A"}, {b, 2, "B"}} {
-		resp, err := prepared.node.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+		resp, err := prepared.node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 			TID: txId, Participants: participants, HasWrites: true,
-			WriteItems: []proto.WriteItem{{MemID: prepared.hostId, Addr: 0, Data: []byte(prepared.data)}},
+			WriteItems: []sinfonia.WriteItem{{MemID: prepared.hostId, Addr: 0, Data: []byte(prepared.data)}},
 		})
-		if err != nil || resp.Vote != proto.VoteOk {
+		if err != nil || resp.Vote != sinfonia.VoteOk {
 			t.Fatalf("prepare memnode %d vote=%v err=%v", prepared.hostId, resp.Vote, err)
 		}
 	}
-	if resp, err := b.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: false}); err != nil || !resp.Ack {
+	if resp, err := b.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: false}); err != nil || !resp.Ack {
 		t.Fatalf("abort witness resp=%+v err=%v", resp, err)
 	}
 	if err := a.Close(); err != nil {
@@ -120,11 +120,11 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name  string
-		abort func(*testing.T, *memnode.Participant, proto.TransactionID)
+		abort func(*testing.T, *memnode.Participant, sinfonia.TransactionID)
 	}{
 		{
 			name: "forced abort",
-			abort: func(t *testing.T, node *memnode.Participant, txId proto.TransactionID) {
+			abort: func(t *testing.T, node *memnode.Participant, txId sinfonia.TransactionID) {
 				t.Helper()
 				if err := node.ForceAbortForTest(txId); err != nil {
 					t.Fatal(err)
@@ -133,9 +133,9 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 		},
 		{
 			name: "final abort",
-			abort: func(t *testing.T, node *memnode.Participant, txId proto.TransactionID) {
+			abort: func(t *testing.T, node *memnode.Participant, txId sinfonia.TransactionID) {
 				t.Helper()
-				if resp, err := node.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: false}); err != nil || !resp.Ack {
+				if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: false}); err != nil || !resp.Ack {
 					t.Fatalf("abort resp=%+v err=%v", resp, err)
 				}
 			},
@@ -147,27 +147,27 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = node.Close() })
-			txId := proto.TransactionID{CoordinatorID: 80, Counter: 1, Epoch: 1}
-			if resp, err := node.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+			txId := sinfonia.TransactionID{CoordinatorID: 80, Counter: 1, Epoch: 1}
+			if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 				TID: txId, Participants: []uint32{1, 2}, HasWrites: true,
-				WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
-			}); err != nil || resp.Vote != proto.VoteOk {
+				WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
+			}); err != nil || resp.Vote != sinfonia.VoteOk {
 				t.Fatalf("prepare resp=%+v err=%v", resp, err)
 			}
 			tc.abort(t, node, txId)
 
-			resp, err := node.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: true})
+			resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: true})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if resp.Ack {
 				t.Fatalf("late commit acknowledged after %s: %+v", tc.name, resp)
 			}
-			status, err := node.QueryTidStatus(ctx, proto.QueryTidStatusRequest{TID: txId})
+			status, err := node.QueryTidStatus(ctx, sinfonia.QueryTidStatusRequest{TID: txId})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if status.Outcome == proto.TidOutcomeCommit || status.VotedOK {
+			if status.Outcome == sinfonia.TidOutcomeCommit || status.VotedOK {
 				t.Fatalf("late commit installed commit evidence after %s: %+v", tc.name, status)
 			}
 			if got, _ := node.Read(ctx, 0, 1); got[0] != 0 {
@@ -188,11 +188,11 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 	before := time.Unix(1_000, 0)
 	now := before
 	node.SetEpochSourceForTest(time.Hour, func() time.Time { return now })
-	txId := proto.TransactionID{CoordinatorID: 81, Counter: 1, Epoch: 1}
-	if resp, err := node.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+	txId := sinfonia.TransactionID{CoordinatorID: 81, Counter: 1, Epoch: 1}
+	if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID: txId, Participants: []uint32{1, 2}, HasWrites: true,
-		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
-	}); err != nil || resp.Vote != proto.VoteOk {
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
+	}); err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("prepare resp=%+v err=%v", resp, err)
 	}
 	now = before.Add(2 * time.Minute)
@@ -209,14 +209,14 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 	}
 	node.SetEpochSourceForTest(time.Hour, func() time.Time { return now })
 
-	vote, err := node.RecoveryForceAbort(ctx, proto.RecoverForceAbortRequest{TID: txId, Epoch: txId.Epoch})
+	vote, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: txId, Epoch: txId.Epoch})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vote.Vote != proto.VoteBadForced {
+	if vote.Vote != sinfonia.VoteBadForced {
 		t.Fatalf("clock reversal replaced durable forced abort with vote %v", vote.Vote)
 	}
-	commit, err := node.Commit(ctx, proto.CommitRequest{TID: txId, ActionCommit: true})
+	commit, err := node.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: true})
 	if err != nil {
 		t.Fatal(err)
 	}

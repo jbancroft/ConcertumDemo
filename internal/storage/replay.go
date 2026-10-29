@@ -14,7 +14,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 const (
@@ -26,10 +26,10 @@ const (
 var ErrReplayConflict = errors.New("conflicting replay record for transaction")
 
 type replayRecord struct {
-	TID     proto.TransactionID          `json:"tid"`
-	Kind    string                       `json:"kind"`
-	Prepare *proto.ExecPrepareResponse   `json:"prepare,omitempty"`
-	OnePC   *proto.ExecCommit1PCResponse `json:"one_pc,omitempty"`
+	TID     sinfonia.TransactionID          `json:"tid"`
+	Kind    string                          `json:"kind"`
+	Prepare *sinfonia.ExecPrepareResponse   `json:"prepare,omitempty"`
+	OnePC   *sinfonia.ExecCommit1PCResponse `json:"one_pc,omitempty"`
 }
 
 // ReplayStore saves participant replies by transaction ID. A retry gets the
@@ -69,7 +69,7 @@ type ReplayRetention struct {
 
 // Expired says whether a transaction is too old to retry. Legacy IDs with
 // Epoch == 0 are always kept, as are all IDs when RetryHorizon == 0.
-func (r ReplayRetention) Expired(txId proto.TransactionID) bool {
+func (r ReplayRetention) Expired(txId sinfonia.TransactionID) bool {
 	if txId.Epoch == 0 || r.RetryHorizon == 0 {
 		return false
 	}
@@ -134,32 +134,32 @@ func (s *ReplayStore) SHA256() ([]byte, error) {
 	return h.Sum(nil), nil
 }
 
-func (s *ReplayStore) GetPrepare(txId proto.TransactionID) (proto.ExecPrepareResponse, bool) {
+func (s *ReplayStore) GetPrepare(txId sinfonia.TransactionID) (sinfonia.ExecPrepareResponse, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.records[replayKey(txId, replayKindPrepare)]
 	if !ok || record.Prepare == nil {
-		return proto.ExecPrepareResponse{}, false
+		return sinfonia.ExecPrepareResponse{}, false
 	}
 	return clonePrepareReplay(*record.Prepare), true
 }
 
-func (s *ReplayStore) GetOnePC(txId proto.TransactionID) (proto.ExecCommit1PCResponse, bool) {
+func (s *ReplayStore) GetOnePC(txId sinfonia.TransactionID) (sinfonia.ExecCommit1PCResponse, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.records[replayKey(txId, replayKindOnePC)]
 	if !ok || record.OnePC == nil {
-		return proto.ExecCommit1PCResponse{}, false
+		return sinfonia.ExecCommit1PCResponse{}, false
 	}
 	return cloneOnePCReplay(*record.OnePC), true
 }
 
-func (s *ReplayStore) AppendPrepare(txId proto.TransactionID, response proto.ExecPrepareResponse) error {
+func (s *ReplayStore) AppendPrepare(txId sinfonia.TransactionID, response sinfonia.ExecPrepareResponse) error {
 	record := replayRecord{TID: txId, Kind: replayKindPrepare, Prepare: prepareReplayPtr(response)}
 	return s.append(record)
 }
 
-func (s *ReplayStore) AppendOnePC(txId proto.TransactionID, response proto.ExecCommit1PCResponse) error {
+func (s *ReplayStore) AppendOnePC(txId sinfonia.TransactionID, response sinfonia.ExecCommit1PCResponse) error {
 	record := replayRecord{TID: txId, Kind: replayKindOnePC, OnePC: onePCReplayPtr(response)}
 	return s.append(record)
 }
@@ -458,7 +458,7 @@ func validateReplayRecord(record replayRecord) error {
 	return nil
 }
 
-func replayKey(txId proto.TransactionID, kind string) string {
+func replayKey(txId sinfonia.TransactionID, kind string) string {
 	return kind + ":" + tidKey(txId)
 }
 
@@ -473,23 +473,23 @@ func cloneReplayRecord(record replayRecord) replayRecord {
 	return cloned
 }
 
-func prepareReplayPtr(response proto.ExecPrepareResponse) *proto.ExecPrepareResponse {
+func prepareReplayPtr(response sinfonia.ExecPrepareResponse) *sinfonia.ExecPrepareResponse {
 	cloned := clonePrepareReplay(response)
 	return &cloned
 }
 
-func onePCReplayPtr(response proto.ExecCommit1PCResponse) *proto.ExecCommit1PCResponse {
+func onePCReplayPtr(response sinfonia.ExecCommit1PCResponse) *sinfonia.ExecCommit1PCResponse {
 	cloned := cloneOnePCReplay(response)
 	return &cloned
 }
 
-func clonePrepareReplay(response proto.ExecPrepareResponse) proto.ExecPrepareResponse {
+func clonePrepareReplay(response sinfonia.ExecPrepareResponse) sinfonia.ExecPrepareResponse {
 	response.ReadData = cloneReplayReadData(response.ReadData)
 	response.LockConflict = cloneLockConflict(response.LockConflict)
 	return response
 }
 
-func cloneOnePCReplay(response proto.ExecCommit1PCResponse) proto.ExecCommit1PCResponse {
+func cloneOnePCReplay(response sinfonia.ExecCommit1PCResponse) sinfonia.ExecCommit1PCResponse {
 	response.ReadData = cloneReplayReadData(response.ReadData)
 	response.LockConflict = cloneLockConflict(response.LockConflict)
 	return response
@@ -506,7 +506,7 @@ func cloneReplayReadData(input map[uint32][]byte) map[uint32][]byte {
 	return output
 }
 
-func cloneLockConflict(conflict *proto.LockConflict) *proto.LockConflict {
+func cloneLockConflict(conflict *sinfonia.LockConflict) *sinfonia.LockConflict {
 	if conflict == nil {
 		return nil
 	}

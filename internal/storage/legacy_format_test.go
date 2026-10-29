@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func TestRedoLogItemBeforeGofoniaRenaming(t *testing.T) {
@@ -20,9 +20,9 @@ func TestRedoLogItemBeforeGofoniaRenaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := RedoLogItem{
-		TransactionId: proto.TransactionID{CoordinatorID: 17, Counter: 23, Epoch: 1},
+		TransactionId: sinfonia.TransactionID{CoordinatorID: 17, Counter: 23, Epoch: 1},
 		HostIds:       []uint32{7, 9},
-		WriteItems:    []proto.WriteItem{{MemID: 7, Addr: 32, Data: []byte("write")}},
+		WriteItems:    []sinfonia.WriteItem{{MemID: 7, Addr: 32, Data: []byte("write")}},
 	}
 	if !reflect.DeepEqual(item, want) {
 		t.Fatalf("old redo record changed meaning: got %+v, want %+v", item, want)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 	"io"
 	"log/slog"
@@ -428,7 +428,7 @@ func (n *Participant) HTTPHandler(enablePrometheus bool) http.Handler {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ready": ready, "node_id": n.hostId})
 	}))
 	mux.HandleFunc("/debug/in_doubt", debugWrap(func(w http.ResponseWriter, _ *http.Request) {
-		r, _ := n.QueryInDoubt(context.Background(), proto.QueryInDoubtRequest{})
+		r, _ := n.QueryInDoubt(context.Background(), sinfonia.QueryInDoubtRequest{})
 		_ = json.NewEncoder(w).Encode(r)
 	}))
 	mux.HandleFunc("/debug/redo_log_head", debugWrap(func(w http.ResponseWriter, _ *http.Request) {
@@ -516,7 +516,7 @@ func decodeBody(r *http.Request, out any) error {
 	return json.Unmarshal(b, out)
 }
 
-func parseTIDQuery(r *http.Request) (proto.TransactionID, error) {
+func parseTIDQuery(r *http.Request) (sinfonia.TransactionID, error) {
 	parse := func(k string) (uint64, error) {
 		v := strings.TrimSpace(r.URL.Query().Get(k))
 		if v == "" {
@@ -530,17 +530,17 @@ func parseTIDQuery(r *http.Request) (proto.TransactionID, error) {
 	}
 	coord, err := parse("coord")
 	if err != nil {
-		return proto.TransactionID{}, err
+		return sinfonia.TransactionID{}, err
 	}
 	counter, err := parse("counter")
 	if err != nil {
-		return proto.TransactionID{}, err
+		return sinfonia.TransactionID{}, err
 	}
 	epoch, err := parse("epoch")
 	if err != nil {
-		return proto.TransactionID{}, err
+		return sinfonia.TransactionID{}, err
 	}
-	return proto.TransactionID{CoordinatorID: coord, Counter: counter, Epoch: epoch}, nil
+	return sinfonia.TransactionID{CoordinatorID: coord, Counter: counter, Epoch: epoch}, nil
 }
 
 func (n *Participant) prometheusMetrics() string {

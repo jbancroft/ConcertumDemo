@@ -1,6 +1,17 @@
 package proto
 
+import (
+	"encoding/gob"
+	"reflect"
+)
+
 const SQLRPCVersion1 uint16 = 1
+
+const (
+	MethodSQLExec                 = "sqld.exec"
+	MethodSQLPing                 = "sqld.ping"
+	MethodSQLDescribeCapabilities = "sqld.describe_capabilities"
+)
 
 type SQLExecRequest struct {
 	Version       uint16
@@ -45,4 +56,21 @@ type SQLCapabilities struct {
 type SQLRow struct {
 	ID    uint64
 	Value uint64
+}
+
+func init() {
+	// Preserve the original gob names independently of the module path.
+	for _, body := range []any{
+		SQLExecRequest{},
+		SQLExecResponse{},
+		SQLPingRequest{},
+		SQLPingResponse{},
+		SQLDescribeCapabilitiesRequest{},
+		SQLDescribeCapabilitiesResponse{},
+		SQLCapabilities{},
+		SQLRow{},
+	} {
+		name := "github.com/jbancroft/concertum2/internal/proto." + reflect.TypeOf(body).Name()
+		gob.RegisterName(name, body)
+	}
 }

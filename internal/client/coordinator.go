@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
@@ -24,10 +24,10 @@ var coordinatorIDFallback atomic.Uint64
 type Participant interface {
 	Read(ctx context.Context, addr uint64, length uint32) ([]byte, error)
 	Write(ctx context.Context, addr uint64, data []byte) error
-	ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error)
-	ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error)
-	Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error)
-	CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error)
+	ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error)
+	ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error)
+	Commit(ctx context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error)
+	CommitBatch(ctx context.Context, req sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error)
 }
 
 type StatsReader interface {
@@ -156,7 +156,7 @@ func (c *Coordinator) Read(ctx context.Context, hostId uint32, addr uint64, leng
 	if !ok {
 		return nil, ErrUnknownMemNode
 	}
-	return node.Read(proto.WithGeneration(ctx, c.generationFor(c.resolveHostId(hostId))), addr, length)
+	return node.Read(sinfonia.WithGeneration(ctx, c.generationFor(c.resolveHostId(hostId))), addr, length)
 }
 
 func (c *Coordinator) GetStats(hostId uint32) (memnode.StatsResponse, error) {
@@ -178,14 +178,14 @@ func (c *Coordinator) Write(ctx context.Context, hostId uint32, addr uint64, dat
 	if !ok {
 		return ErrUnknownMemNode
 	}
-	return node.Write(proto.WithGeneration(ctx, c.generationFor(c.resolveHostId(hostId))), addr, data)
+	return node.Write(sinfonia.WithGeneration(ctx, c.generationFor(c.resolveHostId(hostId))), addr, data)
 }
 
-func (c *Coordinator) nextTID() proto.TransactionID {
+func (c *Coordinator) nextTID() sinfonia.TransactionID {
 	c.genMu.Lock()
 	defer c.genMu.Unlock()
 	c.tidCounter++
-	return proto.TransactionID{CoordinatorID: c.coordID, Counter: c.tidCounter, Epoch: c.epoch}
+	return sinfonia.TransactionID{CoordinatorID: c.coordID, Counter: c.tidCounter, Epoch: c.epoch}
 }
 
 func (c *Coordinator) observeEpoch(epoch uint64) {
@@ -201,9 +201,9 @@ func (c *Coordinator) observeEpoch(epoch uint64) {
 
 type ExecResult struct {
 	Committed        bool
-	ReadResults      map[proto.ReadItem][]byte
-	Status           proto.Vote
-	ParticipantVotes map[uint32]proto.Vote
+	ReadResults      map[sinfonia.ReadItem][]byte
+	Status           sinfonia.Vote
+	ParticipantVotes map[uint32]sinfonia.Vote
 	TransportErr     error
 	UnknownOutcome   bool
 }
@@ -223,7 +223,7 @@ func (c *Coordinator) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff tim
 	return nil
 }
 
-func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
+func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ExecResult {
 	seen := make(map[uint32]struct{})
 	for _, i := range compares {
 		seen[c.resolveHostId(i.MemID)] = struct{}{}
@@ -264,14 +264,14 @@ func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compar
 
 type prepareResult struct {
 	hostId   uint32
-	resp     proto.ExecPrepareResponse
+	resp     sinfonia.ExecPrepareResponse
 	err      error
-	readData map[proto.ReadItem][]byte
+	readData map[sinfonia.ReadItem][]byte
 }
 
 type commitDispatch struct {
-	tid           proto.TransactionID
-	requestID     proto.RequestID
+	tid           sinfonia.TransactionID
+	requestID     sinfonia.RequestID
 	correlationID string
 	actionCommit  bool
 	generation    uint64
@@ -317,7 +317,7 @@ func (c *Coordinator) FlushPendingCommits(ctx context.Context) error {
 
 type prepareCall struct {
 	ctx   context.Context
-	req   proto.ExecPrepareRequest
+	req   sinfonia.ExecPrepareRequest
 	respC chan prepareResult
 }
 
@@ -331,7 +331,7 @@ func newRPCWorker(hostId uint32, node Participant) *rpcWorker {
 func (w *rpcWorker) runPrepare() {
 	for req := range w.prepareCh {
 		resp, err := w.node.ExecAndPrepare(req.ctx, req.req)
-		mappedReads := make(map[proto.ReadItem][]byte, len(req.req.ReadItems))
+		mappedReads := make(map[sinfonia.ReadItem][]byte, len(req.req.ReadItems))
 		for idx, item := range req.req.ReadItems {
 			if data, ok := resp.ReadData[uint32(idx)]; ok {
 				mappedReads[item] = data
@@ -370,15 +370,15 @@ func (w *rpcWorker) runCommitBatcher() {
 			return nil
 		}
 		stopTimer()
-		decisions := make([]proto.CommitRequest, 0, len(batch))
+		decisions := make([]sinfonia.CommitRequest, 0, len(batch))
 		for _, d := range batch {
-			decisions = append(decisions, proto.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation})
+			decisions = append(decisions, sinfonia.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation})
 		}
-		resp, err := w.node.CommitBatch(context.Background(), proto.CommitBatchRequest{Decisions: decisions})
+		resp, err := w.node.CommitBatch(context.Background(), sinfonia.CommitBatchRequest{Decisions: decisions})
 		var firstErr error
 		if err != nil {
 			for _, d := range batch {
-				commitResp, err2 := w.node.Commit(context.Background(), proto.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation})
+				commitResp, err2 := w.node.Commit(context.Background(), sinfonia.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation})
 				if err2 != nil {
 					log.Printf("commit rpc failed for memnode %d tid=%+v: %v", w.hostId, d.tid, err2)
 					if firstErr == nil {
@@ -451,7 +451,7 @@ func (w *rpcWorker) flushPending(ctx context.Context) error {
 	}
 }
 
-func (c *Coordinator) execAttempt(ctx context.Context, txId proto.TransactionID, hostIds []uint32, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) (ExecResult, bool) {
+func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.TransactionID, hostIds []uint32, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) (ExecResult, bool) {
 	if len(hostIds) == 1 {
 		return c.execSingleParticipant1PC(ctx, txId, hostIds[0], class, compares, reads, writes), false
 	}
@@ -467,9 +467,9 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId proto.TransactionID,
 				return
 			}
 			reqReads := readItemsForHost(hostId, reads, c.resolveHostId)
-			worker.prepareCh <- prepareCall{ctx: ctx, req: proto.ExecPrepareRequest{
+			worker.prepareCh <- prepareCall{ctx: ctx, req: sinfonia.ExecPrepareRequest{
 				TID:           txId,
-				RequestID:     proto.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
+				RequestID:     sinfonia.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
 				CorrelationID: txId.CorrelationID(),
 				Participants:  append([]uint32(nil), hostIds...),
 				HasWrites:     len(writes) > 0,
@@ -484,28 +484,28 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId proto.TransactionID,
 	}
 
 	decideCommit := true
-	status := proto.VoteOk
+	status := sinfonia.VoteOk
 	badLock := false
-	aggregatedReads := map[proto.ReadItem][]byte{}
-	participantVotes := map[uint32]proto.Vote{}
+	aggregatedReads := map[sinfonia.ReadItem][]byte{}
+	participantVotes := map[uint32]sinfonia.Vote{}
 	for range hostIds {
 		r := <-results
 		if r.err != nil {
 			decideCommit = false
-			status = proto.VoteBadInternal
-			participantVotes[r.hostId] = proto.VoteBadInternal
+			status = sinfonia.VoteBadInternal
+			participantVotes[r.hostId] = sinfonia.VoteBadInternal
 			var remoteErr *rpcwire.RemoteError
 			if !errors.As(r.err, &remoteErr) {
-				return ExecResult{Committed: false, UnknownOutcome: true, ReadResults: map[proto.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes, TransportErr: r.err}, false
+				return ExecResult{Committed: false, UnknownOutcome: true, ReadResults: map[sinfonia.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes, TransportErr: r.err}, false
 			}
 			continue
 		}
 		participantVotes[r.hostId] = r.resp.Vote
-		if r.resp.Vote != proto.VoteOk {
+		if r.resp.Vote != sinfonia.VoteOk {
 			c.observeEpoch(r.resp.CurrentEpoch)
 			decideCommit = false
 			status = r.resp.Vote
-			if r.resp.Vote == proto.VoteBadLock {
+			if r.resp.Vote == sinfonia.VoteBadLock {
 				badLock = true
 			}
 			continue
@@ -520,25 +520,25 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId proto.TransactionID,
 		worker := c.workers[hostId]
 		c.workersMu.Unlock()
 		if worker != nil {
-			worker.commitCh <- commitDispatch{tid: txId, requestID: proto.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(hostId), 10)), correlationID: txId.CorrelationID(), actionCommit: decideCommit, generation: c.generationFor(hostId)}
+			worker.commitCh <- commitDispatch{tid: txId, requestID: sinfonia.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(hostId), 10)), correlationID: txId.CorrelationID(), actionCommit: decideCommit, generation: c.generationFor(hostId)}
 		}
 	}
 
 	if !decideCommit {
-		return ExecResult{Committed: false, ReadResults: map[proto.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes}, badLock
+		return ExecResult{Committed: false, ReadResults: map[sinfonia.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes}, badLock
 	}
-	return ExecResult{Committed: true, ReadResults: aggregatedReads, Status: proto.VoteOk, ParticipantVotes: participantVotes}, false
+	return ExecResult{Committed: true, ReadResults: aggregatedReads, Status: sinfonia.VoteOk, ParticipantVotes: participantVotes}, false
 }
 
-func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId proto.TransactionID, hostId uint32, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
+func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId sinfonia.TransactionID, hostId uint32, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ExecResult {
 	node, ok := c.nodes[hostId]
 	if !ok {
-		return ExecResult{Committed: false, Status: proto.VoteBadInternal, ReadResults: map[proto.ReadItem][]byte{}, ParticipantVotes: map[uint32]proto.Vote{hostId: proto.VoteBadInternal}}
+		return ExecResult{Committed: false, Status: sinfonia.VoteBadInternal, ReadResults: map[sinfonia.ReadItem][]byte{}, ParticipantVotes: map[uint32]sinfonia.Vote{hostId: sinfonia.VoteBadInternal}}
 	}
 	reqReads := readItemsForHost(hostId, reads, c.resolveHostId)
-	resp, err := node.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{
+	resp, err := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{
 		TID:           txId,
-		RequestID:     proto.RequestID(txId.CorrelationID() + ":1pc:" + strconv.FormatUint(uint64(hostId), 10)),
+		RequestID:     sinfonia.RequestID(txId.CorrelationID() + ":1pc:" + strconv.FormatUint(uint64(hostId), 10)),
 		CorrelationID: txId.CorrelationID(),
 		CmpItems:      compareItemsForHost(hostId, compares, c.resolveHostId),
 		ReadItems:     reqReads,
@@ -549,7 +549,7 @@ func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId proto.T
 	})
 	if err != nil {
 		var remoteErr *rpcwire.RemoteError
-		res := ExecResult{Committed: false, Status: proto.VoteBadInternal, ReadResults: map[proto.ReadItem][]byte{}, ParticipantVotes: map[uint32]proto.Vote{hostId: proto.VoteBadInternal}}
+		res := ExecResult{Committed: false, Status: sinfonia.VoteBadInternal, ReadResults: map[sinfonia.ReadItem][]byte{}, ParticipantVotes: map[uint32]sinfonia.Vote{hostId: sinfonia.VoteBadInternal}}
 		if !errors.As(err, &remoteErr) {
 			res.TransportErr = err
 			res.UnknownOutcome = true
@@ -557,20 +557,20 @@ func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId proto.T
 		return res
 	}
 	c.observeEpoch(resp.CurrentEpoch)
-	if resp.Vote != proto.VoteOk {
-		return ExecResult{Committed: false, Status: resp.Vote, ReadResults: map[proto.ReadItem][]byte{}, ParticipantVotes: map[uint32]proto.Vote{hostId: resp.Vote}}
+	if resp.Vote != sinfonia.VoteOk {
+		return ExecResult{Committed: false, Status: resp.Vote, ReadResults: map[sinfonia.ReadItem][]byte{}, ParticipantVotes: map[uint32]sinfonia.Vote{hostId: resp.Vote}}
 	}
-	mappedReads := make(map[proto.ReadItem][]byte, len(reqReads))
+	mappedReads := make(map[sinfonia.ReadItem][]byte, len(reqReads))
 	for idx, item := range reqReads {
 		if data, ok := resp.ReadData[uint32(idx)]; ok {
 			mappedReads[item] = append([]byte(nil), data...)
 		}
 	}
-	return ExecResult{Committed: true, Status: proto.VoteOk, ReadResults: mappedReads, ParticipantVotes: map[uint32]proto.Vote{hostId: proto.VoteOk}}
+	return ExecResult{Committed: true, Status: sinfonia.VoteOk, ReadResults: mappedReads, ParticipantVotes: map[uint32]sinfonia.Vote{hostId: sinfonia.VoteOk}}
 }
 
-func compareItemsForHost(hostId uint32, items []proto.CmpItem, resolve func(uint32) uint32) []proto.CmpItem {
-	out := make([]proto.CmpItem, 0)
+func compareItemsForHost(hostId uint32, items []sinfonia.CmpItem, resolve func(uint32) uint32) []sinfonia.CmpItem {
+	out := make([]sinfonia.CmpItem, 0)
 	for _, i := range items {
 		if resolve(i.MemID) == hostId {
 			out = append(out, i)
@@ -579,8 +579,8 @@ func compareItemsForHost(hostId uint32, items []proto.CmpItem, resolve func(uint
 	return out
 }
 
-func readItemsForHost(hostId uint32, items []proto.ReadItem, resolve func(uint32) uint32) []proto.ReadItem {
-	out := make([]proto.ReadItem, 0)
+func readItemsForHost(hostId uint32, items []sinfonia.ReadItem, resolve func(uint32) uint32) []sinfonia.ReadItem {
+	out := make([]sinfonia.ReadItem, 0)
 	for _, i := range items {
 		if resolve(i.MemID) == hostId {
 			out = append(out, i)
@@ -589,8 +589,8 @@ func readItemsForHost(hostId uint32, items []proto.ReadItem, resolve func(uint32
 	return out
 }
 
-func writeItemsForHost(hostId uint32, items []proto.WriteItem, resolve func(uint32) uint32) []proto.WriteItem {
-	out := make([]proto.WriteItem, 0)
+func writeItemsForHost(hostId uint32, items []sinfonia.WriteItem, resolve func(uint32) uint32) []sinfonia.WriteItem {
+	out := make([]sinfonia.WriteItem, 0)
 	for _, i := range items {
 		if resolve(i.MemID) == hostId {
 			out = append(out, i)

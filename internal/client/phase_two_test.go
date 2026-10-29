@@ -13,27 +13,27 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 // phaseTwoNode intercepts node calls so tests can delay or fail delivery while
 // the coordinator uses its normal workers and batching.
 type phaseTwoNode struct {
 	Participant
-	prepared  chan proto.TransactionID
-	delivered chan proto.CommitRequest
+	prepared  chan sinfonia.TransactionID
+	delivered chan sinfonia.CommitRequest
 	gate      <-chan struct{}
 	batchErr  error
 }
 
 func newPhaseTwoNode(node Participant, gate <-chan struct{}) *phaseTwoNode {
 	return &phaseTwoNode{
-		Participant: node, prepared: make(chan proto.TransactionID, 2),
-		delivered: make(chan proto.CommitRequest, 2), gate: gate,
+		Participant: node, prepared: make(chan sinfonia.TransactionID, 2),
+		delivered: make(chan sinfonia.CommitRequest, 2), gate: gate,
 	}
 }
 
-func (n *phaseTwoNode) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
+func (n *phaseTwoNode) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
 	resp, err := n.Participant.ExecAndPrepare(ctx, req)
 	n.prepared <- req.TID
 	return resp, err
@@ -51,9 +51,9 @@ func (n *phaseTwoNode) waitForDelivery(ctx context.Context) error {
 	}
 }
 
-func (n *phaseTwoNode) Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error) {
+func (n *phaseTwoNode) Commit(ctx context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
 	if err := n.waitForDelivery(ctx); err != nil {
-		return proto.CommitResponse{}, err
+		return sinfonia.CommitResponse{}, err
 	}
 	resp, err := n.Participant.Commit(ctx, req)
 	if err == nil && resp.Ack {
@@ -62,12 +62,12 @@ func (n *phaseTwoNode) Commit(ctx context.Context, req proto.CommitRequest) (pro
 	return resp, err
 }
 
-func (n *phaseTwoNode) CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
+func (n *phaseTwoNode) CommitBatch(ctx context.Context, req sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error) {
 	if n.batchErr != nil {
-		return proto.CommitBatchResponse{}, n.batchErr
+		return sinfonia.CommitBatchResponse{}, n.batchErr
 	}
 	if err := n.waitForDelivery(ctx); err != nil {
-		return proto.CommitBatchResponse{}, err
+		return sinfonia.CommitBatchResponse{}, err
 	}
 	resp, err := n.Participant.CommitBatch(ctx, req)
 	if err == nil {
@@ -92,8 +92,8 @@ func receivePhaseTwo[T any](t *testing.T, ctx context.Context, events <-chan T) 
 	}
 }
 
-func phaseTwoWrites() []proto.WriteItem {
-	return []proto.WriteItem{
+func phaseTwoWrites() []sinfonia.WriteItem {
+	return []sinfonia.WriteItem{
 		{MemID: 1, Addr: 8, Data: []byte("A")},
 		{MemID: 2, Addr: 8, Data: []byte("B")},
 	}
@@ -165,8 +165,8 @@ func TestCoordinatorPhaseTwoDeliversAbortAfterRejectedPrepare(t *testing.T) {
 	n2 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 	result := coord.ExecuteAndCommit(ctx, "",
-		[]proto.CmpItem{{MemID: 2, Addr: 8, Data: []byte("stale")}}, nil, phaseTwoWrites())
-	if result.Committed || result.UnknownOutcome || result.Status != proto.VoteBadCmp {
+		[]sinfonia.CmpItem{{MemID: 2, Addr: 8, Data: []byte("stale")}}, nil, phaseTwoWrites())
+	if result.Committed || result.UnknownOutcome || result.Status != sinfonia.VoteBadCmp {
 		t.Fatalf("expected compare abort, got %+v", result)
 	}
 	if err := coord.FlushPendingCommits(ctx); err != nil {
@@ -204,7 +204,7 @@ func TestCoordinatorRecoversAfterPartialCommitDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var txId proto.TransactionID
+			var txId sinfonia.TransactionID
 			if err := json.Unmarshal(data, &txId); err != nil {
 				t.Fatal(err)
 			}

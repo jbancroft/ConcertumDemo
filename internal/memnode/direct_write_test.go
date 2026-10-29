@@ -10,7 +10,7 @@ import (
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func TestDurableDirectWriteRejectedWithoutLiveOrRestartMutation(t *testing.T) {
@@ -45,16 +45,16 @@ func TestDurableDirectWriteRejectedWithoutLiveOrRestartMutation(t *testing.T) {
 	}
 	assertBytesAt(t, restarted, ctx, 4, []byte{0, 0, 0})
 
-	resp, err := restarted.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{
+	resp, err := restarted.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{
 		RequestID:  "transactional-write",
-		TID:        proto.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1},
-		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 4, Data: []byte("mtx")}},
+		TID:        sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1},
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 4, Data: []byte("mtx")}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Vote != proto.VoteOk {
-		t.Fatalf("transactional durable write vote = %v, want %v", resp.Vote, proto.VoteOk)
+	if resp.Vote != sinfonia.VoteOk {
+		t.Fatalf("transactional durable write vote = %v, want %v", resp.Vote, sinfonia.VoteOk)
 	}
 	assertBytesAt(t, restarted, ctx, 4, []byte("mtx"))
 	if err := restarted.Close(); err != nil {
@@ -82,20 +82,20 @@ func TestDurableDirectWritePreservesFencingPrecedence(t *testing.T) {
 	if err := n.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := n.ConfigureReplication(ctx, proto.ConfigureReplicationRequest{
-		Role:                   proto.ReplicationRoleSingle,
+	if _, err := n.ConfigureReplication(ctx, sinfonia.ConfigureReplicationRequest{
+		Role:                   sinfonia.ReplicationRoleSingle,
 		Generation:             42,
-		FencingProtocolVersion: proto.ReplicationFencingProtocolVersion,
+		FencingProtocolVersion: sinfonia.ReplicationFencingProtocolVersion,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := n.Write(proto.WithGeneration(ctx, 41), 0, []byte("x")); !errors.Is(err, memnode.ErrStaleGeneration) {
+	if err := n.Write(sinfonia.WithGeneration(ctx, 41), 0, []byte("x")); !errors.Is(err, memnode.ErrStaleGeneration) {
 		t.Fatalf("stale write error = %v, want %v", err, memnode.ErrStaleGeneration)
 	}
-	if err := n.Write(proto.WithGeneration(ctx, 42), 0, []byte("x")); !errors.Is(err, memnode.ErrDirectWriteRequiresMiniTransaction) {
+	if err := n.Write(sinfonia.WithGeneration(ctx, 42), 0, []byte("x")); !errors.Is(err, memnode.ErrDirectWriteRequiresMiniTransaction) {
 		t.Fatalf("current-generation write error = %v, want %v", err, memnode.ErrDirectWriteRequiresMiniTransaction)
 	}
-	assertBytesAt(t, n, proto.WithGeneration(ctx, 42), 0, []byte{0})
+	assertBytesAt(t, n, sinfonia.WithGeneration(ctx, 42), 0, []byte{0})
 }
 
 func TestInMemoryDirectWriteRemainsSupported(t *testing.T) {

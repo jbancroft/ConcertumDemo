@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
@@ -18,10 +18,10 @@ func TestReplayStoreBytesReturnsDurableSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	txId := proto.TransactionID{CoordinatorID: 11, Counter: 1, Epoch: 7}
-	resp := proto.ExecPrepareResponse{
+	txId := sinfonia.TransactionID{CoordinatorID: 11, Counter: 1, Epoch: 7}
+	resp := sinfonia.ExecPrepareResponse{
 		RequestID:    "prepare-1",
-		Vote:         proto.VoteOk,
+		Vote:         sinfonia.VoteOk,
 		ReadData:     map[uint32][]byte{1: []byte("alpha")},
 		CurrentEpoch: 13,
 	}
@@ -48,25 +48,25 @@ func TestReplayStoreReplaceFromPublishesAndRefreshesIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldTID := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	if err := store.AppendPrepare(oldTID, proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOk, ReadData: map[uint32][]byte{1: []byte("old")}}); err != nil {
+	oldTID := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	if err := store.AppendPrepare(oldTID, sinfonia.ExecPrepareResponse{RequestID: "old", Vote: sinfonia.VoteOk, ReadData: map[uint32][]byte{1: []byte("old")}}); err != nil {
 		t.Fatal(err)
 	}
 
-	expectedPrepareTID := proto.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2}
-	expectedPrepare := proto.ExecPrepareResponse{
+	expectedPrepareTID := sinfonia.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2}
+	expectedPrepare := sinfonia.ExecPrepareResponse{
 		RequestID:    "prepare-2",
-		Vote:         proto.VoteBadCmp,
+		Vote:         sinfonia.VoteBadCmp,
 		ReadData:     map[uint32][]byte{2: []byte("bravo")},
 		CurrentEpoch: 21,
 	}
-	expectedOnePCTID := proto.TransactionID{CoordinatorID: 3, Counter: 3, Epoch: 3}
-	expectedOnePC := proto.ExecCommit1PCResponse{
+	expectedOnePCTID := sinfonia.TransactionID{CoordinatorID: 3, Counter: 3, Epoch: 3}
+	expectedOnePC := sinfonia.ExecCommit1PCResponse{
 		RequestID:    "1pc-3",
-		Vote:         proto.VoteBadLock,
+		Vote:         sinfonia.VoteBadLock,
 		ReadData:     map[uint32][]byte{3: []byte("charlie")},
 		CurrentEpoch: 34,
-		LockConflict: &proto.LockConflict{Reason: "held", RequestedStart: 4, RequestedEnd: 9, HeldStart: 10, HeldEnd: 12, HeldWrite: true},
+		LockConflict: &sinfonia.LockConflict{Reason: "held", RequestedStart: 4, RequestedEnd: 9, HeldStart: 10, HeldEnd: 12, HeldWrite: true},
 	}
 	stagedPath, stagedBytes := writeReplayArtifact(t, func(staged *storage.ReplayStore) error {
 		if err := staged.AppendPrepare(expectedPrepareTID, expectedPrepare); err != nil {
@@ -114,8 +114,8 @@ func TestReplayStoreReplaceFromRejectsIncompleteJSONL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldTID := proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 4}
-	oldResp := proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOk, ReadData: map[uint32][]byte{9: []byte("stable")}}
+	oldTID := sinfonia.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 4}
+	oldResp := sinfonia.ExecPrepareResponse{RequestID: "old", Vote: sinfonia.VoteOk, ReadData: map[uint32][]byte{9: []byte("stable")}}
 	if err := store.AppendPrepare(oldTID, oldResp); err != nil {
 		t.Fatal(err)
 	}
@@ -126,8 +126,8 @@ func TestReplayStoreReplaceFromRejectsIncompleteJSONL(t *testing.T) {
 
 	validPath, validBytes := writeReplayArtifact(t, func(staged *storage.ReplayStore) error {
 		return staged.AppendPrepare(
-			proto.TransactionID{CoordinatorID: 10, Counter: 2, Epoch: 5},
-			proto.ExecPrepareResponse{RequestID: "new", Vote: proto.VoteBadForced, ReadData: map[uint32][]byte{10: []byte("new")}},
+			sinfonia.TransactionID{CoordinatorID: 10, Counter: 2, Epoch: 5},
+			sinfonia.ExecPrepareResponse{RequestID: "new", Vote: sinfonia.VoteBadForced, ReadData: map[uint32][]byte{10: []byte("new")}},
 		)
 	})
 	if len(validBytes) < 2 {
@@ -168,27 +168,27 @@ func TestReplayStoreRejectsConflictingDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	txId := proto.TransactionID{CoordinatorID: 12, Counter: 1, Epoch: 1}
-	if err := store.AppendPrepare(txId, proto.ExecPrepareResponse{RequestID: "first", Vote: proto.VoteOk}); err != nil {
+	txId := sinfonia.TransactionID{CoordinatorID: 12, Counter: 1, Epoch: 1}
+	if err := store.AppendPrepare(txId, sinfonia.ExecPrepareResponse{RequestID: "first", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendPrepare(txId, proto.ExecPrepareResponse{RequestID: "different", Vote: proto.VoteBadCmp}); !errors.Is(err, storage.ErrReplayConflict) {
+	if err := store.AppendPrepare(txId, sinfonia.ExecPrepareResponse{RequestID: "different", Vote: sinfonia.VoteBadCmp}); !errors.Is(err, storage.ErrReplayConflict) {
 		t.Fatalf("conflicting append error = %v, want ErrReplayConflict", err)
 	}
 	got, ok := store.GetPrepare(txId)
-	if !ok || got.RequestID != "first" || got.Vote != proto.VoteOk {
+	if !ok || got.RequestID != "first" || got.Vote != sinfonia.VoteOk {
 		t.Fatalf("conflicting append changed original record: %+v ok=%v", got, ok)
 	}
 }
 
 func TestReplayStoreOpenTruncatesTornTail(t *testing.T) {
 	dir := t.TempDir()
-	stable := proto.ExecPrepareResponse{RequestID: "stable", Vote: proto.VoteOk, ReadData: map[uint32][]byte{1: []byte("keep")}}
+	stable := sinfonia.ExecPrepareResponse{RequestID: "stable", Vote: sinfonia.VoteOk, ReadData: map[uint32][]byte{1: []byte("keep")}}
 	stored, err := storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stored.AppendPrepare(proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, stable); err != nil {
+	if err := stored.AppendPrepare(sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, stable); err != nil {
 		t.Fatal(err)
 	}
 	want, err := stored.Bytes()
@@ -212,11 +212,11 @@ func TestReplayStoreOpenTruncatesTornTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open with torn tail failed: %v", err)
 	}
-	got, ok := reopened.GetPrepare(proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1})
+	got, ok := reopened.GetPrepare(sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1})
 	if !ok || !reflect.DeepEqual(got, stable) {
 		t.Fatalf("stable record lost or changed: %+v ok=%v", got, ok)
 	}
-	if _, ok := reopened.GetPrepare(proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}); ok {
+	if _, ok := reopened.GetPrepare(sinfonia.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}); ok {
 		t.Fatal("torn tail was treated as a valid record")
 	}
 	// The file should contain only the complete records.
@@ -231,12 +231,12 @@ func TestReplayStoreOpenTruncatesTornTail(t *testing.T) {
 
 func TestReplayStoreOpenFailsClosedOnCompleteCorruptLine(t *testing.T) {
 	dir := t.TempDir()
-	stable := proto.ExecPrepareResponse{RequestID: "stable", Vote: proto.VoteOk}
+	stable := sinfonia.ExecPrepareResponse{RequestID: "stable", Vote: sinfonia.VoteOk}
 	stored, err := storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stored.AppendPrepare(proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, stable); err != nil {
+	if err := stored.AppendPrepare(sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, stable); err != nil {
 		t.Fatal(err)
 	}
 	// A bad record with a newline was fully written. Report corruption
@@ -265,24 +265,24 @@ func TestReplayStoreCompactPreservesRetryableTID(t *testing.T) {
 	}
 	// Retry horizon is 8, current epoch 10. A TID is expired (dropped) iff
 	// Epoch + 8 <= 10, i.e. Epoch <= 2. Epoch 0 is legacy and always kept.
-	wellExpired := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1} // 1+8=9 <= 10 -> dropped
-	edgeExpired := proto.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 2} // 2+8=10 <= 10 -> dropped (boundary)
-	edgeKept := proto.TransactionID{CoordinatorID: 1, Counter: 3, Epoch: 3}    // 3+8=11 > 10 -> kept (just inside)
-	deepKept := proto.TransactionID{CoordinatorID: 1, Counter: 4, Epoch: 9}    // 9+8=17 > 10 -> kept
-	legacy := proto.TransactionID{CoordinatorID: 1, Counter: 5, Epoch: 0}      // legacy -> always kept
-	if err := store.AppendPrepare(wellExpired, proto.ExecPrepareResponse{RequestID: "w", Vote: proto.VoteBadCmp}); err != nil {
+	wellExpired := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1} // 1+8=9 <= 10 -> dropped
+	edgeExpired := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 2} // 2+8=10 <= 10 -> dropped (boundary)
+	edgeKept := sinfonia.TransactionID{CoordinatorID: 1, Counter: 3, Epoch: 3}    // 3+8=11 > 10 -> kept (just inside)
+	deepKept := sinfonia.TransactionID{CoordinatorID: 1, Counter: 4, Epoch: 9}    // 9+8=17 > 10 -> kept
+	legacy := sinfonia.TransactionID{CoordinatorID: 1, Counter: 5, Epoch: 0}      // legacy -> always kept
+	if err := store.AppendPrepare(wellExpired, sinfonia.ExecPrepareResponse{RequestID: "w", Vote: sinfonia.VoteBadCmp}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendPrepare(edgeExpired, proto.ExecPrepareResponse{RequestID: "e", Vote: proto.VoteBadCmp}); err != nil {
+	if err := store.AppendPrepare(edgeExpired, sinfonia.ExecPrepareResponse{RequestID: "e", Vote: sinfonia.VoteBadCmp}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendPrepare(edgeKept, proto.ExecPrepareResponse{RequestID: "k", Vote: proto.VoteOk}); err != nil {
+	if err := store.AppendPrepare(edgeKept, sinfonia.ExecPrepareResponse{RequestID: "k", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendPrepare(deepKept, proto.ExecPrepareResponse{RequestID: "d", Vote: proto.VoteOk}); err != nil {
+	if err := store.AppendPrepare(deepKept, sinfonia.ExecPrepareResponse{RequestID: "d", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendOnePC(legacy, proto.ExecCommit1PCResponse{RequestID: "l", Vote: proto.VoteOk}); err != nil {
+	if err := store.AppendOnePC(legacy, sinfonia.ExecCommit1PCResponse{RequestID: "l", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Compact(storage.ReplayRetention{CurrentEpoch: 10, RetryHorizon: 8}); err != nil {
@@ -325,8 +325,8 @@ func TestReplayStoreCompactUnboundedRetentionKeepsAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	txId := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 2}
-	if err := store.AppendPrepare(txId, proto.ExecPrepareResponse{RequestID: "keep", Vote: proto.VoteOk}); err != nil {
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 2}
+	if err := store.AppendPrepare(txId, sinfonia.ExecPrepareResponse{RequestID: "keep", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Compact(storage.ReplayRetention{CurrentEpoch: 1000, RetryHorizon: 0}); err != nil {
@@ -343,20 +343,20 @@ func TestReplayStoreOpenDiscardsValidUnterminatedTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stableTID := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	if err := store.AppendPrepare(stableTID, proto.ExecPrepareResponse{RequestID: "stable", Vote: proto.VoteOk}); err != nil {
+	stableTID := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	if err := store.AppendPrepare(stableTID, sinfonia.ExecPrepareResponse{RequestID: "stable", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	prefix, err := store.Bytes()
 	if err != nil {
 		t.Fatal(err)
 	}
-	tailTID := proto.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2}
+	tailTID := sinfonia.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2}
 	tailStore, err := storage.OpenReplayStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tailStore.AppendPrepare(tailTID, proto.ExecPrepareResponse{RequestID: "tail", Vote: proto.VoteOk}); err != nil {
+	if err := tailStore.AppendPrepare(tailTID, sinfonia.ExecPrepareResponse{RequestID: "tail", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	tail, err := tailStore.Bytes()
@@ -389,8 +389,8 @@ func TestReplayStoreCompactRetentionAvoidsEpochOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	txId := proto.TransactionID{CoordinatorID: 3, Counter: 1, Epoch: ^uint64(0)}
-	if err := store.AppendPrepare(txId, proto.ExecPrepareResponse{RequestID: "max", Vote: proto.VoteOk}); err != nil {
+	txId := sinfonia.TransactionID{CoordinatorID: 3, Counter: 1, Epoch: ^uint64(0)}
+	if err := store.AppendPrepare(txId, sinfonia.ExecPrepareResponse{RequestID: "max", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Compact(storage.ReplayRetention{CurrentEpoch: ^uint64(0), RetryHorizon: 2}); err != nil {

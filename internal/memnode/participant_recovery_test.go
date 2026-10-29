@@ -12,29 +12,29 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
 type unavailableRecoveryPeer struct{}
 
-func (unavailableRecoveryPeer) QueryTidStatus(ctx context.Context, _ proto.QueryTidStatusRequest) (proto.QueryTidStatusResponse, error) {
+func (unavailableRecoveryPeer) QueryTidStatus(ctx context.Context, _ sinfonia.QueryTidStatusRequest) (sinfonia.QueryTidStatusResponse, error) {
 	<-ctx.Done()
-	return proto.QueryTidStatusResponse{}, ctx.Err()
+	return sinfonia.QueryTidStatusResponse{}, ctx.Err()
 }
 
-func (unavailableRecoveryPeer) NotifyApplied(context.Context, proto.NotifyAppliedRequest) (proto.NotifyAppliedResponse, error) {
-	return proto.NotifyAppliedResponse{}, errors.New("peer is still recovering")
+func (unavailableRecoveryPeer) NotifyApplied(context.Context, sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error) {
+	return sinfonia.NotifyAppliedResponse{}, errors.New("peer is still recovering")
 }
 
 type abortRecoveryPeer struct{}
 
-func (abortRecoveryPeer) QueryTidStatus(context.Context, proto.QueryTidStatusRequest) (proto.QueryTidStatusResponse, error) {
-	return proto.QueryTidStatusResponse{KnownDecision: true, Outcome: proto.TidOutcomeAbort}, nil
+func (abortRecoveryPeer) QueryTidStatus(context.Context, sinfonia.QueryTidStatusRequest) (sinfonia.QueryTidStatusResponse, error) {
+	return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeAbort}, nil
 }
 
-func (abortRecoveryPeer) NotifyApplied(context.Context, proto.NotifyAppliedRequest) (proto.NotifyAppliedResponse, error) {
-	return proto.NotifyAppliedResponse{Ack: true}, nil
+func (abortRecoveryPeer) NotifyApplied(context.Context, sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error) {
+	return sinfonia.NotifyAppliedResponse{Ack: true}, nil
 }
 
 type blockingDecisionReplica struct {
@@ -43,21 +43,21 @@ type blockingDecisionReplica struct {
 	release chan struct{}
 }
 
-func (r *blockingDecisionReplica) ReplicateRedoEntry(ctx context.Context, req proto.ReplicateRedoEntryRequest) (proto.ReplicateRedoEntryResponse, error) {
+func (r *blockingDecisionReplica) ReplicateRedoEntry(ctx context.Context, req sinfonia.ReplicateRedoEntryRequest) (sinfonia.ReplicateRedoEntryResponse, error) {
 	return r.node.ReplicateRedoEntry(ctx, req)
 }
 
-func (r *blockingDecisionReplica) ReplicateCommitDecision(ctx context.Context, req proto.ReplicateCommitDecisionRequest) (proto.ReplicateCommitDecisionResponse, error) {
+func (r *blockingDecisionReplica) ReplicateCommitDecision(ctx context.Context, req sinfonia.ReplicateCommitDecisionRequest) (sinfonia.ReplicateCommitDecisionResponse, error) {
 	close(r.started)
 	select {
 	case <-r.release:
 	case <-ctx.Done():
-		return proto.ReplicateCommitDecisionResponse{Ack: false}, ctx.Err()
+		return sinfonia.ReplicateCommitDecisionResponse{Ack: false}, ctx.Err()
 	}
 	return r.node.ReplicateCommitDecision(ctx, req)
 }
 
-func (r *blockingDecisionReplica) ReplicateReplayRecord(ctx context.Context, req proto.ReplicateReplayRecordRequest) (proto.ReplicateReplayRecordResponse, error) {
+func (r *blockingDecisionReplica) ReplicateReplayRecord(ctx context.Context, req sinfonia.ReplicateReplayRecordRequest) (sinfonia.ReplicateReplayRecordResponse, error) {
 	return r.node.ReplicateReplayRecord(ctx, req)
 }
 
@@ -76,19 +76,19 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = b.Close() })
 
-	txId := proto.TransactionID{CoordinatorID: 41, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 41, Counter: 1, Epoch: 1}
 	participants := []uint32{1, 2}
-	if _, err := a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+	if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID:          txId,
 		Participants: participants,
-		WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}},
+		WriteItems:   []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+	if _, err := b.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID:          txId,
 		Participants: participants,
-		WriteItems:   []proto.WriteItem{{MemID: 2, Addr: 8, Data: []byte("B")}},
+		WriteItems:   []sinfonia.WriteItem{{MemID: 2, Addr: 8, Data: []byte("B")}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	restarted.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	applyBlocked := make(chan struct{})
 	releaseApply := make(chan struct{})
-	restarted.SetRecoverBoundaryHookForTest(func(phase string, hookTID proto.TransactionID) error {
+	restarted.SetRecoverBoundaryHookForTest(func(phase string, hookTID sinfonia.TransactionID) error {
 		if phase == "apply-before" && hookTID == txId {
 			close(applyBlocked)
 			<-releaseApply
@@ -144,12 +144,12 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	type commitResult struct {
-		resp proto.CommitResponse
+		resp sinfonia.CommitResponse
 		err  error
 	}
 	commitDone := make(chan commitResult, 1)
 	go func() {
-		resp, err := restarted.Commit(ctx, proto.CommitRequest{TID: txId, RequestID: "opposite-race", ActionCommit: false})
+		resp, err := restarted.Commit(ctx, sinfonia.CommitRequest{TID: txId, RequestID: "opposite-race", ActionCommit: false})
 		commitDone <- commitResult{resp: resp, err: err}
 	}()
 	select {
@@ -186,7 +186,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	if err := restarted.ApplyWriteForTest(8, []byte("Z")); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := restarted.Commit(ctx, proto.CommitRequest{TID: txId, RequestID: "same-tid-retry", ActionCommit: true})
+	resp, err := restarted.Commit(ctx, sinfonia.CommitRequest{TID: txId, RequestID: "same-tid-retry", ActionCommit: true})
 	if err != nil || !resp.Ack {
 		t.Fatalf("same-TID commit retry resp=%+v err=%v", resp, err)
 	}
@@ -224,19 +224,19 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = b.Close() })
 
-			txId := proto.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
+			txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
 			participants := []uint32{1, 2}
-			if _, err := a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+			if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 				TID:          txId,
 				Participants: participants,
-				WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}},
+				WriteItems:   []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}},
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+			if _, err := b.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 				TID:          txId,
 				Participants: participants,
-				WriteItems:   []proto.WriteItem{{MemID: 2, Addr: 8, Data: []byte("B")}},
+				WriteItems:   []sinfonia.WriteItem{{MemID: 2, Addr: 8, Data: []byte("B")}},
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -251,7 +251,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 			t.Cleanup(func() { _ = restarted.Close() })
 			restarted.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 			injected := errors.New("injected recovery terminalization failure")
-			restarted.SetRecoverBoundaryHookForTest(func(phase string, hookTID proto.TransactionID) error {
+			restarted.SetRecoverBoundaryHookForTest(func(phase string, hookTID sinfonia.TransactionID) error {
 				if phase == failurePhase && hookTID == txId {
 					return injected
 				}
@@ -266,7 +266,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp, err := restarted.Commit(ctx, proto.CommitRequest{
+			resp, err := restarted.Commit(ctx, sinfonia.CommitRequest{
 				TID:          txId,
 				RequestID:    "opposite-after-recovery-failure",
 				ActionCommit: false,
@@ -325,18 +325,18 @@ func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	}
 	primary.ConfigureAsPrimary(2, blocking)
 
-	txId := proto.TransactionID{CoordinatorID: 43, Counter: 1, Epoch: 1}
-	if prep, err := primary.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+	txId := sinfonia.TransactionID{CoordinatorID: 43, Counter: 1, Epoch: 1}
+	if prep, err := primary.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID:          txId,
 		Participants: []uint32{1, 3},
-		WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("C")}},
-	}); err != nil || prep.Vote != proto.VoteOk {
+		WriteItems:   []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("C")}},
+	}); err != nil || prep.Vote != sinfonia.VoteOk {
 		t.Fatalf("ExecAndPrepare() resp=%+v err=%v", prep, err)
 	}
 	primary.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{3: abortRecoveryPeer{}})
 	replayBlocked := make(chan struct{})
 	releaseReplay := make(chan struct{})
-	primary.SetRecoverBoundaryHookForTest(func(phase string, hookTID proto.TransactionID) error {
+	primary.SetRecoverBoundaryHookForTest(func(phase string, hookTID sinfonia.TransactionID) error {
 		if phase == "replay-before" && hookTID == txId {
 			close(replayBlocked)
 			<-releaseReplay
@@ -352,12 +352,12 @@ func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	}
 
 	type commitResult struct {
-		resp proto.CommitResponse
+		resp sinfonia.CommitResponse
 		err  error
 	}
 	commitDone := make(chan commitResult, 1)
 	go func() {
-		resp, err := primary.Commit(ctx, proto.CommitRequest{TID: txId, RequestID: "replicated-race", ActionCommit: true})
+		resp, err := primary.Commit(ctx, sinfonia.CommitRequest{TID: txId, RequestID: "replicated-race", ActionCommit: true})
 		commitDone <- commitResult{resp: resp, err: err}
 	}()
 	select {
@@ -369,11 +369,11 @@ func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	if err := <-recoverDone; err != nil {
 		t.Fatal(err)
 	}
-	primaryStatus, err := primary.QueryTidStatus(ctx, proto.QueryTidStatusRequest{TID: txId})
+	primaryStatus, err := primary.QueryTidStatus(ctx, sinfonia.QueryTidStatusRequest{TID: txId})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !primaryStatus.KnownDecision || primaryStatus.Outcome != proto.TidOutcomeCommit {
+	if !primaryStatus.KnownDecision || primaryStatus.Outcome != sinfonia.TidOutcomeCommit {
 		t.Fatalf("primary recovery changed replicated decision: %+v", primaryStatus)
 	}
 	close(blocking.release)
@@ -381,11 +381,11 @@ func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	if result.err != nil || !result.resp.Ack {
 		t.Fatalf("Commit() resp=%+v err=%v", result.resp, result.err)
 	}
-	replicaStatus, err := replica.QueryTidStatus(ctx, proto.QueryTidStatusRequest{TID: txId})
+	replicaStatus, err := replica.QueryTidStatus(ctx, sinfonia.QueryTidStatusRequest{TID: txId})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !replicaStatus.KnownDecision || replicaStatus.Outcome != proto.TidOutcomeCommit {
+	if !replicaStatus.KnownDecision || replicaStatus.Outcome != sinfonia.TidOutcomeCommit {
 		t.Fatalf("replica decision disagrees with primary: %+v", replicaStatus)
 	}
 	got, err := primary.Read(ctx, 8, 1)
@@ -407,16 +407,16 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 	}
 	b := memnode.NewParticipantWithId(2, 64)
 
-	txId := proto.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
 	participants := []uint32{1, 2}
-	if _, err := a.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+	if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID:          txId,
 		Participants: participants,
-		WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 9, Data: []byte("R")}},
+		WriteItems:   []sinfonia.WriteItem{{MemID: 1, Addr: 9, Data: []byte("R")}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.ExecAndPrepare(ctx, proto.ExecPrepareRequest{TID: txId, Participants: participants}); err != nil {
+	if _, err := b.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: participants}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Close(); err != nil {

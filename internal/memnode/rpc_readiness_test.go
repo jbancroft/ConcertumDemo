@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
@@ -31,21 +31,21 @@ func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var read proto.ReadResponse
-	err = client.Call(ctx, proto.MethodRead, proto.ReadRequest{Addr: 0, Len: 1}, &read)
+	var read sinfonia.ReadResponse
+	err = client.Call(ctx, sinfonia.MethodRead, sinfonia.ReadRequest{Addr: 0, Len: 1}, &read)
 	if err == nil || !strings.Contains(err.Error(), memnode.ErrRecoveryPending.Error()) {
 		t.Fatalf("Read before recovery error = %v, want ErrRecoveryPending", err)
 	}
 
-	var entries proto.ListRedoEntriesResponse
-	if err := client.Call(ctx, proto.MethodListRedoEntries, proto.ListRedoEntriesRequest{}, &entries); err != nil {
+	var entries sinfonia.ListRedoEntriesResponse
+	if err := client.Call(ctx, sinfonia.MethodListRedoEntries, sinfonia.ListRedoEntriesRequest{}, &entries); err != nil {
 		t.Fatalf("recovery-safe RPC failed while unready: %v", err)
 	}
 
 	if err := node.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Call(ctx, proto.MethodRead, proto.ReadRequest{Addr: 0, Len: 1}, &read); err != nil {
+	if err := client.Call(ctx, sinfonia.MethodRead, sinfonia.ReadRequest{Addr: 0, Len: 1}, &read); err != nil {
 		t.Fatalf("Read after recovery failed: %v", err)
 	}
 }

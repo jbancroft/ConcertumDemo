@@ -13,11 +13,12 @@ func TestSQLExecGobRoundTrip(t *testing.T) {
 		Statement:     "SELECT id, value FROM t",
 	}
 	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(in); err != nil {
+	var message any = in
+	if err := gob.NewEncoder(&buf).Encode(&message); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 
-	var out SQLExecRequest
+	var out any
 	if err := gob.NewDecoder(&buf).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -48,13 +49,18 @@ func TestSQLDescribeCapabilitiesGobRoundTrip(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(in); err != nil {
+	var message any = in
+	if err := gob.NewEncoder(&buf).Encode(&message); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 
-	var out SQLDescribeCapabilitiesResponse
-	if err := gob.NewDecoder(&buf).Decode(&out); err != nil {
+	var decoded any
+	if err := gob.NewDecoder(&buf).Decode(&decoded); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	out, ok := decoded.(SQLDescribeCapabilitiesResponse)
+	if !ok {
+		t.Fatalf("decoded type = %T, want SQLDescribeCapabilitiesResponse", decoded)
 	}
 	if out.Version != in.Version {
 		t.Fatalf("version mismatch: got %d want %d", out.Version, in.Version)

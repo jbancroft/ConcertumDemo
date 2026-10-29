@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func fencingPublicationCheckpoints() []string {
@@ -180,7 +180,7 @@ func TestFencingPublicationFailurePreservesFencingAcrossRestart(t *testing.T) {
 				}
 				return nil
 			})
-			response, err := node.ConfigureReplication(ctx, proto.ConfigureReplicationRequest{Role: proto.ReplicationRoleSingle, Generation: 42, FencingProtocolVersion: proto.ReplicationFencingProtocolVersion})
+			response, err := node.ConfigureReplication(ctx, sinfonia.ConfigureReplicationRequest{Role: sinfonia.ReplicationRoleSingle, Generation: 42, FencingProtocolVersion: sinfonia.ReplicationFencingProtocolVersion})
 			if fencingCheckpointPublishesGeneration(checkpoint) {
 				if err != nil || response.Ack || !response.OutcomeUnknown || response.Generation != 42 {
 					t.Fatalf("configure response=(%+v, %v), want explicit unknown generation 42", response, err)
@@ -195,7 +195,7 @@ func TestFencingPublicationFailurePreservesFencingAcrossRestart(t *testing.T) {
 					t.Fatalf("unfenced write error = %v, want %v", err, ErrStaleGeneration)
 				}
 			}
-			status, err := node.ReplicationStatus(ctx, proto.ReplicationStatusRequest{})
+			status, err := node.ReplicationStatus(ctx, sinfonia.ReplicationStatusRequest{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -215,7 +215,7 @@ func TestFencingPublicationFailurePreservesFencingAcrossRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer restarted.Close()
-			status, err = restarted.ReplicationStatus(ctx, proto.ReplicationStatusRequest{})
+			status, err = restarted.ReplicationStatus(ctx, sinfonia.ReplicationStatusRequest{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -226,7 +226,7 @@ func TestFencingPublicationFailurePreservesFencingAcrossRestart(t *testing.T) {
 				if err := restarted.Write(ctx, 0, []byte("x")); !errors.Is(err, ErrStaleGeneration) {
 					t.Fatalf("restarted unfenced write error = %v, want %v", err, ErrStaleGeneration)
 				}
-				if _, err := restarted.ConfigureReplication(ctx, proto.ConfigureReplicationRequest{Role: proto.ReplicationRoleReplica, PartnerRPC: "127.0.0.1:1", Generation: expectedGeneration - 1, FencingProtocolVersion: proto.ReplicationFencingProtocolVersion}); !errors.Is(err, ErrStaleGeneration) {
+				if _, err := restarted.ConfigureReplication(ctx, sinfonia.ConfigureReplicationRequest{Role: sinfonia.ReplicationRoleReplica, PartnerRPC: "127.0.0.1:1", Generation: expectedGeneration - 1, FencingProtocolVersion: sinfonia.ReplicationFencingProtocolVersion}); !errors.Is(err, ErrStaleGeneration) {
 					t.Fatalf("restarted stale control error = %v, want %v", err, ErrStaleGeneration)
 				}
 			}

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func FuzzAdminBodyDecodeNeverPanics(f *testing.F) {
@@ -106,21 +106,21 @@ func TestDebugEndpointAvailability(t *testing.T) {
 
 func TestMetricsCommitAbortAndRetry(t *testing.T) {
 	n := NewParticipant(32)
-	tid1 := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	_, err := n.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: tid1, Participants: []uint32{1}, Class: "payments", WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("a")}}})
+	tid1 := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	_, err := n.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: tid1, Participants: []uint32{1}, Class: "payments", WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("a")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = n.Commit(context.Background(), proto.CommitRequest{TID: tid1, ActionCommit: true})
+	_, err = n.Commit(context.Background(), sinfonia.CommitRequest{TID: tid1, ActionCommit: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tid2 := proto.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 1}
-	_, err = n.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: tid2, Participants: []uint32{1}, Class: "payments", WriteItems: []proto.WriteItem{{MemID: 1, Addr: 1, Data: []byte("b")}}})
+	tid2 := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 1}
+	_, err = n.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: tid2, Participants: []uint32{1}, Class: "payments", WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("b")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = n.Commit(context.Background(), proto.CommitRequest{TID: tid2, ActionCommit: false})
+	_, err = n.Commit(context.Background(), sinfonia.CommitRequest{TID: tid2, ActionCommit: false})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,22 +196,22 @@ func TestStatsSnapshotRateWindows(t *testing.T) {
 func TestBadLockIncludesConflictContext(t *testing.T) {
 	n := NewParticipant(64)
 	ctx := context.Background()
-	tid1 := proto.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
-	tid2 := proto.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: 1}
-	if resp, err := n.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+	tid1 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
+	tid2 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: 1}
+	if resp, err := n.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID: tid1, CorrelationID: tid1.CorrelationID(), Participants: []uint32{1},
-		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("abc")}},
-	}); err != nil || resp.Vote != proto.VoteOk {
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("abc")}},
+	}); err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("first prepare vote=%v err=%v", resp.Vote, err)
 	}
-	resp, err := n.ExecAndPrepare(ctx, proto.ExecPrepareRequest{
+	resp, err := n.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID: tid2, CorrelationID: tid2.CorrelationID(), Participants: []uint32{1},
-		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("z")}},
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("z")}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Vote != proto.VoteBadLock || resp.LockConflict == nil {
+	if resp.Vote != sinfonia.VoteBadLock || resp.LockConflict == nil {
 		t.Fatalf("expected bad lock with conflict details: %+v", resp)
 	}
 	if resp.LockConflict.HeldStart != 8 {
@@ -227,14 +227,14 @@ func TestDebugTimelineAndRedoInspectEndpoints(t *testing.T) {
 	}
 	defer n.Close()
 	n.enableDebugEndpoints = true
-	txId := proto.TransactionID{CoordinatorID: 9, Counter: 5, Epoch: 3}
-	if resp, err := n.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{
+	txId := sinfonia.TransactionID{CoordinatorID: 9, Counter: 5, Epoch: 3}
+	if resp, err := n.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{
 		TID: txId, CorrelationID: txId.CorrelationID(), Participants: []uint32{1},
-		WriteItems: []proto.WriteItem{{MemID: 1, Addr: 1, Data: []byte("q")}},
-	}); err != nil || resp.Vote != proto.VoteOk {
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("q")}},
+	}); err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("prepare vote=%v err=%v", resp.Vote, err)
 	}
-	if _, err := n.Commit(context.Background(), proto.CommitRequest{TID: txId, CorrelationID: txId.CorrelationID(), ActionCommit: true}); err != nil {
+	if _, err := n.Commit(context.Background(), sinfonia.CommitRequest{TID: txId, CorrelationID: txId.CorrelationID(), ActionCommit: true}); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(n.HTTPHandler(false))
@@ -295,12 +295,12 @@ func TestFsyncHistogramAndReplicationLag(t *testing.T) {
 	replica.ConfigureAsReplica(1)
 
 	primary.ConfigureAsPrimary(2, replica)
-	txId := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	_, err = primary.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: txId, Participants: []uint32{1, 2}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("x")}}})
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	_, err = primary.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("x")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := primary.Commit(context.Background(), proto.CommitRequest{TID: txId, ActionCommit: true}); err != nil {
+	if _, err := primary.Commit(context.Background(), sinfonia.CommitRequest{TID: txId, ActionCommit: true}); err != nil {
 		t.Fatal(err)
 	}
 	if primary.metrics.fsyncLatency.total.Load() == 0 {

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
@@ -39,12 +39,12 @@ func TestReplicationBaselineInstallCrashBoundariesRecoverOldState(t *testing.T) 
 				t.Fatal(err)
 			}
 
-			txId := proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
+			txId := sinfonia.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
 			redoLog, err := storage.OpenRedoLog(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := redoLog.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
+			if err := redoLog.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
 				t.Fatal(err)
 			}
 			decided, err := storage.OpenDecidedTransactionLog(dir)
@@ -86,11 +86,11 @@ func TestReplicationBaselineInstallCrashBoundariesRecoverOldState(t *testing.T) 
 			image := make([]byte, 64)
 			copy(image, []byte("new-baseline"))
 			checksum := sha256.Sum256(image)
-			if _, err := replica.InstallReplicationBaseline(ctx, proto.InstallReplicationBaselineRequest{
+			if _, err := replica.InstallReplicationBaseline(ctx, sinfonia.InstallReplicationBaselineRequest{
 				BarrierOwner: owner,
 				Image:        image,
 				SHA256:       checksum[:],
-				BoundaryTID:  proto.TransactionID{CoordinatorID: 1, Counter: 99, Epoch: 1},
+				BoundaryTID:  sinfonia.TransactionID{CoordinatorID: 1, Counter: 99, Epoch: 1},
 			}); err == nil {
 				t.Fatal("expected injected baseline boundary failure")
 			}
@@ -131,8 +131,8 @@ func TestReplicationBaselineReplayInstallCrashBoundaryRecoversOldState(t *testin
 	if err := seed.ApplyWriteForTest(0, []byte("old")); err != nil {
 		t.Fatal(err)
 	}
-	oldTID := proto.TransactionID{CoordinatorID: 31, Counter: 1, Epoch: 1}
-	oldResponse := proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOk, ReadData: map[uint32][]byte{1: []byte("old")}}
+	oldTID := sinfonia.TransactionID{CoordinatorID: 31, Counter: 1, Epoch: 1}
+	oldResponse := sinfonia.ExecPrepareResponse{RequestID: "old", Vote: sinfonia.VoteOk, ReadData: map[uint32][]byte{1: []byte("old")}}
 	oldReplay, err := storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -149,8 +149,8 @@ func TestReplicationBaselineReplayInstallCrashBoundaryRecoversOldState(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	newTID := proto.TransactionID{CoordinatorID: 32, Counter: 2, Epoch: 1}
-	newResponse := proto.ExecPrepareResponse{RequestID: "new", Vote: proto.VoteBadCmp, ReadData: map[uint32][]byte{1: []byte("new")}}
+	newTID := sinfonia.TransactionID{CoordinatorID: 32, Counter: 2, Epoch: 1}
+	newResponse := sinfonia.ExecPrepareResponse{RequestID: "new", Vote: sinfonia.VoteBadCmp, ReadData: map[uint32][]byte{1: []byte("new")}}
 	if err := stagedReplay.AppendPrepare(newTID, newResponse); err != nil {
 		t.Fatal(err)
 	}
@@ -188,27 +188,27 @@ func TestReplicationBaselineReplayInstallCrashBoundaryRecoversOldState(t *testin
 	copy(image, []byte("new-baseline"))
 	imageChecksum := sha256.Sum256(image)
 	replayChecksum := sha256.Sum256(stagedReplayBytes)
-	begin, err := replica.BeginReplicationBaseline(ctx, proto.BeginReplicationBaselineRequest{
+	begin, err := replica.BeginReplicationBaseline(ctx, sinfonia.BeginReplicationBaselineRequest{
 		BarrierOwner: owner,
 		SessionID:    "replay-boundary-session",
 		TotalSize:    uint64(len(image)),
 		SHA256:       imageChecksum[:],
 		ReplaySize:   uint64(len(stagedReplayBytes)),
 		ReplaySHA256: replayChecksum[:],
-		BoundaryTID:  proto.TransactionID{CoordinatorID: 33, Counter: 3, Epoch: 1},
+		BoundaryTID:  sinfonia.TransactionID{CoordinatorID: 33, Counter: 3, Epoch: 1},
 	})
 	if err != nil || !begin.Ack {
 		t.Fatalf("begin response = %+v, err = %v", begin, err)
 	}
 	imageChunkChecksum := sha256.Sum256(image)
-	if written, err := replica.WriteReplicationBaselineChunk(ctx, proto.WriteReplicationBaselineChunkRequest{BarrierOwner: owner, SessionID: "replay-boundary-session", Artifact: "image", Offset: 0, SHA256: imageChunkChecksum[:], Data: image}); err != nil || !written.Ack {
+	if written, err := replica.WriteReplicationBaselineChunk(ctx, sinfonia.WriteReplicationBaselineChunkRequest{BarrierOwner: owner, SessionID: "replay-boundary-session", Artifact: "image", Offset: 0, SHA256: imageChunkChecksum[:], Data: image}); err != nil || !written.Ack {
 		t.Fatalf("image write response = %+v, err = %v", written, err)
 	}
 	replayChunkChecksum := sha256.Sum256(stagedReplayBytes)
-	if written, err := replica.WriteReplicationBaselineChunk(ctx, proto.WriteReplicationBaselineChunkRequest{BarrierOwner: owner, SessionID: "replay-boundary-session", Artifact: "replay", Offset: 0, SHA256: replayChunkChecksum[:], Data: stagedReplayBytes}); err != nil || !written.Ack {
+	if written, err := replica.WriteReplicationBaselineChunk(ctx, sinfonia.WriteReplicationBaselineChunkRequest{BarrierOwner: owner, SessionID: "replay-boundary-session", Artifact: "replay", Offset: 0, SHA256: replayChunkChecksum[:], Data: stagedReplayBytes}); err != nil || !written.Ack {
 		t.Fatalf("replay write response = %+v, err = %v", written, err)
 	}
-	if committed, err := replica.CommitReplicationBaseline(ctx, proto.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: "replay-boundary-session"}); err == nil || committed.Ack {
+	if committed, err := replica.CommitReplicationBaseline(ctx, sinfonia.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: "replay-boundary-session"}); err == nil || committed.Ack {
 		t.Fatalf("commit response = %+v, err = %v, want replay boundary failure", committed, err)
 	}
 
@@ -336,11 +336,11 @@ func TestReplicationBaselineInstallCrashHelper(t *testing.T) {
 	image := make([]byte, 64)
 	copy(image, []byte("new-baseline"))
 	checksum := sha256.Sum256(image)
-	_, _ = node.InstallReplicationBaseline(context.Background(), proto.InstallReplicationBaselineRequest{BarrierOwner: owner, Image: image, SHA256: checksum[:], BoundaryTID: proto.TransactionID{CoordinatorID: 1, Counter: 99, Epoch: 1}})
+	_, _ = node.InstallReplicationBaseline(context.Background(), sinfonia.InstallReplicationBaselineRequest{BarrierOwner: owner, Image: image, SHA256: checksum[:], BoundaryTID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 99, Epoch: 1}})
 	t.Fatal("crash hook did not fire")
 }
 
-func seedOldBaseline(t *testing.T, dir string) proto.TransactionID {
+func seedOldBaseline(t *testing.T, dir string) sinfonia.TransactionID {
 	t.Helper()
 	node, err := memnode.NewDurableParticipant(1, 64, dir)
 	if err != nil {
@@ -352,12 +352,12 @@ func seedOldBaseline(t *testing.T, dir string) proto.TransactionID {
 	if err := node.Close(); err != nil {
 		t.Fatal(err)
 	}
-	txId := proto.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
 	redoLog, err := storage.OpenRedoLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := redoLog.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
+	if err := redoLog.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
 		t.Fatal(err)
 	}
 	decided, err := storage.OpenDecidedTransactionLog(dir)
@@ -400,18 +400,18 @@ func TestReplicationBaselineChunkChecksumMismatchDoesNotTouchLiveState(t *testin
 	expected := make([]byte, 64)
 	copy(expected, []byte("expected"))
 	expectedSum := sha256.Sum256(expected)
-	begin, err := node.BeginReplicationBaseline(ctx, proto.BeginReplicationBaselineRequest{BarrierOwner: owner, SessionID: "checksum-session", TotalSize: uint64(len(expected)), SHA256: expectedSum[:], BoundaryTID: proto.TransactionID{Epoch: 1}})
+	begin, err := node.BeginReplicationBaseline(ctx, sinfonia.BeginReplicationBaselineRequest{BarrierOwner: owner, SessionID: "checksum-session", TotalSize: uint64(len(expected)), SHA256: expectedSum[:], BoundaryTID: sinfonia.TransactionID{Epoch: 1}})
 	if err != nil || !begin.Ack {
 		t.Fatalf("begin response = %+v, err = %v", begin, err)
 	}
 	different := make([]byte, 64)
 	copy(different, []byte("different"))
 	chunkSum := sha256.Sum256(different)
-	write, err := node.WriteReplicationBaselineChunk(ctx, proto.WriteReplicationBaselineChunkRequest{BarrierOwner: owner, SessionID: "checksum-session", Offset: 0, SHA256: chunkSum[:], Data: different})
+	write, err := node.WriteReplicationBaselineChunk(ctx, sinfonia.WriteReplicationBaselineChunkRequest{BarrierOwner: owner, SessionID: "checksum-session", Offset: 0, SHA256: chunkSum[:], Data: different})
 	if err != nil || !write.Ack {
 		t.Fatalf("write response = %+v, err = %v", write, err)
 	}
-	if _, err := node.CommitReplicationBaseline(ctx, proto.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: "checksum-session"}); err == nil {
+	if _, err := node.CommitReplicationBaseline(ctx, sinfonia.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: "checksum-session"}); err == nil {
 		t.Fatal("expected whole-image checksum mismatch")
 	}
 	got, err := node.Read(ctx, 0, 64)
@@ -443,7 +443,7 @@ func TestReplicationBaselineRejectsLiveIngressUntilCommit(t *testing.T) {
 	copy(image, []byte("baseline"))
 	imageChecksum := sha256.Sum256(image)
 	const sessionID = "redo-handoff-session"
-	begin, err := node.BeginReplicationBaseline(ctx, proto.BeginReplicationBaselineRequest{
+	begin, err := node.BeginReplicationBaseline(ctx, sinfonia.BeginReplicationBaselineRequest{
 		BarrierOwner: owner,
 		SessionID:    sessionID,
 		TotalSize:    uint64(len(image)),
@@ -453,7 +453,7 @@ func TestReplicationBaselineRejectsLiveIngressUntilCommit(t *testing.T) {
 		t.Fatalf("begin response = %+v, err = %v", begin, err)
 	}
 	chunkChecksum := sha256.Sum256(image)
-	written, err := node.WriteReplicationBaselineChunk(ctx, proto.WriteReplicationBaselineChunkRequest{
+	written, err := node.WriteReplicationBaselineChunk(ctx, sinfonia.WriteReplicationBaselineChunkRequest{
 		BarrierOwner: owner,
 		SessionID:    sessionID,
 		Offset:       0,
@@ -464,35 +464,35 @@ func TestReplicationBaselineRejectsLiveIngressUntilCommit(t *testing.T) {
 		t.Fatalf("write response = %+v, err = %v", written, err)
 	}
 
-	txId := proto.TransactionID{CoordinatorID: 71, Counter: 1, Epoch: 1}
-	entry := proto.RedoEntryPayload{
+	txId := sinfonia.TransactionID{CoordinatorID: 71, Counter: 1, Epoch: 1}
+	entry := sinfonia.RedoEntryPayload{
 		TID:          txId,
 		Participants: []uint32{1},
-		WriteItems:   []proto.WriteItem{{MemID: 1, Addr: 32, Data: []byte("live")}},
+		WriteItems:   []sinfonia.WriteItem{{MemID: 1, Addr: 32, Data: []byte("live")}},
 	}
-	if response, err := node.ReplicateRedoEntry(ctx, proto.ReplicateRedoEntryRequest{Entry: entry}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
+	if response, err := node.ReplicateRedoEntry(ctx, sinfonia.ReplicateRedoEntryRequest{Entry: entry}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
 		t.Fatalf("redo during staged baseline = %+v, err = %v", response, err)
 	}
-	if response, err := node.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
+	if response, err := node.ReplicateCommitDecision(ctx, sinfonia.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
 		t.Fatalf("decision during staged baseline = %+v, err = %v", response, err)
 	}
-	replayTID := proto.TransactionID{CoordinatorID: 71, Counter: 2, Epoch: 1}
-	replay := proto.ExecCommit1PCResponse{RequestID: "original", Vote: proto.VoteBadCmp, ReadData: map[uint32][]byte{3: []byte("replayed")}}
-	if response, err := node.ReplicateReplayRecord(ctx, proto.ReplicateReplayRecordRequest{TID: replayTID, Kind: proto.ReplayRecordOnePC, OnePC: &replay}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
+	replayTID := sinfonia.TransactionID{CoordinatorID: 71, Counter: 2, Epoch: 1}
+	replay := sinfonia.ExecCommit1PCResponse{RequestID: "original", Vote: sinfonia.VoteBadCmp, ReadData: map[uint32][]byte{3: []byte("replayed")}}
+	if response, err := node.ReplicateReplayRecord(ctx, sinfonia.ReplicateReplayRecordRequest{TID: replayTID, Kind: sinfonia.ReplayRecordOnePC, OnePC: &replay}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
 		t.Fatalf("replay during staged baseline = %+v, err = %v", response, err)
 	}
 
-	committed, err := node.CommitReplicationBaseline(ctx, proto.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID})
+	committed, err := node.CommitReplicationBaseline(ctx, sinfonia.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID})
 	if err != nil || !committed.Ack {
 		t.Fatalf("commit response = %+v, err = %v", committed, err)
 	}
-	if response, err := node.ReplicateRedoEntry(ctx, proto.ReplicateRedoEntryRequest{Entry: entry}); err != nil || !response.Ack {
+	if response, err := node.ReplicateRedoEntry(ctx, sinfonia.ReplicateRedoEntryRequest{Entry: entry}); err != nil || !response.Ack {
 		t.Fatalf("redo after baseline commit = %+v, err = %v", response, err)
 	}
-	if response, err := node.ReplicateReplayRecord(ctx, proto.ReplicateReplayRecordRequest{TID: replayTID, Kind: proto.ReplayRecordOnePC, OnePC: &replay}); err != nil || !response.Ack {
+	if response, err := node.ReplicateReplayRecord(ctx, sinfonia.ReplicateReplayRecordRequest{TID: replayTID, Kind: sinfonia.ReplayRecordOnePC, OnePC: &replay}); err != nil || !response.Ack {
 		t.Fatalf("replay after baseline commit = %+v, err = %v", response, err)
 	}
-	if response, err := node.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); err != nil || !response.Ack {
+	if response, err := node.ReplicateCommitDecision(ctx, sinfonia.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); err != nil || !response.Ack {
 		t.Fatalf("decision after baseline commit = %+v, err = %v", response, err)
 	}
 	node.UnlockAllOwned(owner)
@@ -518,7 +518,7 @@ func TestReplicationBaselineRejectsLiveIngressUntilCommit(t *testing.T) {
 	if string(got) != string(want) {
 		t.Fatalf("restarted handoff image = %q, want %q", got, want)
 	}
-	replayed, err := restarted.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{TID: replayTID, RequestID: "retry"})
+	replayed, err := restarted.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: replayTID, RequestID: "retry"})
 	if err != nil || replayed.RequestID != "retry" || replayed.Vote != replay.Vote || string(replayed.ReadData[3]) != "replayed" {
 		t.Fatalf("restarted replay = %+v, err = %v", replayed, err)
 	}
@@ -544,7 +544,7 @@ func TestReplicationBaselineFailedInstallRejectsIngressUntilRestartRecovery(t *t
 	copy(image, []byte("new-baseline"))
 	checksum := sha256.Sum256(image)
 	const sessionID = "failed-handoff-session"
-	begin, err := node.BeginReplicationBaseline(ctx, proto.BeginReplicationBaselineRequest{
+	begin, err := node.BeginReplicationBaseline(ctx, sinfonia.BeginReplicationBaselineRequest{
 		BarrierOwner: owner,
 		SessionID:    sessionID,
 		TotalSize:    uint64(len(image)),
@@ -553,7 +553,7 @@ func TestReplicationBaselineFailedInstallRejectsIngressUntilRestartRecovery(t *t
 	if err != nil || !begin.Ack {
 		t.Fatalf("begin response = %+v, err = %v", begin, err)
 	}
-	if written, err := node.WriteReplicationBaselineChunk(ctx, proto.WriteReplicationBaselineChunkRequest{
+	if written, err := node.WriteReplicationBaselineChunk(ctx, sinfonia.WriteReplicationBaselineChunkRequest{
 		BarrierOwner: owner,
 		SessionID:    sessionID,
 		Offset:       0,
@@ -569,24 +569,24 @@ func TestReplicationBaselineFailedInstallRejectsIngressUntilRestartRecovery(t *t
 		}
 		return nil
 	})
-	if committed, err := node.CommitReplicationBaseline(ctx, proto.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID}); !errors.Is(err, injected) || committed.Ack {
+	if committed, err := node.CommitReplicationBaseline(ctx, sinfonia.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID}); !errors.Is(err, injected) || committed.Ack {
 		t.Fatalf("failed commit response = %+v, err = %v", committed, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".baseline-install")); err != nil {
 		t.Fatalf("active rollback journal: %v", err)
 	}
 
-	txId := proto.TransactionID{CoordinatorID: 72, Counter: 1, Epoch: 1}
-	entry := proto.RedoEntryPayload{TID: txId, Participants: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 24, Data: []byte("live")}}}
-	replayTID := proto.TransactionID{CoordinatorID: 72, Counter: 2, Epoch: 1}
-	replay := proto.ExecCommit1PCResponse{RequestID: "original", Vote: proto.VoteBadCmp, ReadData: map[uint32][]byte{4: []byte("retry")}}
-	if response, err := node.ReplicateRedoEntry(ctx, proto.ReplicateRedoEntryRequest{Entry: entry}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
+	txId := sinfonia.TransactionID{CoordinatorID: 72, Counter: 1, Epoch: 1}
+	entry := sinfonia.RedoEntryPayload{TID: txId, Participants: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 24, Data: []byte("live")}}}
+	replayTID := sinfonia.TransactionID{CoordinatorID: 72, Counter: 2, Epoch: 1}
+	replay := sinfonia.ExecCommit1PCResponse{RequestID: "original", Vote: sinfonia.VoteBadCmp, ReadData: map[uint32][]byte{4: []byte("retry")}}
+	if response, err := node.ReplicateRedoEntry(ctx, sinfonia.ReplicateRedoEntryRequest{Entry: entry}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
 		t.Fatalf("redo with active rollback journal = %+v, err = %v", response, err)
 	}
-	if response, err := node.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
+	if response, err := node.ReplicateCommitDecision(ctx, sinfonia.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
 		t.Fatalf("decision with active rollback journal = %+v, err = %v", response, err)
 	}
-	if response, err := node.ReplicateReplayRecord(ctx, proto.ReplicateReplayRecordRequest{TID: replayTID, Kind: proto.ReplayRecordOnePC, OnePC: &replay}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
+	if response, err := node.ReplicateReplayRecord(ctx, sinfonia.ReplicateReplayRecordRequest{TID: replayTID, Kind: sinfonia.ReplayRecordOnePC, OnePC: &replay}); !errors.Is(err, memnode.ErrReplicationBaselineInProgress) || response.Ack {
 		t.Fatalf("replay with active rollback journal = %+v, err = %v", response, err)
 	}
 
@@ -602,13 +602,13 @@ func TestReplicationBaselineFailedInstallRejectsIngressUntilRestartRecovery(t *t
 		t.Fatal(err)
 	}
 	restarted.ConfigureAsReplica(1)
-	if response, err := restarted.ReplicateRedoEntry(ctx, proto.ReplicateRedoEntryRequest{Entry: entry}); err != nil || !response.Ack {
+	if response, err := restarted.ReplicateRedoEntry(ctx, sinfonia.ReplicateRedoEntryRequest{Entry: entry}); err != nil || !response.Ack {
 		t.Fatalf("redo after restart recovery = %+v, err = %v", response, err)
 	}
-	if response, err := restarted.ReplicateReplayRecord(ctx, proto.ReplicateReplayRecordRequest{TID: replayTID, Kind: proto.ReplayRecordOnePC, OnePC: &replay}); err != nil || !response.Ack {
+	if response, err := restarted.ReplicateReplayRecord(ctx, sinfonia.ReplicateReplayRecordRequest{TID: replayTID, Kind: sinfonia.ReplayRecordOnePC, OnePC: &replay}); err != nil || !response.Ack {
 		t.Fatalf("replay after restart recovery = %+v, err = %v", response, err)
 	}
-	if response, err := restarted.ReplicateCommitDecision(ctx, proto.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); err != nil || !response.Ack {
+	if response, err := restarted.ReplicateCommitDecision(ctx, sinfonia.ReplicateCommitDecisionRequest{TID: txId, ActionCommit: true}); err != nil || !response.Ack {
 		t.Fatalf("decision after restart recovery = %+v, err = %v", response, err)
 	}
 	if err := restarted.Close(); err != nil {
@@ -627,7 +627,7 @@ func TestReplicationBaselineFailedInstallRejectsIngressUntilRestartRecovery(t *t
 	if err != nil || string(got) != "live" {
 		t.Fatalf("restarted retried write = %q, err = %v", got, err)
 	}
-	replayed, err := recoveredRetry.ExecCommit1PC(ctx, proto.ExecCommit1PCRequest{TID: replayTID, RequestID: "after-restart"})
+	replayed, err := recoveredRetry.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: replayTID, RequestID: "after-restart"})
 	if err != nil || replayed.RequestID != "after-restart" || replayed.Vote != replay.Vote || string(replayed.ReadData[4]) != "retry" {
 		t.Fatalf("restarted retried replay = %+v, err = %v", replayed, err)
 	}

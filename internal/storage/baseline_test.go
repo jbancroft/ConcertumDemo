@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
@@ -59,8 +59,8 @@ func TestRecoverBaselineInstallRestoresReplayLogAndImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldTID := proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	oldResp := proto.ExecPrepareResponse{RequestID: "old", Vote: proto.VoteOk, ReadData: map[uint32][]byte{1: []byte("old")}, CurrentEpoch: 9}
+	oldTID := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	oldResp := sinfonia.ExecPrepareResponse{RequestID: "old", Vote: sinfonia.VoteOk, ReadData: map[uint32][]byte{1: []byte("old")}, CurrentEpoch: 9}
 	if err := replay.AppendPrepare(oldTID, oldResp); err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +82,8 @@ func TestRecoverBaselineInstallRestoresReplayLogAndImage(t *testing.T) {
 
 	stagedPath, _ := writeReplayArtifact(t, func(store *storage.ReplayStore) error {
 		return store.AppendPrepare(
-			proto.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2},
-			proto.ExecPrepareResponse{RequestID: "new", Vote: proto.VoteBadCmp, ReadData: map[uint32][]byte{2: []byte("new")}, CurrentEpoch: 11},
+			sinfonia.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2},
+			sinfonia.ExecPrepareResponse{RequestID: "new", Vote: sinfonia.VoteBadCmp, ReadData: map[uint32][]byte{2: []byte("new")}, CurrentEpoch: 11},
 		)
 	})
 	if err := replay.ReplaceFrom(stagedPath); err != nil {
@@ -110,7 +110,7 @@ func TestRecoverBaselineInstallRestoresReplayLogAndImage(t *testing.T) {
 	if got, ok := reopenedReplay.GetPrepare(oldTID); !ok || string(got.ReadData[1]) != "old" || got.RequestID != "old" {
 		t.Fatalf("recovered replay missing old record: %+v ok=%v", got, ok)
 	}
-	if _, ok := reopenedReplay.GetPrepare(proto.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2}); ok {
+	if _, ok := reopenedReplay.GetPrepare(sinfonia.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2}); ok {
 		t.Fatal("recovered replay kept staged record")
 	}
 }

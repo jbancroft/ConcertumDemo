@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 type lost1PCNode struct {
@@ -15,11 +15,11 @@ type lost1PCNode struct {
 	dropped bool
 }
 
-func (n *lost1PCNode) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
+func (n *lost1PCNode) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
 	resp, err := n.Participant.ExecCommit1PC(ctx, req)
 	if !n.dropped {
 		n.dropped = true
-		return proto.ExecCommit1PCResponse{}, errors.New("lost 1pc response")
+		return sinfonia.ExecCommit1PCResponse{}, errors.New("lost 1pc response")
 	}
 	return resp, err
 }
@@ -37,27 +37,27 @@ type unacknowledgedFallbackCommitNode struct {
 	*memnode.Participant
 }
 
-func (n *failingCommitNode) Commit(context.Context, proto.CommitRequest) (proto.CommitResponse, error) {
-	return proto.CommitResponse{}, errors.New("commit unavailable")
+func (n *failingCommitNode) Commit(context.Context, sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
+	return sinfonia.CommitResponse{}, errors.New("commit unavailable")
 }
 
-func (n *failingCommitNode) CommitBatch(context.Context, proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
-	return proto.CommitBatchResponse{}, errors.New("commit batch unavailable")
+func (n *failingCommitNode) CommitBatch(context.Context, sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error) {
+	return sinfonia.CommitBatchResponse{}, errors.New("commit batch unavailable")
 }
 
-func (n *unacknowledgedFallbackCommitNode) Commit(_ context.Context, req proto.CommitRequest) (proto.CommitResponse, error) {
-	return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, nil
+func (n *unacknowledgedFallbackCommitNode) Commit(_ context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
+	return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, nil
 }
 
-func (n *unacknowledgedFallbackCommitNode) CommitBatch(context.Context, proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
-	return proto.CommitBatchResponse{}, errors.New("commit batch unavailable")
+func (n *unacknowledgedFallbackCommitNode) CommitBatch(context.Context, sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error) {
+	return sinfonia.CommitBatchResponse{}, errors.New("commit batch unavailable")
 }
 
-func (n *lostPrepareNode) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
+func (n *lostPrepareNode) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
 	resp, err := n.Participant.ExecAndPrepare(ctx, req)
 	if !n.dropped {
 		n.dropped = true
-		return proto.ExecPrepareResponse{}, errors.New("lost prepare response")
+		return sinfonia.ExecPrepareResponse{}, errors.New("lost prepare response")
 	}
 	return resp, err
 }
@@ -65,7 +65,7 @@ func (n *lostPrepareNode) ExecAndPrepare(ctx context.Context, req proto.ExecPrep
 func TestCoordinatorReportsUnknownWhen1PCResponseLostAfterApply(t *testing.T) {
 	n := &lost1PCNode{Participant: memnode.NewParticipant(16)}
 	coord := NewCoordinator(map[uint32]Participant{1: n})
-	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
+	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
 	if !res.UnknownOutcome || res.TransportErr == nil || res.Committed {
 		t.Fatalf("expected unknown outcome with transport error, got %+v", res)
 	}
@@ -80,12 +80,12 @@ func TestCoordinatorReportsUnknownWhenPrepareResponseLostAfterVote(t *testing.T)
 	n2 := memnode.NewParticipant(16)
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 	coord.coordID = 1
-	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
+	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
 	if !res.UnknownOutcome || res.TransportErr == nil || res.Committed {
 		t.Fatalf("expected unknown outcome with transport error, got %+v", res)
 	}
-	resp, err := n1.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: proto.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, RequestID: "retry", Participants: []uint32{1, 2}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}})
-	if err != nil || resp.Vote != proto.VoteOk {
+	resp, err := n1.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, RequestID: "retry", Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}})
+	if err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("expected idempotent prepared vote on retry, resp=%+v err=%v", resp, err)
 	}
 }
@@ -107,7 +107,7 @@ func TestFlushPendingCommitsReportsEarlierTimerDeliveryFailure(t *testing.T) {
 		1: failing,
 		2: memnode.NewParticipant(16),
 	})
-	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{
+	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{
 		{MemID: 1, Addr: 0, Data: []byte("A")},
 		{MemID: 2, Addr: 0, Data: []byte("B")},
 	})
@@ -128,7 +128,7 @@ func TestFlushPendingCommitsReportsUnacknowledgedFallbackDelivery(t *testing.T) 
 		1: unacknowledged,
 		2: memnode.NewParticipant(16),
 	})
-	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []proto.WriteItem{
+	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{
 		{MemID: 1, Addr: 0, Data: []byte("A")},
 		{MemID: 2, Addr: 0, Data: []byte("B")},
 	})

@@ -7,37 +7,37 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
 func TestDirectoryClientReconcilesExplicitUnknownOutcome(t *testing.T) {
-	requested := proto.DirectoryEntry{Primary: proto.Endpoint{RPC: "new:1"}, Generation: 42}
+	requested := sinfonia.DirectoryEntry{Primary: sinfonia.Endpoint{RPC: "new:1"}, Generation: 42}
 	for _, test := range []struct {
 		name     string
-		resolved proto.ResolveResponse
+		resolved sinfonia.ResolveResponse
 		wantErr  error
 	}{
 		{
 			name:     "exact requested entry is success",
-			resolved: proto.ResolveResponse{MemID: 1, Primary: requested.Primary, Generation: requested.Generation, DirectoryRevision: 8},
+			resolved: sinfonia.ResolveResponse{MemID: 1, Primary: requested.Primary, Generation: requested.Generation, DirectoryRevision: 8},
 		},
 		{
 			name:     "old selected revision stays unknown",
-			resolved: proto.ResolveResponse{MemID: 1, Primary: proto.Endpoint{RPC: "old:1"}, Generation: 41, DirectoryRevision: 7},
+			resolved: sinfonia.ResolveResponse{MemID: 1, Primary: sinfonia.Endpoint{RPC: "old:1"}, Generation: 41, DirectoryRevision: 7},
 			wantErr:  ErrDirectoryUpdateOutcomeUnknown,
 		},
 		{
 			name:     "different selected revision is conflict",
-			resolved: proto.ResolveResponse{MemID: 1, Primary: proto.Endpoint{RPC: "other:1"}, Generation: 43, DirectoryRevision: 9},
+			resolved: sinfonia.ResolveResponse{MemID: 1, Primary: sinfonia.Endpoint{RPC: "other:1"}, Generation: 43, DirectoryRevision: 9},
 			wantErr:  ErrDirectoryUpdateConflict,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var observed proto.UpdateEntryRequest
-			client, closeServer := revisionTestDirectoryClient(t, func(req proto.UpdateEntryRequest) proto.UpdateEntryResponse {
+			var observed sinfonia.UpdateEntryRequest
+			client, closeServer := revisionTestDirectoryClient(t, func(req sinfonia.UpdateEntryRequest) sinfonia.UpdateEntryResponse {
 				observed = req
-				return proto.UpdateEntryResponse{OutcomeUnknown: true, Revision: 8, CurrentGeneration: 42}
+				return sinfonia.UpdateEntryResponse{OutcomeUnknown: true, Revision: 8, CurrentGeneration: 42}
 			}, test.resolved)
 			defer closeServer()
 
@@ -55,28 +55,28 @@ func TestDirectoryClientReconcilesExplicitUnknownOutcome(t *testing.T) {
 }
 
 func TestDirectoryClientReturnsExplicitDegradedOutcome(t *testing.T) {
-	client, closeServer := revisionTestDirectoryClient(t, func(proto.UpdateEntryRequest) proto.UpdateEntryResponse {
-		return proto.UpdateEntryResponse{Degraded: true, Revision: 12}
-	}, proto.ResolveResponse{})
+	client, closeServer := revisionTestDirectoryClient(t, func(sinfonia.UpdateEntryRequest) sinfonia.UpdateEntryResponse {
+		return sinfonia.UpdateEntryResponse{Degraded: true, Revision: 12}
+	}, sinfonia.ResolveResponse{})
 	defer closeServer()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	err := client.UpdateEntryCASRevision(ctx, 1, proto.DirectoryEntry{Primary: proto.Endpoint{RPC: "new:1"}}, 0, 11)
+	err := client.UpdateEntryCASRevision(ctx, 1, sinfonia.DirectoryEntry{Primary: sinfonia.Endpoint{RPC: "new:1"}}, 0, 11)
 	if !errors.Is(err, ErrDirectoryStoreDegraded) {
 		t.Fatalf("err=%v want degraded", err)
 	}
 }
 
 func TestDirectoryClientReconcilesTransportAmbiguity(t *testing.T) {
-	requested := proto.DirectoryEntry{Primary: proto.Endpoint{RPC: "new:1"}, Generation: 42}
+	requested := sinfonia.DirectoryEntry{Primary: sinfonia.Endpoint{RPC: "new:1"}, Generation: 42}
 	for _, test := range []struct {
 		name     string
-		resolved proto.ResolveResponse
+		resolved sinfonia.ResolveResponse
 		wantErr  error
 	}{
-		{"exact is success", proto.ResolveResponse{Primary: requested.Primary, Generation: 42, DirectoryRevision: 8}, nil},
-		{"old stays unknown", proto.ResolveResponse{Primary: proto.Endpoint{RPC: "old:1"}, Generation: 41, DirectoryRevision: 7}, ErrDirectoryUpdateOutcomeUnknown},
-		{"different newer conflicts", proto.ResolveResponse{Primary: proto.Endpoint{RPC: "other:1"}, Generation: 43, DirectoryRevision: 9}, ErrDirectoryUpdateConflict},
+		{"exact is success", sinfonia.ResolveResponse{Primary: requested.Primary, Generation: 42, DirectoryRevision: 8}, nil},
+		{"old stays unknown", sinfonia.ResolveResponse{Primary: sinfonia.Endpoint{RPC: "old:1"}, Generation: 41, DirectoryRevision: 7}, ErrDirectoryUpdateOutcomeUnknown},
+		{"different newer conflicts", sinfonia.ResolveResponse{Primary: sinfonia.Endpoint{RPC: "other:1"}, Generation: 43, DirectoryRevision: 9}, ErrDirectoryUpdateConflict},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client, closeServer := transportAmbiguityTestDirectoryClient(t, test.resolved)
@@ -92,18 +92,18 @@ func TestDirectoryClientReconcilesTransportAmbiguity(t *testing.T) {
 }
 
 func TestDirectoryClientReconcilesTransportTimeoutAfterCallerDeadline(t *testing.T) {
-	requested := proto.DirectoryEntry{Primary: proto.Endpoint{RPC: "new:1"}, Generation: 42}
+	requested := sinfonia.DirectoryEntry{Primary: sinfonia.Endpoint{RPC: "new:1"}, Generation: 42}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := rpcwire.NewServer(nil, nil)
-	rpcwire.RegisterTyped(server, proto.MethodUpdateEntry, func(context.Context, proto.UpdateEntryRequest) (proto.UpdateEntryResponse, error) {
+	rpcwire.RegisterTyped(server, sinfonia.MethodUpdateEntry, func(context.Context, sinfonia.UpdateEntryRequest) (sinfonia.UpdateEntryResponse, error) {
 		time.Sleep(100 * time.Millisecond)
-		return proto.UpdateEntryResponse{Ack: true}, nil
+		return sinfonia.UpdateEntryResponse{Ack: true}, nil
 	})
-	rpcwire.RegisterTyped(server, proto.MethodResolve, func(context.Context, proto.ResolveRequest) (proto.ResolveResponse, error) {
-		return proto.ResolveResponse{Primary: requested.Primary, Generation: 42, DirectoryRevision: 8}, nil
+	rpcwire.RegisterTyped(server, sinfonia.MethodResolve, func(context.Context, sinfonia.ResolveRequest) (sinfonia.ResolveResponse, error) {
+		return sinfonia.ResolveResponse{Primary: requested.Primary, Generation: 42, DirectoryRevision: 8}, nil
 	})
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
@@ -122,7 +122,7 @@ func TestDirectoryClientReconcilesTransportTimeoutAfterCallerDeadline(t *testing
 
 type revisionTestConnKey struct{}
 
-func transportAmbiguityTestDirectoryClient(t *testing.T, resolved proto.ResolveResponse) (*DirectoryClient, func()) {
+func transportAmbiguityTestDirectoryClient(t *testing.T, resolved sinfonia.ResolveResponse) (*DirectoryClient, func()) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -131,11 +131,11 @@ func transportAmbiguityTestDirectoryClient(t *testing.T, resolved proto.ResolveR
 	server := rpcwire.NewServer(nil, func(conn net.Conn) context.Context {
 		return context.WithValue(context.Background(), revisionTestConnKey{}, conn)
 	})
-	rpcwire.RegisterTyped(server, proto.MethodUpdateEntry, func(ctx context.Context, _ proto.UpdateEntryRequest) (proto.UpdateEntryResponse, error) {
+	rpcwire.RegisterTyped(server, sinfonia.MethodUpdateEntry, func(ctx context.Context, _ sinfonia.UpdateEntryRequest) (sinfonia.UpdateEntryResponse, error) {
 		_ = ctx.Value(revisionTestConnKey{}).(net.Conn).Close()
-		return proto.UpdateEntryResponse{Ack: true}, nil
+		return sinfonia.UpdateEntryResponse{Ack: true}, nil
 	})
-	rpcwire.RegisterTyped(server, proto.MethodResolve, func(context.Context, proto.ResolveRequest) (proto.ResolveResponse, error) {
+	rpcwire.RegisterTyped(server, sinfonia.MethodResolve, func(context.Context, sinfonia.ResolveRequest) (sinfonia.ResolveResponse, error) {
 		return resolved, nil
 	})
 	done := make(chan error, 1)
@@ -157,8 +157,8 @@ func transportAmbiguityTestDirectoryClient(t *testing.T, resolved proto.ResolveR
 
 func revisionTestDirectoryClient(
 	t *testing.T,
-	update func(proto.UpdateEntryRequest) proto.UpdateEntryResponse,
-	resolved proto.ResolveResponse,
+	update func(sinfonia.UpdateEntryRequest) sinfonia.UpdateEntryResponse,
+	resolved sinfonia.ResolveResponse,
 ) (*DirectoryClient, func()) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -166,10 +166,10 @@ func revisionTestDirectoryClient(
 		t.Fatal(err)
 	}
 	server := rpcwire.NewServer(nil, nil)
-	rpcwire.RegisterTyped(server, proto.MethodUpdateEntry, func(_ context.Context, req proto.UpdateEntryRequest) (proto.UpdateEntryResponse, error) {
+	rpcwire.RegisterTyped(server, sinfonia.MethodUpdateEntry, func(_ context.Context, req sinfonia.UpdateEntryRequest) (sinfonia.UpdateEntryResponse, error) {
 		return update(req), nil
 	})
-	rpcwire.RegisterTyped(server, proto.MethodResolve, func(context.Context, proto.ResolveRequest) (proto.ResolveResponse, error) {
+	rpcwire.RegisterTyped(server, sinfonia.MethodResolve, func(context.Context, sinfonia.ResolveRequest) (sinfonia.ResolveResponse, error) {
 		return resolved, nil
 	})
 	done := make(chan error, 1)

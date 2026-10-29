@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/ratelimit"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 	"github.com/jbancroft/ConcertumDemo/minitxn"
@@ -66,34 +66,34 @@ func (rl RangeLock) OverlapsWith(other RangeLock) bool {
 }
 
 type prepareOutcome struct {
-	resp proto.ExecPrepareResponse
+	resp sinfonia.ExecPrepareResponse
 }
 
 type onePCOutcome struct {
-	resp proto.ExecCommit1PCResponse
+	resp sinfonia.ExecCommit1PCResponse
 }
 
 type prepareFlight struct {
 	done chan struct{}
-	resp proto.ExecPrepareResponse
+	resp sinfonia.ExecPrepareResponse
 	err  error
 }
 
 type onePCFlight struct {
 	done chan struct{}
-	resp proto.ExecCommit1PCResponse
+	resp sinfonia.ExecCommit1PCResponse
 	err  error
 }
 
 type commitOutcome struct {
-	resp         proto.CommitResponse
+	resp         sinfonia.CommitResponse
 	actionCommit bool
 }
 
 // preparedTxn keeps the writes and locks until a commit or abort decision arrives.
 // Durable nodes also log prepared writes so they can recover after a restart.
 type preparedTxn struct {
-	writes        []proto.WriteItem
+	writes        []sinfonia.WriteItem
 	readData      map[uint32][]byte
 	heldLocks     []RangeLock
 	preparedAt    time.Time
@@ -126,7 +126,7 @@ type baselineTransfer struct {
 	replayNextOffset uint64
 	replayChecksum   []byte
 	replayPresent    bool
-	boundary         proto.TransactionID
+	boundary         sinfonia.TransactionID
 }
 
 func (m *LockManager) tryLock(start, end uint64, write bool) bool {
@@ -134,9 +134,9 @@ func (m *LockManager) tryLock(start, end uint64, write bool) bool {
 	return ok
 }
 
-func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, *proto.LockConflict) {
+func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, *sinfonia.LockConflict) {
 	if m.globalWriteLock {
-		return false, &proto.LockConflict{Reason: "global_write_lock", RequestedStart: start, RequestedEnd: end, RequestedWrite: write}
+		return false, &sinfonia.LockConflict{Reason: "global_write_lock", RequestedStart: start, RequestedEnd: end, RequestedWrite: write}
 	}
 	idx := lowerBoundLock(m.locks, start)
 	for i := idx; i < len(m.locks); i++ {
@@ -148,7 +148,7 @@ func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, 
 			continue
 		}
 		if write || l.write {
-			return false, &proto.LockConflict{
+			return false, &sinfonia.LockConflict{
 				Reason:         "range_overlap",
 				RequestedStart: start, RequestedEnd: end, RequestedWrite: write,
 				HeldStart: l.start, HeldEnd: l.end, HeldWrite: l.write,
@@ -161,7 +161,7 @@ func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, 
 			continue
 		}
 		if rangesOverlap(start, end, l.start, l.end) && (write || l.write) {
-			return false, &proto.LockConflict{
+			return false, &sinfonia.LockConflict{
 				Reason:         "range_overlap",
 				RequestedStart: start, RequestedEnd: end, RequestedWrite: write,
 				HeldStart: l.start, HeldEnd: l.end, HeldWrite: l.write,
@@ -202,7 +202,7 @@ func rangesOverlap(aStart, aEnd, bStart, bEnd uint64) bool {
 	return (RangeLock{start: aStart, end: aEnd}).OverlapsWith(RangeLock{start: bStart, end: bEnd})
 }
 
-func overlapsAnyWrite(item minitxn.RangeItem, writes []proto.WriteItem) bool {
+func overlapsAnyWrite(item minitxn.RangeItem, writes []sinfonia.WriteItem) bool {
 	start, end := item.Offset(), item.Offset()+item.Size()
 	for _, w := range writes {
 		wStart, wEnd := w.Offset(), w.Offset()+w.Size()
@@ -214,22 +214,22 @@ func overlapsAnyWrite(item minitxn.RangeItem, writes []proto.WriteItem) bool {
 }
 
 type RecoveryPeer interface {
-	QueryTidStatus(ctx context.Context, req proto.QueryTidStatusRequest) (proto.QueryTidStatusResponse, error)
-	NotifyApplied(ctx context.Context, req proto.NotifyAppliedRequest) (proto.NotifyAppliedResponse, error)
+	QueryTidStatus(ctx context.Context, req sinfonia.QueryTidStatusRequest) (sinfonia.QueryTidStatusResponse, error)
+	NotifyApplied(ctx context.Context, req sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error)
 }
 
 type ReplicaPeer interface {
-	ReplicateRedoEntry(ctx context.Context, req proto.ReplicateRedoEntryRequest) (proto.ReplicateRedoEntryResponse, error)
-	ReplicateCommitDecision(ctx context.Context, req proto.ReplicateCommitDecisionRequest) (proto.ReplicateCommitDecisionResponse, error)
-	ReplicateReplayRecord(ctx context.Context, req proto.ReplicateReplayRecordRequest) (proto.ReplicateReplayRecordResponse, error)
+	ReplicateRedoEntry(ctx context.Context, req sinfonia.ReplicateRedoEntryRequest) (sinfonia.ReplicateRedoEntryResponse, error)
+	ReplicateCommitDecision(ctx context.Context, req sinfonia.ReplicateCommitDecisionRequest) (sinfonia.ReplicateCommitDecisionResponse, error)
+	ReplicateReplayRecord(ctx context.Context, req sinfonia.ReplicateReplayRecordRequest) (sinfonia.ReplicateReplayRecordResponse, error)
 }
 
 type PrimarySyncPeer interface {
 	LockAllBlockingOwned(ctx context.Context, owner string) error
 	UnlockAllOwned(owner string)
-	ExportReplicationBaselineChunk(ctx context.Context, req proto.ExportReplicationBaselineChunkRequest) (proto.ExportReplicationBaselineChunkResponse, error)
-	ListCommittedTIDs(ctx context.Context, req proto.ListCommittedTIDsRequest) (proto.ListCommittedTIDsResponse, error)
-	ListRedoEntries(ctx context.Context, req proto.ListRedoEntriesRequest) (proto.ListRedoEntriesResponse, error)
+	ExportReplicationBaselineChunk(ctx context.Context, req sinfonia.ExportReplicationBaselineChunkRequest) (sinfonia.ExportReplicationBaselineChunkResponse, error)
+	ListCommittedTIDs(ctx context.Context, req sinfonia.ListCommittedTIDsRequest) (sinfonia.ListCommittedTIDsResponse, error)
+	ListRedoEntries(ctx context.Context, req sinfonia.ListRedoEntriesRequest) (sinfonia.ListRedoEntriesResponse, error)
 }
 
 type Participant struct {
@@ -244,29 +244,29 @@ type Participant struct {
 	decided       *storage.DecidedTransactionLog
 	forcedAborts  *storage.ForcedAbortLog
 	replay        *storage.ReplayStore
-	inDoubt       map[proto.TransactionID]*preparedTxn
+	inDoubt       map[sinfonia.TransactionID]*preparedTxn
 	locks         LockManager
 	epoch         uint64
-	allLogTxIds   map[proto.TransactionID]struct{}
+	allLogTxIds   map[sinfonia.TransactionID]struct{}
 	participants  map[uint32]RecoveryPeer
 	epochDuration time.Duration
 	nowFn         func() time.Time
 	epochBase     time.Time
 
-	appliedLocal    map[proto.TransactionID]bool
-	appliedRemote   map[proto.TransactionID]map[uint32]bool
-	pendingNotify   map[uint32]map[proto.TransactionID]struct{}
-	logParticipants map[proto.TransactionID][]uint32
-	timelines       map[proto.TransactionID][]proto.TxnTimelineEvent
-	prepareOutcomes map[proto.TransactionID]prepareOutcome
-	onePCOutcomes   map[proto.TransactionID]onePCOutcome
-	commitOutcomes  map[proto.TransactionID]commitOutcome
+	appliedLocal    map[sinfonia.TransactionID]bool
+	appliedRemote   map[sinfonia.TransactionID]map[uint32]bool
+	pendingNotify   map[uint32]map[sinfonia.TransactionID]struct{}
+	logParticipants map[sinfonia.TransactionID][]uint32
+	timelines       map[sinfonia.TransactionID][]sinfonia.TxnTimelineEvent
+	prepareOutcomes map[sinfonia.TransactionID]prepareOutcome
+	onePCOutcomes   map[sinfonia.TransactionID]onePCOutcome
+	commitOutcomes  map[sinfonia.TransactionID]commitOutcome
 
 	backupMode         bool
-	prepareFlights     map[proto.TransactionID]*prepareFlight
-	onePCFlights       map[proto.TransactionID]*onePCFlight
-	pendingDiskWrites  []proto.WriteItem
-	lastBackupBoundary proto.TransactionID
+	prepareFlights     map[sinfonia.TransactionID]*prepareFlight
+	onePCFlights       map[sinfonia.TransactionID]*onePCFlight
+	pendingDiskWrites  []sinfonia.WriteItem
+	lastBackupBoundary sinfonia.TransactionID
 
 	mode                     ReplicationMode
 	replica                  ReplicaPeer
@@ -302,8 +302,8 @@ type Participant struct {
 	recoveryLimiter             *ratelimit.KeyedLimiter
 	debugLimiter                *ratelimit.KeyedLimiter
 	enableDebugEndpoints        bool
-	recoverBoundaryHook         func(phase string, txId proto.TransactionID) error
-	outcomeReplayBoundaryHook   func(phase string, txId proto.TransactionID) error
+	recoverBoundaryHook         func(phase string, txId sinfonia.TransactionID) error
+	outcomeReplayBoundaryHook   func(phase string, txId sinfonia.TransactionID) error
 	baselineInstallBoundaryHook func(phase string) error
 	fencingPublicationHook      func(point string) error
 	writeApplyFaultHook         func(addr uint64, data []byte) error
@@ -322,7 +322,7 @@ func (n *Participant) initSafetyDefaults() {
 
 func NewParticipant(size int) *Participant {
 	now := time.Now()
-	n := &Participant{memory: make([]byte, size), inDoubt: make(map[proto.TransactionID]*preparedTxn), epoch: 1, allLogTxIds: map[proto.TransactionID]struct{}{}, epochDuration: time.Minute, nowFn: time.Now, epochBase: now, participants: map[uint32]RecoveryPeer{}, appliedLocal: map[proto.TransactionID]bool{}, appliedRemote: map[proto.TransactionID]map[uint32]bool{}, pendingNotify: map[uint32]map[proto.TransactionID]struct{}{}, logParticipants: map[proto.TransactionID][]uint32{}, timelines: map[proto.TransactionID][]proto.TxnTimelineEvent{}, prepareOutcomes: map[proto.TransactionID]prepareOutcome{}, onePCOutcomes: map[proto.TransactionID]onePCOutcome{}, commitOutcomes: map[proto.TransactionID]commitOutcome{}, prepareFlights: map[proto.TransactionID]*prepareFlight{}, onePCFlights: map[proto.TransactionID]*onePCFlight{}}
+	n := &Participant{memory: make([]byte, size), inDoubt: make(map[sinfonia.TransactionID]*preparedTxn), epoch: 1, allLogTxIds: map[sinfonia.TransactionID]struct{}{}, epochDuration: time.Minute, nowFn: time.Now, epochBase: now, participants: map[uint32]RecoveryPeer{}, appliedLocal: map[sinfonia.TransactionID]bool{}, appliedRemote: map[sinfonia.TransactionID]map[uint32]bool{}, pendingNotify: map[uint32]map[sinfonia.TransactionID]struct{}{}, logParticipants: map[sinfonia.TransactionID][]uint32{}, timelines: map[sinfonia.TransactionID][]sinfonia.TxnTimelineEvent{}, prepareOutcomes: map[sinfonia.TransactionID]prepareOutcome{}, onePCOutcomes: map[sinfonia.TransactionID]onePCOutcome{}, commitOutcomes: map[sinfonia.TransactionID]commitOutcome{}, prepareFlights: map[sinfonia.TransactionID]*prepareFlight{}, onePCFlights: map[sinfonia.TransactionID]*onePCFlight{}}
 	n.mode = ModeSingle
 	n.metrics = newNodeMetrics()
 	n.recoveryComplete = true
@@ -392,24 +392,24 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 		redoLog:          redoLog,
 		decided:          decided,
 		forcedAborts:     forcedAbort,
-		inDoubt:          make(map[proto.TransactionID]*preparedTxn),
+		inDoubt:          make(map[sinfonia.TransactionID]*preparedTxn),
 		epoch:            1,
-		allLogTxIds:      map[proto.TransactionID]struct{}{},
+		allLogTxIds:      map[sinfonia.TransactionID]struct{}{},
 		participants:     map[uint32]RecoveryPeer{},
 		replay:           replay,
 		epochDuration:    time.Minute,
 		nowFn:            time.Now,
 		epochBase:        now,
-		appliedLocal:     map[proto.TransactionID]bool{},
-		appliedRemote:    map[proto.TransactionID]map[uint32]bool{},
-		pendingNotify:    map[uint32]map[proto.TransactionID]struct{}{},
-		logParticipants:  map[proto.TransactionID][]uint32{},
-		timelines:        map[proto.TransactionID][]proto.TxnTimelineEvent{},
-		prepareOutcomes:  map[proto.TransactionID]prepareOutcome{},
-		onePCOutcomes:    map[proto.TransactionID]onePCOutcome{},
-		commitOutcomes:   map[proto.TransactionID]commitOutcome{},
-		prepareFlights:   map[proto.TransactionID]*prepareFlight{},
-		onePCFlights:     map[proto.TransactionID]*onePCFlight{},
+		appliedLocal:     map[sinfonia.TransactionID]bool{},
+		appliedRemote:    map[sinfonia.TransactionID]map[uint32]bool{},
+		pendingNotify:    map[uint32]map[sinfonia.TransactionID]struct{}{},
+		logParticipants:  map[sinfonia.TransactionID][]uint32{},
+		timelines:        map[sinfonia.TransactionID][]sinfonia.TxnTimelineEvent{},
+		prepareOutcomes:  map[sinfonia.TransactionID]prepareOutcome{},
+		onePCOutcomes:    map[sinfonia.TransactionID]onePCOutcome{},
+		commitOutcomes:   map[sinfonia.TransactionID]commitOutcome{},
+		prepareFlights:   map[sinfonia.TransactionID]*prepareFlight{},
+		onePCFlights:     map[sinfonia.TransactionID]*onePCFlight{},
 		generation:       generation,
 		mode:             ModeSingle,
 		metrics:          newNodeMetrics(),
@@ -434,7 +434,7 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 		n.allLogTxIds[e.TransactionId] = struct{}{}
 		n.logParticipants[e.TransactionId] = append([]uint32(nil), e.HostIds...)
 		if committed, ok := decided.Get(e.TransactionId); ok {
-			n.commitOutcomes[e.TransactionId] = commitOutcome{resp: proto.CommitResponse{Ack: true}, actionCommit: committed}
+			n.commitOutcomes[e.TransactionId] = commitOutcome{resp: sinfonia.CommitResponse{Ack: true}, actionCommit: committed}
 			if committed {
 				n.appliedLocal[e.TransactionId] = true
 				n.enqueueAppliedNotificationsLocked(e.TransactionId, e.HostIds)
@@ -500,13 +500,13 @@ func (n *Participant) SetRedoFsyncHookForTest(fn func(*os.File) error) {
 	}
 }
 
-func (n *Participant) SetRecoverBoundaryHookForTest(fn func(phase string, txId proto.TransactionID) error) {
+func (n *Participant) SetRecoverBoundaryHookForTest(fn func(phase string, txId sinfonia.TransactionID) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.recoverBoundaryHook = fn
 }
 
-func (n *Participant) SetOutcomeReplayBoundaryHookForTest(fn func(phase string, txId proto.TransactionID) error) {
+func (n *Participant) SetOutcomeReplayBoundaryHookForTest(fn func(phase string, txId sinfonia.TransactionID) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.outcomeReplayBoundaryHook = fn
@@ -595,20 +595,20 @@ func (n *Participant) checkGenerationLocked(generation uint64) error {
 }
 
 func generationFromContext(ctx context.Context) uint64 {
-	if generation, ok := proto.GenerationFromContext(ctx); ok {
+	if generation, ok := sinfonia.GenerationFromContext(ctx); ok {
 		return generation
 	}
 	return 0
 }
 
-func (n *Participant) replicationRoleLocked() proto.ReplicationRole {
+func (n *Participant) replicationRoleLocked() sinfonia.ReplicationRole {
 	switch n.mode {
 	case ModeReplPrimary:
-		return proto.ReplicationRolePrimary
+		return sinfonia.ReplicationRolePrimary
 	case ModeReplReplica:
-		return proto.ReplicationRoleReplica
+		return sinfonia.ReplicationRoleReplica
 	default:
-		return proto.ReplicationRoleSingle
+		return sinfonia.ReplicationRoleSingle
 	}
 }
 
@@ -679,51 +679,51 @@ func (n *Participant) PrimaryLikelyDown(timeout time.Duration) bool {
 	return time.Since(n.heartbeat) > timeout
 }
 
-func (n *Participant) ConfigureReplication(ctx context.Context, req proto.ConfigureReplicationRequest) (proto.ConfigureReplicationResponse, error) {
+func (n *Participant) ConfigureReplication(ctx context.Context, req sinfonia.ConfigureReplicationRequest) (sinfonia.ConfigureReplicationResponse, error) {
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	switch req.Role {
-	case proto.ReplicationRoleSingle:
-	case proto.ReplicationRolePrimary:
+	case sinfonia.ReplicationRoleSingle:
+	case sinfonia.ReplicationRolePrimary:
 		if n.redoLog == nil {
-			return proto.ConfigureReplicationResponse{Ack: false}, ErrReplicationRequiresDurability
+			return sinfonia.ConfigureReplicationResponse{Ack: false}, ErrReplicationRequiresDurability
 		}
 		if req.PartnerRPC == "" {
-			return proto.ConfigureReplicationResponse{Ack: false}, errors.New("primary replication requires partner_rpc")
+			return sinfonia.ConfigureReplicationResponse{Ack: false}, errors.New("primary replication requires partner_rpc")
 		}
-	case proto.ReplicationRoleReplica:
+	case sinfonia.ReplicationRoleReplica:
 		if n.redoLog == nil {
-			return proto.ConfigureReplicationResponse{Ack: false}, ErrReplicationRequiresDurability
+			return sinfonia.ConfigureReplicationResponse{Ack: false}, ErrReplicationRequiresDurability
 		}
 		if req.PartnerRPC == "" {
-			return proto.ConfigureReplicationResponse{Ack: false}, errors.New("replica replication requires partner_rpc")
+			return sinfonia.ConfigureReplicationResponse{Ack: false}, errors.New("replica replication requires partner_rpc")
 		}
 	default:
-		return proto.ConfigureReplicationResponse{Ack: false}, errors.New("unknown replication role")
+		return sinfonia.ConfigureReplicationResponse{Ack: false}, errors.New("unknown replication role")
 	}
 	if n.generation != 0 && req.Generation < n.generation {
-		return proto.ConfigureReplicationResponse{Ack: false}, ErrStaleGeneration
+		return sinfonia.ConfigureReplicationResponse{Ack: false}, ErrStaleGeneration
 	}
-	if n.storageDir != "" && req.Generation > n.generation && req.FencingProtocolVersion < proto.ReplicationFencingProtocolVersion {
-		return proto.ConfigureReplicationResponse{Ack: false}, ErrReplicationFencingProtocolUpgradeRequired
+	if n.storageDir != "" && req.Generation > n.generation && req.FencingProtocolVersion < sinfonia.ReplicationFencingProtocolVersion {
+		return sinfonia.ConfigureReplicationResponse{Ack: false}, ErrReplicationFencingProtocolUpgradeRequired
 	}
 	if req.Generation > n.generation {
 		if n.storageDir != "" {
 			if err := persistFencingGenerationWithHook(n.storageDir, req.Generation, n.fencingPublicationHook); err != nil {
 				if isFencingPublicationOutcomeUnknown(err) {
 					n.generation = req.Generation
-					return proto.ConfigureReplicationResponse{Ack: false, OutcomeUnknown: true, Generation: n.generation}, nil
+					return sinfonia.ConfigureReplicationResponse{Ack: false, OutcomeUnknown: true, Generation: n.generation}, nil
 				}
-				return proto.ConfigureReplicationResponse{Ack: false}, err
+				return sinfonia.ConfigureReplicationResponse{Ack: false}, err
 			}
 		}
 		n.generation = req.Generation
 	}
 
 	switch req.Role {
-	case proto.ReplicationRoleSingle:
+	case sinfonia.ReplicationRoleSingle:
 		n.mode = ModeSingle
 		n.replica = nil
 		n.replicaID = 0
@@ -732,11 +732,11 @@ func (n *Participant) ConfigureReplication(ctx context.Context, req proto.Config
 		n.partnerHTTP = ""
 		n.replicaSynced = true
 		n.metrics.replicaLagEntries.Set(0)
-	case proto.ReplicationRolePrimary:
+	case sinfonia.ReplicationRolePrimary:
 		n.configureAsPrimaryLocked(0, n.newRPCPeerLocked(req.PartnerRPC))
 		n.partnerRPC = req.PartnerRPC
 		n.partnerHTTP = req.PartnerHTTP
-	case proto.ReplicationRoleReplica:
+	case sinfonia.ReplicationRoleReplica:
 		n.configureAsReplicaLocked(0)
 		n.partnerRPC = req.PartnerRPC
 		n.partnerHTTP = req.PartnerHTTP
@@ -746,13 +746,13 @@ func (n *Participant) ConfigureReplication(ctx context.Context, req proto.Config
 		}
 	}
 	n.setReplicationErrorLocked(nil)
-	return proto.ConfigureReplicationResponse{Ack: true, Generation: n.generation}, nil
+	return sinfonia.ConfigureReplicationResponse{Ack: true, Generation: n.generation}, nil
 }
 
-func (n *Participant) ReplicationStatus(ctx context.Context, _ proto.ReplicationStatusRequest) (proto.ReplicationStatusResponse, error) {
+func (n *Participant) ReplicationStatus(ctx context.Context, _ sinfonia.ReplicationStatusRequest) (sinfonia.ReplicationStatusResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return proto.ReplicationStatusResponse{
+	return sinfonia.ReplicationStatusResponse{
 		Role:          n.replicationRoleLocked(),
 		Ready:         n.isReadyLocked(),
 		ReplicaSynced: n.replicaSynced,
@@ -807,7 +807,7 @@ func (n *Participant) write(addr uint64, data []byte) error {
 	}
 	if n.diskImage != nil {
 		if n.backupMode {
-			n.pendingDiskWrites = append(n.pendingDiskWrites, proto.WriteItem{MemID: n.hostId, Addr: addr, Data: append([]byte(nil), data...)})
+			n.pendingDiskWrites = append(n.pendingDiskWrites, sinfonia.WriteItem{MemID: n.hostId, Addr: addr, Data: append([]byte(nil), data...)})
 			return nil
 		}
 		if err := n.diskImage.ApplyWrite(addr, data); err != nil {
@@ -828,7 +828,7 @@ func cloneReadData(in map[uint32][]byte) map[uint32][]byte {
 	return out
 }
 
-func clonePrepareResponse(resp proto.ExecPrepareResponse) proto.ExecPrepareResponse {
+func clonePrepareResponse(resp sinfonia.ExecPrepareResponse) sinfonia.ExecPrepareResponse {
 	resp.ReadData = cloneReadData(resp.ReadData)
 	if resp.LockConflict != nil {
 		conflict := *resp.LockConflict
@@ -837,7 +837,7 @@ func clonePrepareResponse(resp proto.ExecPrepareResponse) proto.ExecPrepareRespo
 	return resp
 }
 
-func clone1PCResponse(resp proto.ExecCommit1PCResponse) proto.ExecCommit1PCResponse {
+func clone1PCResponse(resp sinfonia.ExecCommit1PCResponse) sinfonia.ExecCommit1PCResponse {
 	resp.ReadData = cloneReadData(resp.ReadData)
 	if resp.LockConflict != nil {
 		conflict := *resp.LockConflict
@@ -846,7 +846,7 @@ func clone1PCResponse(resp proto.ExecCommit1PCResponse) proto.ExecCommit1PCRespo
 	return resp
 }
 
-func (n *Participant) hasDurableTransactionLocked(txId proto.TransactionID) bool {
+func (n *Participant) hasDurableTransactionLocked(txId sinfonia.TransactionID) bool {
 	if _, ok := n.allLogTxIds[txId]; ok {
 		return true
 	}
@@ -857,7 +857,7 @@ func (n *Participant) hasDurableTransactionLocked(txId proto.TransactionID) bool
 	return false
 }
 
-func (n *Participant) callOutcomeReplayBoundaryHookLocked(phase string, txId proto.TransactionID) error {
+func (n *Participant) callOutcomeReplayBoundaryHookLocked(phase string, txId sinfonia.TransactionID) error {
 	if n.outcomeReplayBoundaryHook == nil {
 		return nil
 	}
@@ -867,11 +867,11 @@ func (n *Participant) callOutcomeReplayBoundaryHookLocked(phase string, txId pro
 // replicateReplayRecordLocked saves a reply on the replica before returning it
 // to the caller. Release the primary's mutex during the RPC so the replica can
 // take its own lock without deadlocking.
-func (n *Participant) replicateReplayRecordLocked(txId proto.TransactionID, kind proto.ReplayRecordKind, prepare *proto.ExecPrepareResponse, onePC *proto.ExecCommit1PCResponse) error {
+func (n *Participant) replicateReplayRecordLocked(txId sinfonia.TransactionID, kind sinfonia.ReplayRecordKind, prepare *sinfonia.ExecPrepareResponse, onePC *sinfonia.ExecCommit1PCResponse) error {
 	if n.mode != ModeReplPrimary || n.replica == nil {
 		return nil
 	}
-	req := proto.ReplicateReplayRecordRequest{TID: txId, Kind: kind}
+	req := sinfonia.ReplicateReplayRecordRequest{TID: txId, Kind: kind}
 	if prepare != nil {
 		cloned := clonePrepareResponse(*prepare)
 		req.Prepare = &cloned
@@ -900,36 +900,36 @@ func (n *Participant) replicateReplayRecordLocked(txId proto.TransactionID, kind
 	return nil
 }
 
-func (n *Participant) rememberPrepareOutcomeLocked(txId proto.TransactionID, resp proto.ExecPrepareResponse) (proto.ExecPrepareResponse, error) {
+func (n *Participant) rememberPrepareOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecPrepareResponse) (sinfonia.ExecPrepareResponse, error) {
 	if n.replay != nil {
 		if err := n.replay.AppendPrepare(txId, resp); err != nil {
-			return proto.ExecPrepareResponse{RequestID: resp.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
+			return sinfonia.ExecPrepareResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 		}
 	}
-	if err := n.replicateReplayRecordLocked(txId, proto.ReplayRecordPrepare, &resp, nil); err != nil {
-		return proto.ExecPrepareResponse{RequestID: resp.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
+	if err := n.replicateReplayRecordLocked(txId, sinfonia.ReplayRecordPrepare, &resp, nil); err != nil {
+		return sinfonia.ExecPrepareResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 	}
 	n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(resp)}
 	return resp, nil
 }
 
-func (n *Participant) replayPrepareOutcomeLocked(txId proto.TransactionID, requestID proto.RequestID, currentEpoch uint64) (proto.ExecPrepareResponse, bool, error) {
-	var original proto.ExecPrepareResponse
+func (n *Participant) replayPrepareOutcomeLocked(txId sinfonia.TransactionID, requestID sinfonia.RequestID, currentEpoch uint64) (sinfonia.ExecPrepareResponse, bool, error) {
+	var original sinfonia.ExecPrepareResponse
 	if out, ok := n.prepareOutcomes[txId]; ok {
 		original = clonePrepareResponse(out.resp)
 	} else {
 		if n.replay == nil {
-			return proto.ExecPrepareResponse{}, false, nil
+			return sinfonia.ExecPrepareResponse{}, false, nil
 		}
 		var ok bool
 		original, ok = n.replay.GetPrepare(txId)
 		if !ok {
-			return proto.ExecPrepareResponse{}, false, nil
+			return sinfonia.ExecPrepareResponse{}, false, nil
 		}
 		n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(original)}
 	}
-	if err := n.replicateReplayRecordLocked(txId, proto.ReplayRecordPrepare, &original, nil); err != nil {
-		return proto.ExecPrepareResponse{RequestID: requestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, false, err
+	if err := n.replicateReplayRecordLocked(txId, sinfonia.ReplayRecordPrepare, &original, nil); err != nil {
+		return sinfonia.ExecPrepareResponse{RequestID: requestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, false, err
 	}
 	resp := original
 	resp.RequestID = requestID
@@ -937,9 +937,9 @@ func (n *Participant) replayPrepareOutcomeLocked(txId proto.TransactionID, reque
 	return resp, true, nil
 }
 
-func (n *Participant) prepareVotedOKLocked(txId proto.TransactionID) bool {
+func (n *Participant) prepareVotedOKLocked(txId sinfonia.TransactionID) bool {
 	if out, ok := n.prepareOutcomes[txId]; ok {
-		return out.resp.Vote == proto.VoteOk
+		return out.resp.Vote == sinfonia.VoteOk
 	}
 	if n.replay == nil {
 		return false
@@ -949,36 +949,36 @@ func (n *Participant) prepareVotedOKLocked(txId proto.TransactionID) bool {
 		return false
 	}
 	n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(resp)}
-	return resp.Vote == proto.VoteOk
+	return resp.Vote == sinfonia.VoteOk
 }
 
-func (n *Participant) rememberOnePCOutcomeLocked(txId proto.TransactionID, resp proto.ExecCommit1PCResponse) (proto.ExecCommit1PCResponse, error) {
+func (n *Participant) rememberOnePCOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecCommit1PCResponse) (sinfonia.ExecCommit1PCResponse, error) {
 	if n.replay != nil {
 		if err := n.replay.AppendOnePC(txId, resp); err != nil {
-			return proto.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
+			return sinfonia.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 		}
 	}
-	if err := n.replicateReplayRecordLocked(txId, proto.ReplayRecordOnePC, nil, &resp); err != nil {
-		return proto.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
+	if err := n.replicateReplayRecordLocked(txId, sinfonia.ReplayRecordOnePC, nil, &resp); err != nil {
+		return sinfonia.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 	}
 	n.onePCOutcomes[txId] = onePCOutcome{resp: clone1PCResponse(resp)}
 	return resp, nil
 }
 
-func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (resp proto.ExecPrepareResponse, err error) {
+func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (resp sinfonia.ExecPrepareResponse, err error) {
 	if !n.allowRate(n.prepareLimiter, "prepare") {
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrResourceExhausted
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
 	}
 	select {
 	case n.prepareSlots <- struct{}{}:
 		defer func() { <-n.prepareSlots }()
 	default:
 		n.metrics.rejectedRequestsTotal.Inc()
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrResourceExhausted
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
 	}
 	if n.maxItemsPerTxn > 0 && len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems) > n.maxItemsPerTxn {
 		n.metrics.rejectedRequestsTotal.Inc()
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrResourceExhausted
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
 	}
 	var reqBytes int64
 	for _, i := range req.ReadItems {
@@ -989,17 +989,17 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 	}
 	if (n.maxRequestBytes > 0 && reqBytes > int64(n.maxRequestBytes)) || ((n.maxReadBytesPerTxn > 0 || n.maxWriteBytesPerTxn > 0) && reqBytes > n.maxReadBytesPerTxn+n.maxWriteBytesPerTxn) {
 		n.metrics.requestSizeRejectedTotal.Inc()
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrResourceExhausted
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
 	}
 
 	start := time.Now()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode == ModeReplReplica {
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrReplicaRejectsCoordinator
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrReplicaRejectsCoordinator
 	}
 	if err := n.checkGenerationLocked(req.Generation); err != nil {
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, err
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, err
 	}
 	currentEpoch := n.currentEpochLocked()
 	if resp, ok, replayErr := n.replayPrepareOutcomeLocked(req.TID, req.RequestID, currentEpoch); ok || replayErr != nil {
@@ -1019,7 +1019,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 			return resp, flight.err
 		case <-ctx.Done():
 			n.mu.Lock()
-			return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, ctx.Err()
+			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, ctx.Err()
 		}
 	}
 	flight := &prepareFlight{done: make(chan struct{})}
@@ -1032,27 +1032,27 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 	}()
 
 	if n.hasDurableTransactionLocked(req.TID) {
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: prepare transaction %v", ErrReplayUnavailable, req.TID)
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: prepare transaction %v", ErrReplayUnavailable, req.TID)
 	}
 	if (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
-		return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
+		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
 	}
 	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 	if out, ok := n.commitOutcomes[req.TID]; ok && !out.actionCommit {
-		return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 	if txn, ok := n.inDoubt[req.TID]; ok {
-		resp := proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteOk, ReadData: cloneReadData(txn.readData), CurrentEpoch: currentEpoch}
+		resp := sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(txn.readData), CurrentEpoch: currentEpoch}
 		return resp, nil
 	}
 
 	if err := n.validateWriteRangesLocked(req.WriteItems); err != nil {
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
 	if n.maxInDoubtHard > 0 && len(n.inDoubt) >= n.maxInDoubtHard {
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, ErrResourceExhausted
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, ErrResourceExhausted
 	}
 	correlationID := req.CorrelationID
 	if correlationID == "" {
@@ -1063,7 +1063,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 	n.recordTimelineLocked(req.TID, correlationID, "prepare_received", "")
 	acquired := make([]RangeLock, 0, len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems))
 
-	lockRead := func(item minitxn.RangeItem) (bool, *proto.LockConflict) {
+	lockRead := func(item minitxn.RangeItem) (bool, *sinfonia.LockConflict) {
 		if item.Size() == 0 {
 			return true, nil
 		}
@@ -1075,7 +1075,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 		acquired = append(acquired, l)
 		return true, nil
 	}
-	lockWrite := func(item minitxn.RangeItem) (bool, *proto.LockConflict) {
+	lockWrite := func(item minitxn.RangeItem) (bool, *sinfonia.LockConflict) {
 		if item.Size() == 0 {
 			return true, nil
 		}
@@ -1093,7 +1093,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
 			n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", "write-lock conflict")
-			return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
+			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 		}
 	}
 	for _, item := range req.CmpItems {
@@ -1104,7 +1104,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
 			n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", "cmp-lock conflict")
-			return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
+			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 		}
 	}
 	for _, item := range req.ReadItems {
@@ -1115,7 +1115,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
 			n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", "read-lock conflict")
-			return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
+			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 		}
 	}
 
@@ -1124,7 +1124,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 		if err != nil || string(actual) != string(item.Data) {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
-			return n.rememberPrepareOutcomeLocked(req.TID, proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadCmp, CurrentEpoch: currentEpoch})
+			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadCmp, CurrentEpoch: currentEpoch})
 		}
 	}
 
@@ -1134,7 +1134,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 		if err != nil {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
-			return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
+			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
 		}
 		readData[uint32(idx)] = data
 	}
@@ -1147,12 +1147,12 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 		if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.TID, HostIds: participants, WriteItems: clonedWrites}); err != nil {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
-			return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
+			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
 		}
 		if n.mode == ModeReplPrimary && n.replica != nil {
 			n.mu.Unlock()
 			replStart := time.Now()
-			replResp, replErr := n.replica.ReplicateRedoEntry(context.Background(), proto.ReplicateRedoEntryRequest{Entry: proto.RedoEntryPayload{TID: req.TID, Participants: participants, WriteItems: clonedWrites}})
+			replResp, replErr := n.replica.ReplicateRedoEntry(context.Background(), sinfonia.ReplicateRedoEntryRequest{Entry: sinfonia.RedoEntryPayload{TID: req.TID, Participants: participants, WriteItems: clonedWrites}})
 			n.metrics.replicationRoundtripLatency.Observe(time.Since(replStart))
 			n.metrics.replicationEntriesSent.Inc()
 			n.mu.Lock()
@@ -1165,7 +1165,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 				}
 				n.releaseLocks(acquired)
 				delete(n.inDoubt, req.TID)
-				return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
+				return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
 			}
 			n.setReplicationErrorLocked(nil)
 		}
@@ -1181,29 +1181,29 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareR
 	n.metrics.prepareLatency.Observe(time.Since(start))
 	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
 	n.log(slog.LevelInfo, "ExecAndPrepare received", "tid", req.TID, "epoch", req.TID.Epoch)
-	n.log(slog.LevelInfo, "Vote decision", "tid", req.TID, "epoch", req.TID.Epoch, "vote", proto.VoteOk)
+	n.log(slog.LevelInfo, "Vote decision", "tid", req.TID, "epoch", req.TID.Epoch, "vote", sinfonia.VoteOk)
 	n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_ok", "")
-	resp = proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
+	resp = sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
 	if err := n.callOutcomeReplayBoundaryHookLocked("prepare-before-response", req.TID); err != nil {
-		return proto.ExecPrepareResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
 	return n.rememberPrepareOutcomeLocked(req.TID, resp)
 }
 
-func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (resp proto.ExecCommit1PCResponse, err error) {
+func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (resp sinfonia.ExecCommit1PCResponse, err error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode == ModeReplReplica {
-		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, ErrReplicaRejectsCoordinator
+		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrReplicaRejectsCoordinator
 	}
 	if err := n.checkGenerationLocked(req.Generation); err != nil {
-		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal}, err
+		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, err
 	}
 	currentEpoch := n.currentEpochLocked()
 	if out, ok := n.onePCOutcomes[req.TID]; ok {
 		original := clone1PCResponse(out.resp)
-		if err := n.replicateReplayRecordLocked(req.TID, proto.ReplayRecordOnePC, nil, &original); err != nil {
-			return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+		if err := n.replicateReplayRecordLocked(req.TID, sinfonia.ReplayRecordOnePC, nil, &original); err != nil {
+			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 		}
 		resp := original
 		resp.RequestID = req.RequestID
@@ -1214,8 +1214,8 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 	if n.replay != nil {
 		if original, ok := n.replay.GetOnePC(req.TID); ok {
 			n.onePCOutcomes[req.TID] = onePCOutcome{resp: clone1PCResponse(original)}
-			if err := n.replicateReplayRecordLocked(req.TID, proto.ReplayRecordOnePC, nil, &original); err != nil {
-				return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+			if err := n.replicateReplayRecordLocked(req.TID, sinfonia.ReplayRecordOnePC, nil, &original); err != nil {
+				return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 			}
 			original.RequestID = req.RequestID
 			original.CurrentEpoch = currentEpoch
@@ -1233,7 +1233,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 			return resp, flight.err
 		case <-ctx.Done():
 			n.mu.Lock()
-			return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, ctx.Err()
+			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, ctx.Err()
 		}
 	}
 	flight := &onePCFlight{done: make(chan struct{})}
@@ -1246,24 +1246,24 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 	}()
 
 	if n.hasDurableTransactionLocked(req.TID) {
-		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: one-phase transaction %v", ErrReplayUnavailable, req.TID)
+		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: one-phase transaction %v", ErrReplayUnavailable, req.TID)
 	}
 	if correlationID == "" {
 		correlationID = req.TID.CorrelationID()
 	}
 	n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_received", "")
 	if (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
-		return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
+		return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
 	}
 	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 
 	if err := n.validateWriteRangesLocked(req.WriteItems); err != nil {
-		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
 	acquired := make([]RangeLock, 0, len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems))
-	lockRead := func(item minitxn.RangeItem) (bool, *proto.LockConflict) {
+	lockRead := func(item minitxn.RangeItem) (bool, *sinfonia.LockConflict) {
 		if item.Size() == 0 {
 			return true, nil
 		}
@@ -1275,7 +1275,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 		acquired = append(acquired, l)
 		return true, nil
 	}
-	lockWrite := func(item minitxn.RangeItem) (bool, *proto.LockConflict) {
+	lockWrite := func(item minitxn.RangeItem) (bool, *sinfonia.LockConflict) {
 		if item.Size() == 0 {
 			return true, nil
 		}
@@ -1292,7 +1292,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 		if ok, conflict := lockWrite(item); !ok {
 			n.releaseLocks(acquired)
 			n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_bad_lock", "write-lock conflict")
-			return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
+			return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 		}
 	}
 	for _, item := range req.CmpItems {
@@ -1302,7 +1302,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 		if ok, conflict := lockRead(item); !ok {
 			n.releaseLocks(acquired)
 			n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_bad_lock", "cmp-lock conflict")
-			return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
+			return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 		}
 	}
 	for _, item := range req.ReadItems {
@@ -1312,7 +1312,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 		if ok, conflict := lockRead(item); !ok {
 			n.releaseLocks(acquired)
 			n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_bad_lock", "read-lock conflict")
-			return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
+			return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 		}
 	}
 
@@ -1320,7 +1320,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 		actual, err := n.read(item.Addr, uint32(len(item.Data)))
 		if err != nil || string(actual) != string(item.Data) {
 			n.releaseLocks(acquired)
-			return n.rememberOnePCOutcomeLocked(req.TID, proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadCmp, CurrentEpoch: currentEpoch})
+			return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadCmp, CurrentEpoch: currentEpoch})
 		}
 	}
 
@@ -1329,7 +1329,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 		data, err := n.read(item.Addr, item.Len)
 		if err != nil {
 			n.releaseLocks(acquired)
-			return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
+			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
 		}
 		readData[uint32(idx)] = data
 	}
@@ -1339,13 +1339,13 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 		entry := storage.RedoLogItem{TransactionId: req.TID, HostIds: []uint32{n.hostId}, WriteItems: writes}
 		if err := n.redoLog.AddItem(entry); err != nil {
 			n.releaseLocks(acquired)
-			return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
+			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
 		}
 		if n.mode == ModeReplPrimary && n.replica != nil {
 			n.mu.Unlock()
 			replStart := time.Now()
-			replResp, replErr := n.replica.ReplicateRedoEntry(context.Background(), proto.ReplicateRedoEntryRequest{
-				Entry: proto.RedoEntryPayload{TID: req.TID, Participants: append([]uint32(nil), entry.HostIds...), WriteItems: writes},
+			replResp, replErr := n.replica.ReplicateRedoEntry(context.Background(), sinfonia.ReplicateRedoEntryRequest{
+				Entry: sinfonia.RedoEntryPayload{TID: req.TID, Participants: append([]uint32(nil), entry.HostIds...), WriteItems: writes},
 			})
 			n.metrics.replicationRoundtripLatency.Observe(time.Since(replStart))
 			n.metrics.replicationEntriesSent.Inc()
@@ -1358,11 +1358,11 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 					n.setReplicationErrorLocked(errors.New("replication redo entry not acknowledged"))
 				}
 				n.releaseLocks(acquired)
-				return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
+				return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
 			}
 			n.setReplicationErrorLocked(nil)
 			n.mu.Unlock()
-			replCommitResp, replCommitErr := n.replica.ReplicateCommitDecision(context.Background(), proto.ReplicateCommitDecisionRequest{TID: req.TID, ActionCommit: true})
+			replCommitResp, replCommitErr := n.replica.ReplicateCommitDecision(context.Background(), sinfonia.ReplicateCommitDecisionRequest{TID: req.TID, ActionCommit: true})
 			n.mu.Lock()
 			if replCommitErr != nil || !replCommitResp.Ack {
 				n.metrics.replicationFailures.Inc()
@@ -1372,7 +1372,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 					n.setReplicationErrorLocked(errors.New("replication commit decision not acknowledged"))
 				}
 				n.releaseLocks(acquired)
-				return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
+				return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
 			}
 			n.setReplicationErrorLocked(nil)
 		}
@@ -1383,20 +1383,20 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 		if _, known := n.decided.Get(req.TID); !known {
 			if err := n.decided.AddItem(req.TID, true); err != nil {
 				n.releaseLocks(acquired)
-				return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
+				return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
 			}
 		}
 	}
 	if err := n.callOutcomeReplayBoundaryHookLocked("one-pc-before-response", req.TID); err != nil {
 		n.releaseLocks(acquired)
-		return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
-	resp = proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
+	resp = sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
 	for _, item := range req.WriteItems {
 		if err := n.write(item.Addr, item.Data); err != nil {
 			n.recoveryComplete = false
 			n.releaseLocks(acquired)
-			return proto.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: proto.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 		}
 	}
 	n.releaseLocks(acquired)
@@ -1413,19 +1413,19 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PC
 	n.metrics.minitransactionsCommitted.Inc()
 	n.metrics.ObserveClassDecision(req.Class, true, n.nowFn())
 	n.recordTimelineLocked(req.TID, correlationID, "commit_applied", "1pc")
-	n.commitOutcomes[req.TID] = commitOutcome{resp: proto.CommitResponse{RequestID: req.RequestID, Ack: true}, actionCommit: true}
+	n.commitOutcomes[req.TID] = commitOutcome{resp: sinfonia.CommitResponse{RequestID: req.RequestID, Ack: true}, actionCommit: true}
 	return resp, nil
 }
 
-func cloneWrites(items []proto.WriteItem) []proto.WriteItem {
-	out := make([]proto.WriteItem, len(items))
+func cloneWrites(items []sinfonia.WriteItem) []sinfonia.WriteItem {
+	out := make([]sinfonia.WriteItem, len(items))
 	for i, item := range items {
-		out[i] = proto.WriteItem{MemID: item.MemID, Addr: item.Addr, Data: append([]byte(nil), item.Data...)}
+		out[i] = sinfonia.WriteItem{MemID: item.MemID, Addr: item.Addr, Data: append([]byte(nil), item.Data...)}
 	}
 	return out
 }
 
-func (n *Participant) validateWriteRangesLocked(items []proto.WriteItem) error {
+func (n *Participant) validateWriteRangesLocked(items []sinfonia.WriteItem) error {
 	for _, item := range items {
 		end := item.Addr + uint64(len(item.Data))
 		if end < item.Addr || end > uint64(len(n.memory)) {
@@ -1442,23 +1442,23 @@ func (n *Participant) releaseLocks(locks []RangeLock) {
 	n.cond.Broadcast()
 }
 
-func (n *Participant) Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error) {
+func (n *Participant) Commit(ctx context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
 	return n.commit(ctx, req, false)
 }
 
-func (n *Participant) commit(ctx context.Context, req proto.CommitRequest, recoveryDecision bool) (proto.CommitResponse, error) {
+func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, recoveryDecision bool) (sinfonia.CommitResponse, error) {
 	if !n.allowRate(n.commitLimiter, "commit") {
-		return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, ErrResourceExhausted
+		return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, ErrResourceExhausted
 	}
 
 	start := time.Now()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode == ModeReplReplica {
-		return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, ErrReplicaRejectsCoordinator
+		return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, ErrReplicaRejectsCoordinator
 	}
 	if err := n.checkGenerationLocked(req.Generation); err != nil {
-		return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, err
+		return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
 	}
 	requestedAction := req.ActionCommit
 	if out, ok := n.commitOutcomes[req.TID]; ok {
@@ -1479,16 +1479,16 @@ func (n *Participant) commit(ctx context.Context, req proto.CommitRequest, recov
 		}
 	}
 	if !recoveryDecision && !knownDecision && req.ActionCommit && n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, nil
+		return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, nil
 	}
 	if logged && !knownDecision {
 		if err := n.decided.AddItem(req.TID, req.ActionCommit); err != nil {
-			return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, err
+			return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
 		}
 	}
 	if n.mode == ModeReplPrimary && n.replica != nil {
 		n.mu.Unlock()
-		replResp, replErr := n.replica.ReplicateCommitDecision(context.Background(), proto.ReplicateCommitDecisionRequest{TID: req.TID, ActionCommit: req.ActionCommit})
+		replResp, replErr := n.replica.ReplicateCommitDecision(context.Background(), sinfonia.ReplicateCommitDecisionRequest{TID: req.TID, ActionCommit: req.ActionCommit})
 		n.mu.Lock()
 		if replErr != nil || !replResp.Ack {
 			n.metrics.replicationFailures.Inc()
@@ -1497,7 +1497,7 @@ func (n *Participant) commit(ctx context.Context, req proto.CommitRequest, recov
 			} else {
 				n.setReplicationErrorLocked(errors.New("replication commit decision not acknowledged"))
 			}
-			return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, errors.New("replication commit decision failed")
+			return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, errors.New("replication commit decision failed")
 		}
 		n.setReplicationErrorLocked(nil)
 	}
@@ -1532,25 +1532,25 @@ func (n *Participant) commit(ctx context.Context, req proto.CommitRequest, recov
 	return resp, err
 }
 
-func (n *Participant) classForTIDLocked(txId proto.TransactionID) string {
+func (n *Participant) classForTIDLocked(txId sinfonia.TransactionID) string {
 	if txn, ok := n.inDoubt[txId]; ok {
 		return txn.class
 	}
 	return ""
 }
 
-func (n *Participant) correlationForTIDLocked(txId proto.TransactionID) string {
+func (n *Participant) correlationForTIDLocked(txId sinfonia.TransactionID) string {
 	if txn, ok := n.inDoubt[txId]; ok && txn.correlationID != "" {
 		return txn.correlationID
 	}
 	return txId.CorrelationID()
 }
 
-func (n *Participant) recordTimelineLocked(txId proto.TransactionID, correlationID, event, details string) {
+func (n *Participant) recordTimelineLocked(txId sinfonia.TransactionID, correlationID, event, details string) {
 	if correlationID == "" {
 		correlationID = txId.CorrelationID()
 	}
-	n.timelines[txId] = append(n.timelines[txId], proto.TxnTimelineEvent{
+	n.timelines[txId] = append(n.timelines[txId], sinfonia.TxnTimelineEvent{
 		AtNanos:       n.nowFn().UnixNano(),
 		Component:     "memnode",
 		Event:         event,
@@ -1559,21 +1559,21 @@ func (n *Participant) recordTimelineLocked(txId proto.TransactionID, correlation
 	})
 }
 
-func (n *Participant) CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
+func (n *Participant) CommitBatch(ctx context.Context, req sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error) {
 	acks := make([]bool, len(req.Decisions))
 	for i, d := range req.Decisions {
 		resp, err := n.Commit(ctx, d)
 		if err != nil {
-			return proto.CommitBatchResponse{Acks: acks}, err
+			return sinfonia.CommitBatchResponse{Acks: acks}, err
 		}
 		acks[i] = resp.Ack
 	}
-	return proto.CommitBatchResponse{Acks: acks}, nil
+	return sinfonia.CommitBatchResponse{Acks: acks}, nil
 }
 
 // commitLocked saves decisions for logged transactions before applying writes,
 // then releases the transaction's locks.
-func (n *Participant) commitLocked(req proto.CommitRequest) (proto.CommitResponse, error) {
+func (n *Participant) commitLocked(req sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
 
 	if n.decided != nil {
 		if _, ok := n.allLogTxIds[req.TID]; ok {
@@ -1581,7 +1581,7 @@ func (n *Participant) commitLocked(req proto.CommitRequest) (proto.CommitRespons
 				req.ActionCommit = durableAction
 			} else {
 				if err := n.decided.AddItem(req.TID, req.ActionCommit); err != nil {
-					return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, err
+					return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
 				}
 			}
 		}
@@ -1589,7 +1589,7 @@ func (n *Participant) commitLocked(req proto.CommitRequest) (proto.CommitRespons
 
 	txn, ok := n.inDoubt[req.TID]
 	if !ok {
-		return proto.CommitResponse{RequestID: req.RequestID, Ack: true}, nil
+		return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: true}, nil
 	}
 
 	flushNotify := false
@@ -1597,7 +1597,7 @@ func (n *Participant) commitLocked(req proto.CommitRequest) (proto.CommitRespons
 		for _, item := range txn.writes {
 			if err := n.write(item.Addr, item.Data); err != nil {
 				n.recoveryComplete = false
-				return proto.CommitResponse{RequestID: req.RequestID, Ack: false}, err
+				return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
 			}
 		}
 		if txn.redoLoggedTid {
@@ -1613,89 +1613,89 @@ func (n *Participant) commitLocked(req proto.CommitRequest) (proto.CommitRespons
 	if flushNotify {
 		go n.FlushAppliedNotifications(context.Background())
 	}
-	return proto.CommitResponse{RequestID: req.RequestID, Ack: true}, nil
+	return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: true}, nil
 }
 
-func (n *Participant) ReplicateRedoEntry(ctx context.Context, req proto.ReplicateRedoEntryRequest) (proto.ReplicateRedoEntryResponse, error) {
+func (n *Participant) ReplicateRedoEntry(ctx context.Context, req sinfonia.ReplicateRedoEntryRequest) (sinfonia.ReplicateRedoEntryResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplReplica {
-		return proto.ReplicateRedoEntryResponse{Ack: false}, errors.New("node is not configured as replica")
+		return sinfonia.ReplicateRedoEntryResponse{Ack: false}, errors.New("node is not configured as replica")
 	}
 	if n.replicationBaselineIngressBlockedLocked() {
-		return proto.ReplicateRedoEntryResponse{Ack: false}, ErrReplicationBaselineInProgress
+		return sinfonia.ReplicateRedoEntryResponse{Ack: false}, ErrReplicationBaselineInProgress
 	}
 	if n.redoLog == nil {
-		return proto.ReplicateRedoEntryResponse{Ack: false}, errors.New("redo log unavailable")
+		return sinfonia.ReplicateRedoEntryResponse{Ack: false}, errors.New("redo log unavailable")
 	}
 	if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.Entry.TID, HostIds: append([]uint32(nil), req.Entry.Participants...), WriteItems: cloneWrites(req.Entry.WriteItems)}); err != nil {
-		return proto.ReplicateRedoEntryResponse{Ack: false}, err
+		return sinfonia.ReplicateRedoEntryResponse{Ack: false}, err
 	}
 	n.allLogTxIds[req.Entry.TID] = struct{}{}
 	n.logParticipants[req.Entry.TID] = append([]uint32(nil), req.Entry.Participants...)
 	correlationID := req.Entry.TID.CorrelationID()
 	n.inDoubt[req.Entry.TID] = &preparedTxn{writes: cloneWrites(req.Entry.WriteItems), participants: append([]uint32(nil), req.Entry.Participants...), redoLoggedTid: true, preparedAt: n.nowFn(), correlationID: correlationID}
 	n.recordTimelineLocked(req.Entry.TID, correlationID, "replicated_prepare", "")
-	return proto.ReplicateRedoEntryResponse{Ack: true}, nil
+	return sinfonia.ReplicateRedoEntryResponse{Ack: true}, nil
 }
 
-func (n *Participant) ReplicateCommitDecision(ctx context.Context, req proto.ReplicateCommitDecisionRequest) (proto.ReplicateCommitDecisionResponse, error) {
+func (n *Participant) ReplicateCommitDecision(ctx context.Context, req sinfonia.ReplicateCommitDecisionRequest) (sinfonia.ReplicateCommitDecisionResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplReplica {
-		return proto.ReplicateCommitDecisionResponse{Ack: false}, errors.New("node is not configured as replica")
+		return sinfonia.ReplicateCommitDecisionResponse{Ack: false}, errors.New("node is not configured as replica")
 	}
 	if n.replicationBaselineIngressBlockedLocked() {
-		return proto.ReplicateCommitDecisionResponse{Ack: false}, ErrReplicationBaselineInProgress
+		return sinfonia.ReplicateCommitDecisionResponse{Ack: false}, ErrReplicationBaselineInProgress
 	}
-	resp, err := n.commitLocked(proto.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit})
+	resp, err := n.commitLocked(sinfonia.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit})
 	if err != nil {
-		return proto.ReplicateCommitDecisionResponse{Ack: false}, err
+		return sinfonia.ReplicateCommitDecisionResponse{Ack: false}, err
 	}
-	return proto.ReplicateCommitDecisionResponse{Ack: resp.Ack}, nil
+	return sinfonia.ReplicateCommitDecisionResponse{Ack: resp.Ack}, nil
 }
 
 // ReplicateReplayRecord saves a reply so a promoted replica can answer a retry
 // with the same transaction ID. Saving a reply doesn't execute the transaction.
-func (n *Participant) ReplicateReplayRecord(ctx context.Context, req proto.ReplicateReplayRecordRequest) (proto.ReplicateReplayRecordResponse, error) {
+func (n *Participant) ReplicateReplayRecord(ctx context.Context, req sinfonia.ReplicateReplayRecordRequest) (sinfonia.ReplicateReplayRecordResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplReplica {
-		return proto.ReplicateReplayRecordResponse{Ack: false}, errors.New("node is not configured as replica")
+		return sinfonia.ReplicateReplayRecordResponse{Ack: false}, errors.New("node is not configured as replica")
 	}
 	if n.replicationBaselineIngressBlockedLocked() {
-		return proto.ReplicateReplayRecordResponse{Ack: false}, ErrReplicationBaselineInProgress
+		return sinfonia.ReplicateReplayRecordResponse{Ack: false}, ErrReplicationBaselineInProgress
 	}
 	if n.replay == nil {
-		return proto.ReplicateReplayRecordResponse{Ack: false}, errors.New("replay store unavailable")
+		return sinfonia.ReplicateReplayRecordResponse{Ack: false}, errors.New("replay store unavailable")
 	}
 	switch req.Kind {
-	case proto.ReplayRecordPrepare:
+	case sinfonia.ReplayRecordPrepare:
 		if req.Prepare == nil || req.OnePC != nil {
-			return proto.ReplicateReplayRecordResponse{Ack: false}, errors.New("invalid prepare replay record")
+			return sinfonia.ReplicateReplayRecordResponse{Ack: false}, errors.New("invalid prepare replay record")
 		}
 		if err := n.replay.AppendPrepare(req.TID, *req.Prepare); err != nil {
-			return proto.ReplicateReplayRecordResponse{Ack: false}, err
+			return sinfonia.ReplicateReplayRecordResponse{Ack: false}, err
 		}
 		n.prepareOutcomes[req.TID] = prepareOutcome{resp: clonePrepareResponse(*req.Prepare)}
-	case proto.ReplayRecordOnePC:
+	case sinfonia.ReplayRecordOnePC:
 		if req.OnePC == nil || req.Prepare != nil {
-			return proto.ReplicateReplayRecordResponse{Ack: false}, errors.New("invalid one-phase replay record")
+			return sinfonia.ReplicateReplayRecordResponse{Ack: false}, errors.New("invalid one-phase replay record")
 		}
 		if err := n.replay.AppendOnePC(req.TID, *req.OnePC); err != nil {
-			return proto.ReplicateReplayRecordResponse{Ack: false}, err
+			return sinfonia.ReplicateReplayRecordResponse{Ack: false}, err
 		}
 		n.onePCOutcomes[req.TID] = onePCOutcome{resp: clone1PCResponse(*req.OnePC)}
 	default:
-		return proto.ReplicateReplayRecordResponse{Ack: false}, fmt.Errorf("unknown replay record kind %q", req.Kind)
+		return sinfonia.ReplicateReplayRecordResponse{Ack: false}, fmt.Errorf("unknown replay record kind %q", req.Kind)
 	}
-	return proto.ReplicateReplayRecordResponse{Ack: true}, nil
+	return sinfonia.ReplicateReplayRecordResponse{Ack: true}, nil
 }
 
-func (n *Participant) ListCommittedTIDs(ctx context.Context, _ proto.ListCommittedTIDsRequest) (proto.ListCommittedTIDsResponse, error) {
+func (n *Participant) ListCommittedTIDs(ctx context.Context, _ sinfonia.ListCommittedTIDsRequest) (sinfonia.ListCommittedTIDsResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	resp := proto.ListCommittedTIDsResponse{}
+	resp := sinfonia.ListCommittedTIDsResponse{}
 	if n.decided == nil || n.redoLog == nil {
 		return resp, nil
 	}
@@ -1707,71 +1707,71 @@ func (n *Participant) ListCommittedTIDs(ctx context.Context, _ proto.ListCommitt
 	return resp, nil
 }
 
-func (n *Participant) ListRedoEntries(ctx context.Context, _ proto.ListRedoEntriesRequest) (proto.ListRedoEntriesResponse, error) {
+func (n *Participant) ListRedoEntries(ctx context.Context, _ sinfonia.ListRedoEntriesRequest) (sinfonia.ListRedoEntriesResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	resp := proto.ListRedoEntriesResponse{}
+	resp := sinfonia.ListRedoEntriesResponse{}
 	if n.redoLog == nil {
 		return resp, nil
 	}
 	for _, entry := range n.redoLog.Entries() {
-		resp.Entries = append(resp.Entries, proto.RedoEntryPayload{TID: entry.TransactionId, Participants: append([]uint32(nil), entry.HostIds...), WriteItems: cloneWrites(entry.WriteItems)})
+		resp.Entries = append(resp.Entries, sinfonia.RedoEntryPayload{TID: entry.TransactionId, Participants: append([]uint32(nil), entry.HostIds...), WriteItems: cloneWrites(entry.WriteItems)})
 	}
 	return resp, nil
 }
 
 // ExportReplicationBaseline returns the primary's saved memory image.
 // The manager must hold the global write lock so updates can't race the copy.
-func (n *Participant) ExportReplicationBaseline(ctx context.Context, req proto.ExportReplicationBaselineRequest) (proto.ExportReplicationBaselineResponse, error) {
+func (n *Participant) ExportReplicationBaseline(ctx context.Context, req sinfonia.ExportReplicationBaselineRequest) (sinfonia.ExportReplicationBaselineResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplPrimary {
-		return proto.ExportReplicationBaselineResponse{Ack: false}, errors.New("node is not configured as primary")
+		return sinfonia.ExportReplicationBaselineResponse{Ack: false}, errors.New("node is not configured as primary")
 	}
 	if err := n.touchGlobalLockLocked(req.BarrierOwner); err != nil {
-		return proto.ExportReplicationBaselineResponse{Ack: false}, err
+		return sinfonia.ExportReplicationBaselineResponse{Ack: false}, err
 	}
 	if n.backupMode {
-		return proto.ExportReplicationBaselineResponse{Ack: false}, errors.New("replication baseline unavailable during backup phase")
+		return sinfonia.ExportReplicationBaselineResponse{Ack: false}, errors.New("replication baseline unavailable during backup phase")
 	}
 	if n.diskImage == nil {
-		return proto.ExportReplicationBaselineResponse{Ack: false}, ErrReplicationRequiresDurability
+		return sinfonia.ExportReplicationBaselineResponse{Ack: false}, ErrReplicationRequiresDurability
 	}
 	if err := n.diskImage.Sync(); err != nil {
-		return proto.ExportReplicationBaselineResponse{Ack: false}, err
+		return sinfonia.ExportReplicationBaselineResponse{Ack: false}, err
 	}
 	image, err := n.diskImage.Bytes()
 	if err != nil {
-		return proto.ExportReplicationBaselineResponse{Ack: false}, err
+		return sinfonia.ExportReplicationBaselineResponse{Ack: false}, err
 	}
 	checksum := sha256.Sum256(image)
-	boundary := proto.TransactionID{}
+	boundary := sinfonia.TransactionID{}
 	if n.redoLog != nil {
 		boundary = n.redoLog.LastTID()
 	}
-	return proto.ExportReplicationBaselineResponse{Ack: true, Image: image, SHA256: checksum[:], BoundaryTID: boundary}, nil
+	return sinfonia.ExportReplicationBaselineResponse{Ack: true, Image: image, SHA256: checksum[:], BoundaryTID: boundary}, nil
 }
 
 // InstallReplicationBaseline replaces a replica's image and old transaction state.
 // The manager must hold the replica's global write lock. Saved replies stay local;
 // this call doesn't transfer them from the primary.
-func (n *Participant) InstallReplicationBaseline(ctx context.Context, req proto.InstallReplicationBaselineRequest) (proto.InstallReplicationBaselineResponse, error) {
+func (n *Participant) InstallReplicationBaseline(ctx context.Context, req sinfonia.InstallReplicationBaselineRequest) (sinfonia.InstallReplicationBaselineResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.mode != ModeReplReplica {
-		return proto.InstallReplicationBaselineResponse{Ack: false}, errors.New("node is not configured as replica")
+		return sinfonia.InstallReplicationBaselineResponse{Ack: false}, errors.New("node is not configured as replica")
 	}
 	if err := n.touchGlobalLockLocked(req.BarrierOwner); err != nil {
-		return proto.InstallReplicationBaselineResponse{Ack: false}, err
+		return sinfonia.InstallReplicationBaselineResponse{Ack: false}, err
 	}
 	if n.backupMode {
-		return proto.InstallReplicationBaselineResponse{Ack: false}, errors.New("replication baseline unavailable during backup phase")
+		return sinfonia.InstallReplicationBaselineResponse{Ack: false}, errors.New("replication baseline unavailable during backup phase")
 	}
 	if n.diskImage == nil {
-		return proto.InstallReplicationBaselineResponse{Ack: false}, ErrReplicationRequiresDurability
+		return sinfonia.InstallReplicationBaselineResponse{Ack: false}, ErrReplicationRequiresDurability
 	}
 	if len(req.Image) != len(n.memory) {
-		return proto.InstallReplicationBaselineResponse{Ack: false}, fmt.Errorf("replication baseline size %d does not match memory size %d", len(req.Image), len(n.memory))
+		return sinfonia.InstallReplicationBaselineResponse{Ack: false}, fmt.Errorf("replication baseline size %d does not match memory size %d", len(req.Image), len(n.memory))
 	}
 	return n.installReplicationBaselineBytesLocked(req.BarrierOwner, req.Image, req.SHA256, req.BoundaryTID)
 }
@@ -1799,7 +1799,7 @@ func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPe
 			n.UnlockAllOwned(owner)
 		}
 	}()
-	first, err := primary.ExportReplicationBaselineChunk(ctx, proto.ExportReplicationBaselineChunkRequest{BarrierOwner: owner, Artifact: "image", Offset: 0, MaxBytes: baselineChunkSize})
+	first, err := primary.ExportReplicationBaselineChunk(ctx, sinfonia.ExportReplicationBaselineChunkRequest{BarrierOwner: owner, Artifact: "image", Offset: 0, MaxBytes: baselineChunkSize})
 	if err != nil || !first.Ack {
 		if err != nil {
 			return err
@@ -1814,7 +1814,7 @@ func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPe
 		return errors.New("primary returned an invalid replay baseline manifest")
 	}
 	sessionID := fmt.Sprintf("%s/%d", owner, time.Now().UnixNano())
-	begin, err := n.BeginReplicationBaseline(ctx, proto.BeginReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID, TotalSize: first.TotalSize, SHA256: first.SHA256, ReplaySize: first.ReplaySize, ReplaySHA256: first.ReplaySHA256, BoundaryTID: first.BoundaryTID})
+	begin, err := n.BeginReplicationBaseline(ctx, sinfonia.BeginReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID, TotalSize: first.TotalSize, SHA256: first.SHA256, ReplaySize: first.ReplaySize, ReplaySHA256: first.ReplaySHA256, BoundaryTID: first.BoundaryTID})
 	if err != nil || !begin.Ack {
 		if err != nil {
 			return err
@@ -1824,7 +1824,7 @@ func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPe
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = n.AbortReplicationBaseline(context.Background(), proto.AbortReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID})
+			_, _ = n.AbortReplicationBaseline(context.Background(), sinfonia.AbortReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID})
 		}
 	}()
 	chunk := first
@@ -1834,7 +1834,7 @@ func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPe
 			return errors.New("invalid replication baseline chunk sequence")
 		}
 		digest := sha256.Sum256(chunk.Data)
-		written, err := n.WriteReplicationBaselineChunk(ctx, proto.WriteReplicationBaselineChunkRequest{BarrierOwner: owner, SessionID: sessionID, Artifact: "image", Offset: offset, SHA256: digest[:], Data: chunk.Data})
+		written, err := n.WriteReplicationBaselineChunk(ctx, sinfonia.WriteReplicationBaselineChunkRequest{BarrierOwner: owner, SessionID: sessionID, Artifact: "image", Offset: offset, SHA256: digest[:], Data: chunk.Data})
 		if err != nil || !written.Ack {
 			if err != nil {
 				return err
@@ -1845,7 +1845,7 @@ func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPe
 		if offset == first.TotalSize {
 			break
 		}
-		chunk, err = primary.ExportReplicationBaselineChunk(ctx, proto.ExportReplicationBaselineChunkRequest{BarrierOwner: owner, Artifact: "image", Offset: offset, MaxBytes: baselineChunkSize})
+		chunk, err = primary.ExportReplicationBaselineChunk(ctx, sinfonia.ExportReplicationBaselineChunkRequest{BarrierOwner: owner, Artifact: "image", Offset: offset, MaxBytes: baselineChunkSize})
 		if err != nil || !chunk.Ack {
 			if err != nil {
 				return err
@@ -1854,7 +1854,7 @@ func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPe
 		}
 	}
 	if replayPresent {
-		replayFirst, err := primary.ExportReplicationBaselineChunk(ctx, proto.ExportReplicationBaselineChunkRequest{BarrierOwner: owner, Artifact: "replay", Offset: 0, MaxBytes: baselineChunkSize})
+		replayFirst, err := primary.ExportReplicationBaselineChunk(ctx, sinfonia.ExportReplicationBaselineChunkRequest{BarrierOwner: owner, Artifact: "replay", Offset: 0, MaxBytes: baselineChunkSize})
 		if err != nil {
 			return err
 		}
@@ -1862,7 +1862,7 @@ func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPe
 			return err
 		}
 	}
-	installed, err := n.CommitReplicationBaseline(ctx, proto.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID})
+	installed, err := n.CommitReplicationBaseline(ctx, sinfonia.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID})
 	if err != nil || !installed.Ack {
 		if err != nil {
 			return err
@@ -1877,7 +1877,7 @@ func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPe
 	return nil
 }
 
-func syncBaselineArtifact(ctx context.Context, primary PrimarySyncPeer, replica *Participant, owner, sessionID, artifact string, first proto.ExportReplicationBaselineChunkResponse, total uint64, checksum []byte) error {
+func syncBaselineArtifact(ctx context.Context, primary PrimarySyncPeer, replica *Participant, owner, sessionID, artifact string, first sinfonia.ExportReplicationBaselineChunkResponse, total uint64, checksum []byte) error {
 	if total == 0 {
 		if first.Ack && first.TotalSize == 0 && len(first.Data) == 0 && len(first.SHA256) == sha256.Size && equalBytes(first.SHA256, checksum) {
 			return nil
@@ -1894,7 +1894,7 @@ func syncBaselineArtifact(ctx context.Context, primary PrimarySyncPeer, replica 
 			return fmt.Errorf("invalid %s baseline artifact chunk sequence", artifact)
 		}
 		digest := sha256.Sum256(chunk.Data)
-		written, err := replica.WriteReplicationBaselineChunk(ctx, proto.WriteReplicationBaselineChunkRequest{BarrierOwner: owner, SessionID: sessionID, Artifact: artifact, Offset: offset, SHA256: digest[:], Data: chunk.Data})
+		written, err := replica.WriteReplicationBaselineChunk(ctx, sinfonia.WriteReplicationBaselineChunkRequest{BarrierOwner: owner, SessionID: sessionID, Artifact: artifact, Offset: offset, SHA256: digest[:], Data: chunk.Data})
 		if err != nil {
 			return err
 		}
@@ -1905,7 +1905,7 @@ func syncBaselineArtifact(ctx context.Context, primary PrimarySyncPeer, replica 
 		if offset == total {
 			return nil
 		}
-		chunk, err = primary.ExportReplicationBaselineChunk(ctx, proto.ExportReplicationBaselineChunkRequest{BarrierOwner: owner, Artifact: artifact, Offset: offset, MaxBytes: baselineChunkSize})
+		chunk, err = primary.ExportReplicationBaselineChunk(ctx, sinfonia.ExportReplicationBaselineChunkRequest{BarrierOwner: owner, Artifact: artifact, Offset: offset, MaxBytes: baselineChunkSize})
 		if err != nil {
 			return err
 		}
@@ -1915,7 +1915,7 @@ func syncBaselineArtifact(ctx context.Context, primary PrimarySyncPeer, replica 
 	}
 }
 
-func (n *Participant) NotifyApplied(ctx context.Context, req proto.NotifyAppliedRequest) (proto.NotifyAppliedResponse, error) {
+func (n *Participant) NotifyApplied(ctx context.Context, req sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for _, txId := range req.TIDs {
@@ -1927,16 +1927,16 @@ func (n *Participant) NotifyApplied(ctx context.Context, req proto.NotifyApplied
 		}
 		n.appliedRemote[txId][req.FromMemID] = true
 	}
-	return proto.NotifyAppliedResponse{Ack: true}, nil
+	return sinfonia.NotifyAppliedResponse{Ack: true}, nil
 }
 
-func (n *Participant) enqueueAppliedNotificationsLocked(txId proto.TransactionID, participants []uint32) {
+func (n *Participant) enqueueAppliedNotificationsLocked(txId sinfonia.TransactionID, participants []uint32) {
 	for _, pid := range participants {
 		if pid == n.hostId {
 			continue
 		}
 		if _, ok := n.pendingNotify[pid]; !ok {
-			n.pendingNotify[pid] = map[proto.TransactionID]struct{}{}
+			n.pendingNotify[pid] = map[sinfonia.TransactionID]struct{}{}
 		}
 		n.pendingNotify[pid][txId] = struct{}{}
 	}
@@ -1948,9 +1948,9 @@ func (n *Participant) FlushAppliedNotifications(ctx context.Context) {
 	for pid, p := range n.participants {
 		peers[pid] = p
 	}
-	pending := make(map[uint32][]proto.TransactionID, len(n.pendingNotify))
+	pending := make(map[uint32][]sinfonia.TransactionID, len(n.pendingNotify))
 	for pid, txIds := range n.pendingNotify {
-		list := make([]proto.TransactionID, 0, len(txIds))
+		list := make([]sinfonia.TransactionID, 0, len(txIds))
 		for txId := range txIds {
 			list = append(list, txId)
 		}
@@ -1966,7 +1966,7 @@ func (n *Participant) FlushAppliedNotifications(ctx context.Context) {
 		if peer == nil {
 			continue
 		}
-		resp, err := peer.NotifyApplied(ctx, proto.NotifyAppliedRequest{FromMemID: n.hostId, TIDs: txIds})
+		resp, err := peer.NotifyApplied(ctx, sinfonia.NotifyAppliedRequest{FromMemID: n.hostId, TIDs: txIds})
 		if err != nil || !resp.Ack {
 			continue
 		}
@@ -2052,9 +2052,9 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 	return nil
 }
 
-func (n *Participant) RunRedoLogGCRPC(ctx context.Context, _ proto.RunRedoLogGCRequest) (proto.RunRedoLogGCResponse, error) {
+func (n *Participant) RunRedoLogGCRPC(ctx context.Context, _ sinfonia.RunRedoLogGCRequest) (sinfonia.RunRedoLogGCResponse, error) {
 	err := n.RunRedoLogGC(ctx)
-	return proto.RunRedoLogGCResponse{Ack: err == nil}, err
+	return sinfonia.RunRedoLogGCResponse{Ack: err == nil}, err
 }
 
 func (n *Participant) RunForcedAbortGC() error {
@@ -2069,57 +2069,57 @@ func (n *Participant) RunForcedAbortGC() error {
 	return err
 }
 
-func (n *Participant) RunForcedAbortGCRPC(ctx context.Context, _ proto.RunForcedAbortGCRequest) (proto.RunForcedAbortGCResponse, error) {
+func (n *Participant) RunForcedAbortGCRPC(ctx context.Context, _ sinfonia.RunForcedAbortGCRequest) (sinfonia.RunForcedAbortGCResponse, error) {
 	err := n.RunForcedAbortGC()
-	return proto.RunForcedAbortGCResponse{Ack: err == nil}, err
+	return sinfonia.RunForcedAbortGCResponse{Ack: err == nil}, err
 }
 
-func (n *Participant) QueryTidStatus(ctx context.Context, req proto.QueryTidStatusRequest) (proto.QueryTidStatusResponse, error) {
+func (n *Participant) QueryTidStatus(ctx context.Context, req sinfonia.QueryTidStatusRequest) (sinfonia.QueryTidStatusResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if out, ok := n.commitOutcomes[req.TID]; ok {
 		if out.actionCommit {
-			return proto.QueryTidStatusResponse{KnownDecision: true, Outcome: proto.TidOutcomeCommit, VotedOK: true}, nil
+			return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeCommit, VotedOK: true}, nil
 		}
-		return proto.QueryTidStatusResponse{KnownDecision: true, Outcome: proto.TidOutcomeAbort, VotedOK: false}, nil
+		return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeAbort, VotedOK: false}, nil
 	}
 	if n.decided != nil {
 		if c, ok := n.decided.Get(req.TID); ok {
 			if c {
-				return proto.QueryTidStatusResponse{KnownDecision: true, Outcome: proto.TidOutcomeCommit, VotedOK: true}, nil
+				return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeCommit, VotedOK: true}, nil
 			}
-			return proto.QueryTidStatusResponse{KnownDecision: true, Outcome: proto.TidOutcomeAbort, VotedOK: false}, nil
+			return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeAbort, VotedOK: false}, nil
 		}
 	}
 	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return proto.QueryTidStatusResponse{KnownDecision: false, Outcome: proto.TidOutcomeAbort, VotedOK: false}, nil
+		return sinfonia.QueryTidStatusResponse{KnownDecision: false, Outcome: sinfonia.TidOutcomeAbort, VotedOK: false}, nil
 	}
 	if _, ok := n.allLogTxIds[req.TID]; ok {
-		return proto.QueryTidStatusResponse{KnownDecision: false, Outcome: proto.TidOutcomeUnknown, VotedOK: true}, nil
+		return sinfonia.QueryTidStatusResponse{KnownDecision: false, Outcome: sinfonia.TidOutcomeUnknown, VotedOK: true}, nil
 	}
 	if n.prepareVotedOKLocked(req.TID) {
-		return proto.QueryTidStatusResponse{KnownDecision: false, Outcome: proto.TidOutcomeUnknown, VotedOK: true}, nil
+		return sinfonia.QueryTidStatusResponse{KnownDecision: false, Outcome: sinfonia.TidOutcomeUnknown, VotedOK: true}, nil
 	}
 	if n.forcedAborts != nil {
 		if err := n.forcedAborts.AddItem(req.TID); err != nil {
-			return proto.QueryTidStatusResponse{}, err
+			return sinfonia.QueryTidStatusResponse{}, err
 		}
 	}
 	n.metrics.forcedAbortCount.Inc()
 	n.metrics.forcedAbortCountCurrent.Set(int64(n.metrics.forcedAbortCountCurrent.Value() + 1))
-	return proto.QueryTidStatusResponse{KnownDecision: true, Outcome: proto.TidOutcomeAbort, VotedOK: false}, nil
+	return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeAbort, VotedOK: false}, nil
 }
 
-func (n *Participant) QueryInDoubt(ctx context.Context, _ proto.QueryInDoubtRequest) (proto.QueryInDoubtResponse, error) {
+func (n *Participant) QueryInDoubt(ctx context.Context, _ sinfonia.QueryInDoubtRequest) (sinfonia.QueryInDoubtResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	resp := proto.QueryInDoubtResponse{Entries: make([]proto.InDoubtEntry, 0, len(n.inDoubt))}
+	resp := sinfonia.QueryInDoubtResponse{Entries: make([]sinfonia.InDoubtEntry, 0, len(n.inDoubt))}
 	for txId, tx := range n.inDoubt {
 		correlationID := tx.correlationID
 		if correlationID == "" {
 			correlationID = txId.CorrelationID()
 		}
-		resp.Entries = append(resp.Entries, proto.InDoubtEntry{
+		resp.Entries = append(resp.Entries, sinfonia.InDoubtEntry{
 			TID:           txId,
 			PreparedAt:    tx.preparedAt.UnixNano(),
 			CorrelationID: correlationID,
@@ -2129,18 +2129,18 @@ func (n *Participant) QueryInDoubt(ctx context.Context, _ proto.QueryInDoubtRequ
 	return resp, nil
 }
 
-func (n *Participant) TimelineForTID(txId proto.TransactionID) []proto.TxnTimelineEvent {
+func (n *Participant) TimelineForTID(txId sinfonia.TransactionID) []sinfonia.TxnTimelineEvent {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	src := n.timelines[txId]
-	out := make([]proto.TxnTimelineEvent, len(src))
+	out := make([]sinfonia.TxnTimelineEvent, len(src))
 	copy(out, src)
 	return out
 }
 
-func (n *Participant) RecoveryForceAbort(ctx context.Context, req proto.RecoverForceAbortRequest) (proto.RecoverForceAbortResponse, error) {
+func (n *Participant) RecoveryForceAbort(ctx context.Context, req sinfonia.RecoverForceAbortRequest) (sinfonia.RecoverForceAbortResponse, error) {
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
-		return proto.RecoverForceAbortResponse{Vote: proto.VoteBadInternal}, ErrResourceExhausted
+		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
 	}
 
 	n.mu.Lock()
@@ -2152,44 +2152,44 @@ func (n *Participant) RecoveryForceAbort(ctx context.Context, req proto.RecoverF
 	n.recordTimelineLocked(req.TID, correlationID, "recovery_force_abort", "")
 	if out, ok := n.commitOutcomes[req.TID]; ok {
 		if out.actionCommit {
-			return proto.RecoverForceAbortResponse{Vote: proto.VoteOk, KnownDecision: true, DecisionCommit: true}, nil
+			return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteOk, KnownDecision: true, DecisionCommit: true}, nil
 		}
-		return proto.RecoverForceAbortResponse{Vote: proto.VoteBadForced, KnownDecision: true}, nil
+		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadForced, KnownDecision: true}, nil
 	}
 	if n.decided != nil {
 		if committed, ok := n.decided.Get(req.TID); ok {
 			if committed {
-				return proto.RecoverForceAbortResponse{Vote: proto.VoteOk, KnownDecision: true, DecisionCommit: true}, nil
+				return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteOk, KnownDecision: true, DecisionCommit: true}, nil
 			}
-			return proto.RecoverForceAbortResponse{Vote: proto.VoteBadForced, KnownDecision: true}, nil
+			return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadForced, KnownDecision: true}, nil
 		}
 	}
 	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return proto.RecoverForceAbortResponse{Vote: proto.VoteBadForced}, nil
+		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadForced}, nil
 	}
 	if _, ok := n.allLogTxIds[req.TID]; ok {
-		return proto.RecoverForceAbortResponse{Vote: proto.VoteOk}, nil
+		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteOk}, nil
 	}
 	if n.prepareVotedOKLocked(req.TID) {
-		return proto.RecoverForceAbortResponse{Vote: proto.VoteOk}, nil
+		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteOk}, nil
 	}
 	if n.forcedAborts != nil {
 		if err := n.forcedAborts.AddItem(req.TID); err != nil {
-			return proto.RecoverForceAbortResponse{Vote: proto.VoteBadInternal}, err
+			return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadInternal}, err
 		}
 	}
-	return proto.RecoverForceAbortResponse{Vote: proto.VoteBadForced}, nil
+	return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadForced}, nil
 }
 
-func (n *Participant) RecoveryDecide(ctx context.Context, req proto.RecoverDecideRequest) (proto.RecoverDecideResponse, error) {
+func (n *Participant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDecideRequest) (sinfonia.RecoverDecideResponse, error) {
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
-		return proto.RecoverDecideResponse{Ack: false}, ErrResourceExhausted
+		return sinfonia.RecoverDecideResponse{Ack: false}, ErrResourceExhausted
 	}
-	resp, err := n.commit(ctx, proto.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit, CorrelationID: req.CorrelationID}, true)
+	resp, err := n.commit(ctx, sinfonia.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit, CorrelationID: req.CorrelationID}, true)
 	if err != nil {
-		return proto.RecoverDecideResponse{Ack: false}, err
+		return sinfonia.RecoverDecideResponse{Ack: false}, err
 	}
-	return proto.RecoverDecideResponse{Ack: resp.Ack}, nil
+	return sinfonia.RecoverDecideResponse{Ack: resp.Ack}, nil
 }
 
 // Recover resolves logged transactions using saved decisions and peer evidence.
@@ -2285,7 +2285,7 @@ func (n *Participant) Recover(ctx context.Context) error {
 			}
 		}
 		n.commitOutcomes[entry.TransactionId] = commitOutcome{
-			resp:         proto.CommitResponse{Ack: true},
+			resp:         sinfonia.CommitResponse{Ack: true},
 			actionCommit: outcomeCommit,
 		}
 		delete(n.inDoubt, entry.TransactionId)
@@ -2315,7 +2315,7 @@ func (n *Participant) Recover(ctx context.Context) error {
 	return nil
 }
 
-func (n *Participant) callRecoverBoundaryHook(phase string, txId proto.TransactionID) error {
+func (n *Participant) callRecoverBoundaryHook(phase string, txId sinfonia.TransactionID) error {
 	n.mu.Lock()
 	hook := n.recoverBoundaryHook
 	n.mu.Unlock()
@@ -2325,7 +2325,7 @@ func (n *Participant) callRecoverBoundaryHook(phase string, txId proto.Transacti
 	return hook(phase, txId)
 }
 
-func (n *Participant) callRecoverBoundaryHookLocked(phase string, txId proto.TransactionID) error {
+func (n *Participant) callRecoverBoundaryHookLocked(phase string, txId sinfonia.TransactionID) error {
 	if n.recoverBoundaryHook == nil {
 		return nil
 	}
@@ -2358,7 +2358,7 @@ func (n *Participant) discoverOutcome(ctx context.Context, peers map[uint32]Reco
 		}
 		peer := peers[pid]
 		queryCtx, cancel := context.WithTimeout(ctx, peerTimeout)
-		resp, err := peer.QueryTidStatus(queryCtx, proto.QueryTidStatusRequest{TID: entry.TransactionId})
+		resp, err := peer.QueryTidStatus(queryCtx, sinfonia.QueryTidStatusRequest{TID: entry.TransactionId})
 		cancel()
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -2368,13 +2368,13 @@ func (n *Participant) discoverOutcome(ctx context.Context, peers map[uint32]Reco
 		}
 		if resp.KnownDecision {
 			switch resp.Outcome {
-			case proto.TidOutcomeCommit:
+			case sinfonia.TidOutcomeCommit:
 				if knownDecision && !knownCommit {
 					return false, fmt.Errorf("%w: transaction %v has conflicting durable decisions", ErrRecoveryPending, entry.TransactionId)
 				}
 				knownDecision = true
 				knownCommit = true
-			case proto.TidOutcomeAbort:
+			case sinfonia.TidOutcomeAbort:
 				if knownDecision && knownCommit {
 					return false, fmt.Errorf("%w: transaction %v has conflicting durable decisions", ErrRecoveryPending, entry.TransactionId)
 				}
@@ -2385,7 +2385,7 @@ func (n *Participant) discoverOutcome(ctx context.Context, peers map[uint32]Reco
 			}
 			continue
 		}
-		if !resp.VotedOK || resp.Outcome == proto.TidOutcomeAbort {
+		if !resp.VotedOK || resp.Outcome == sinfonia.TidOutcomeAbort {
 			negativeVote = true
 		}
 	}
@@ -2521,34 +2521,34 @@ func (n *Participant) SetGlobalBarrierLeaseTTLForTest(ttl time.Duration) {
 	}
 }
 
-func (n *Participant) BeginBackupPhase(ctx context.Context, req proto.BeginBackupPhaseRequest) (proto.BeginBackupPhaseResponse, error) {
+func (n *Participant) BeginBackupPhase(ctx context.Context, req sinfonia.BeginBackupPhaseRequest) (sinfonia.BeginBackupPhaseResponse, error) {
 	n.metrics.backupRuns.Inc()
 	n.log(slog.LevelInfo, "Backup phase transitions", "phase", "begin", "tid", req.BackupID)
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.diskImage == nil {
-		return proto.BeginBackupPhaseResponse{Ack: true}, nil
+		return sinfonia.BeginBackupPhaseResponse{Ack: true}, nil
 	}
-	boundary := proto.TransactionID{}
+	boundary := sinfonia.TransactionID{}
 	if n.redoLog != nil {
 		boundary = n.redoLog.LastTID()
 	}
 	n.lastBackupBoundary = boundary
 	n.backupMode = true
 	if err := n.diskImage.Sync(); err != nil {
-		return proto.BeginBackupPhaseResponse{Ack: false}, err
+		return sinfonia.BeginBackupPhaseResponse{Ack: false}, err
 	}
-	return proto.BeginBackupPhaseResponse{Ack: true, BoundaryTID: boundary}, nil
+	return sinfonia.BeginBackupPhaseResponse{Ack: true, BoundaryTID: boundary}, nil
 }
 
-func (n *Participant) CompleteBackupPhase(ctx context.Context, req proto.CompleteBackupPhaseRequest) (proto.CompleteBackupPhaseResponse, error) {
+func (n *Participant) CompleteBackupPhase(ctx context.Context, req sinfonia.CompleteBackupPhaseRequest) (sinfonia.CompleteBackupPhaseResponse, error) {
 	n.log(slog.LevelInfo, "Backup phase transitions", "phase", "complete", "tid", req.BackupID)
 	n.mu.Lock()
 	if n.diskImage == nil {
 		n.backupMode = false
 		n.pendingDiskWrites = nil
 		n.mu.Unlock()
-		return proto.CompleteBackupPhaseResponse{Ack: true}, nil
+		return sinfonia.CompleteBackupPhaseResponse{Ack: true}, nil
 	}
 	snapshotPath := ""
 	if n.storageDir != "" {
@@ -2558,38 +2558,38 @@ func (n *Participant) CompleteBackupPhase(ctx context.Context, req proto.Complet
 
 	if snapshotPath != "" {
 		if err := n.diskImage.Snapshot(snapshotPath); err != nil {
-			return proto.CompleteBackupPhaseResponse{Ack: false}, err
+			return sinfonia.CompleteBackupPhaseResponse{Ack: false}, err
 		}
 	}
 	n.mu.Lock()
-	pending := append([]proto.WriteItem(nil), n.pendingDiskWrites...)
+	pending := append([]sinfonia.WriteItem(nil), n.pendingDiskWrites...)
 	n.pendingDiskWrites = nil
 	n.backupMode = false
 	n.mu.Unlock()
 
 	for _, w := range pending {
 		if err := n.diskImage.ApplyWrite(w.Addr, w.Data); err != nil {
-			return proto.CompleteBackupPhaseResponse{Ack: false}, err
+			return sinfonia.CompleteBackupPhaseResponse{Ack: false}, err
 		}
 	}
 	snapshotSHA256 := ""
 	if snapshotPath != "" {
 		snapshot, err := os.Open(snapshotPath)
 		if err != nil {
-			return proto.CompleteBackupPhaseResponse{Ack: false}, err
+			return sinfonia.CompleteBackupPhaseResponse{Ack: false}, err
 		}
 		hash := sha256.New()
 		_, copyErr := io.Copy(hash, snapshot)
 		closeErr := snapshot.Close()
 		if copyErr != nil {
-			return proto.CompleteBackupPhaseResponse{Ack: false}, copyErr
+			return sinfonia.CompleteBackupPhaseResponse{Ack: false}, copyErr
 		}
 		if closeErr != nil {
-			return proto.CompleteBackupPhaseResponse{Ack: false}, closeErr
+			return sinfonia.CompleteBackupPhaseResponse{Ack: false}, closeErr
 		}
 		snapshotSHA256 = hex.EncodeToString(hash.Sum(nil))
 	}
-	return proto.CompleteBackupPhaseResponse{Ack: true, SnapshotPath: snapshotPath, SnapshotSHA256: snapshotSHA256}, nil
+	return sinfonia.CompleteBackupPhaseResponse{Ack: true, SnapshotPath: snapshotPath, SnapshotSHA256: snapshotSHA256}, nil
 }
 
 func (n *Participant) GlobalLockHeldDurationForTest() time.Duration {
@@ -2624,7 +2624,7 @@ func (n *Participant) RedoEntryCountForTest() int {
 	return len(n.redoLog.Entries())
 }
 
-func (n *Participant) HasDecidedForTest(txId proto.TransactionID) bool {
+func (n *Participant) HasDecidedForTest(txId sinfonia.TransactionID) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.decided == nil {
@@ -2634,7 +2634,7 @@ func (n *Participant) HasDecidedForTest(txId proto.TransactionID) bool {
 	return ok
 }
 
-func (n *Participant) HasAppliedTrackingForTest(txId proto.TransactionID) bool {
+func (n *Participant) HasAppliedTrackingForTest(txId sinfonia.TransactionID) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.appliedLocal[txId] {
@@ -2651,7 +2651,7 @@ func (n *Participant) HasAppliedTrackingForTest(txId proto.TransactionID) bool {
 	return false
 }
 
-func (n *Participant) HasForcedAbortForTest(txId proto.TransactionID) bool {
+func (n *Participant) HasForcedAbortForTest(txId sinfonia.TransactionID) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.forcedAborts == nil {
@@ -2660,7 +2660,7 @@ func (n *Participant) HasForcedAbortForTest(txId proto.TransactionID) bool {
 	return n.forcedAborts.IsForcedAbort(txId)
 }
 
-func (n *Participant) ForceAbortForTest(txId proto.TransactionID) error {
+func (n *Participant) ForceAbortForTest(txId sinfonia.TransactionID) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.forcedAborts == nil {

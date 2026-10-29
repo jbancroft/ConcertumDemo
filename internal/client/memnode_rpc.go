@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
@@ -30,8 +30,8 @@ func NewRPCParticipantWithGeneration(addr string, tlsConfig *tls.Config, timeout
 }
 
 func (n *RPCParticipant) Read(ctx context.Context, addr uint64, length uint32) ([]byte, error) {
-	var out proto.ReadResponse
-	err := n.rpc.Call(ctx, proto.MethodRead, proto.ReadRequest{Addr: addr, Len: length, Generation: n.generation}, &out)
+	var out sinfonia.ReadResponse
+	err := n.rpc.Call(ctx, sinfonia.MethodRead, sinfonia.ReadRequest{Addr: addr, Len: length, Generation: n.generation}, &out)
 	if err != nil {
 		return nil, err
 	}
@@ -39,40 +39,40 @@ func (n *RPCParticipant) Read(ctx context.Context, addr uint64, length uint32) (
 }
 
 func (n *RPCParticipant) Write(ctx context.Context, addr uint64, data []byte) error {
-	var out proto.WriteResponse
-	return n.rpc.Call(ctx, proto.MethodWrite, proto.WriteRequest{Addr: addr, Data: data, Generation: n.generation}, &out)
+	var out sinfonia.WriteResponse
+	return n.rpc.Call(ctx, sinfonia.MethodWrite, sinfonia.WriteRequest{Addr: addr, Data: data, Generation: n.generation}, &out)
 }
 
-func (n *RPCParticipant) ExecAndPrepare(ctx context.Context, req proto.ExecPrepareRequest) (proto.ExecPrepareResponse, error) {
-	var out proto.ExecPrepareResponse
+func (n *RPCParticipant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
+	var out sinfonia.ExecPrepareResponse
 	if req.Generation == 0 {
 		req.Generation = n.generation
 	}
-	return out, n.rpc.Call(ctx, proto.MethodExecPrepare, req, &out)
+	return out, n.rpc.Call(ctx, sinfonia.MethodExecPrepare, req, &out)
 }
 
-func (n *RPCParticipant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
-	var out proto.ExecCommit1PCResponse
+func (n *RPCParticipant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
+	var out sinfonia.ExecCommit1PCResponse
 	if req.Generation == 0 {
 		req.Generation = n.generation
 	}
-	return out, n.rpc.Call(ctx, proto.MethodExecCommit1PC, req, &out)
+	return out, n.rpc.Call(ctx, sinfonia.MethodExecCommit1PC, req, &out)
 }
 
-func (n *RPCParticipant) Commit(ctx context.Context, req proto.CommitRequest) (proto.CommitResponse, error) {
-	var out proto.CommitResponse
+func (n *RPCParticipant) Commit(ctx context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
+	var out sinfonia.CommitResponse
 	if req.Generation == 0 {
 		req.Generation = n.generation
 	}
-	return out, n.rpc.Call(ctx, proto.MethodCommit, req, &out)
+	return out, n.rpc.Call(ctx, sinfonia.MethodCommit, req, &out)
 }
 
-func (n *RPCParticipant) CommitBatch(ctx context.Context, req proto.CommitBatchRequest) (proto.CommitBatchResponse, error) {
-	var out proto.CommitBatchResponse
+func (n *RPCParticipant) CommitBatch(ctx context.Context, req sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error) {
+	var out sinfonia.CommitBatchResponse
 	for i := range req.Decisions {
 		if req.Decisions[i].Generation == 0 {
 			req.Decisions[i].Generation = n.generation
 		}
 	}
-	return out, n.rpc.Call(ctx, proto.MethodCommitBatch, req, &out)
+	return out, n.rpc.Call(ctx, sinfonia.MethodCommitBatch, req, &out)
 }

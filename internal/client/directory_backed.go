@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
@@ -88,10 +88,10 @@ func (d *DirectoryBackedCoordinator) GetStats(hostId uint32) (memnode.StatsRespo
 	return stats, err
 }
 
-func (d *DirectoryBackedCoordinator) ExecuteAndCommit(ctx context.Context, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) ExecResult {
+func (d *DirectoryBackedCoordinator) ExecuteAndCommit(ctx context.Context, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ExecResult {
 	coord, err := d.current(ctx)
 	if err != nil {
-		return ExecResult{Committed: false, ReadResults: map[proto.ReadItem][]byte{}, Status: proto.VoteBadInternal, ParticipantVotes: map[uint32]proto.Vote{}, TransportErr: err}
+		return ExecResult{Committed: false, ReadResults: map[sinfonia.ReadItem][]byte{}, Status: sinfonia.VoteBadInternal, ParticipantVotes: map[uint32]sinfonia.Vote{}, TransportErr: err}
 	}
 	res := coord.ExecuteAndCommit(ctx, class, compares, reads, writes)
 	d.mu.Lock()

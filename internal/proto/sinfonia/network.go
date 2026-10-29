@@ -1,4 +1,4 @@
-package proto
+package sinfonia
 
 import (
 	"encoding/gob"
@@ -62,8 +62,8 @@ func init() {
 }
 
 func registerGobTypes() {
-	// Gob's default names include the Go module path. Keep the original names
-	// so renaming the repository doesn't change the messages sent over the wire.
+	// Keep the original gob names so moving these types between packages or
+	// renaming the module doesn't change the messages sent over the wire.
 	for _, body := range []any{
 		ReadRequest{},
 		ReadResponse{},
@@ -137,14 +137,6 @@ func registerGobTypes() {
 		ResolveResponse{},
 		UpdateEntryRequest{},
 		UpdateEntryResponse{},
-		SQLExecRequest{},
-		SQLExecResponse{},
-		SQLPingRequest{},
-		SQLPingResponse{},
-		SQLDescribeCapabilitiesRequest{},
-		SQLDescribeCapabilitiesResponse{},
-		SQLCapabilities{},
-		SQLRow{},
 	} {
 		name := "github.com/jbancroft/concertum2/internal/proto." + reflect.TypeOf(body).Name()
 		gob.RegisterName(name, body)

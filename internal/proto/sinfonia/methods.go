@@ -1,4 +1,4 @@
-package proto
+package sinfonia
 
 const (
 	MethodRead                           = "memnode.read"
@@ -37,8 +37,4 @@ const (
 	MethodDirectory   = "dirserver.directory"
 	MethodResolve     = "dirserver.resolve"
 	MethodUpdateEntry = "dirserver.update_entry"
-
-	MethodSQLExec                 = "sqld.exec"
-	MethodSQLPing                 = "sqld.ping"
-	MethodSQLDescribeCapabilities = "sqld.describe_capabilities"
 )

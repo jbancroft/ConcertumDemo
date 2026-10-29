@@ -3,12 +3,12 @@ package client
 import (
 	"sync"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 type MemEndpoints struct {
-	Primary    proto.Endpoint
-	Replica    *proto.Endpoint
+	Primary    sinfonia.Endpoint
+	Replica    *sinfonia.Endpoint
 	Generation uint64
 }
 
@@ -27,22 +27,22 @@ func (d *Directory) Set(logicalMemID uint32, endpoints MemEndpoints) {
 	d.entries[logicalMemID] = endpoints
 }
 
-func (d *Directory) ResolvePrimary(logicalMemID uint32) (proto.Endpoint, bool) {
+func (d *Directory) ResolvePrimary(logicalMemID uint32) (sinfonia.Endpoint, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	ep, ok := d.entries[logicalMemID]
 	if !ok {
-		return proto.Endpoint{}, false
+		return sinfonia.Endpoint{}, false
 	}
 	return ep.Primary, true
 }
 
-func (d *Directory) ResolveReplica(logicalMemID uint32) (proto.Endpoint, bool) {
+func (d *Directory) ResolveReplica(logicalMemID uint32) (sinfonia.Endpoint, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	ep, ok := d.entries[logicalMemID]
 	if !ok || ep.Replica == nil {
-		return proto.Endpoint{}, false
+		return sinfonia.Endpoint{}, false
 	}
 	return *ep.Replica, true
 }

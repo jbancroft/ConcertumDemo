@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
@@ -34,7 +34,7 @@ func TestRedoLogBatchingReducesFsyncCallsAndPreservesDurability(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			err := log.AddItem(storage.RedoLogItem{TransactionId: proto.TransactionID{CoordinatorID: 1, Counter: uint64(i + 1), Epoch: 1}, HostIds: []uint32{1}, WriteItems: []proto.WriteItem{{MemID: 1, Addr: uint64(i), Data: []byte{byte(i)}}}})
+			err := log.AddItem(storage.RedoLogItem{TransactionId: sinfonia.TransactionID{CoordinatorID: 1, Counter: uint64(i + 1), Epoch: 1}, HostIds: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: uint64(i), Data: []byte{byte(i)}}}})
 			if err != nil {
 				t.Errorf("append failed: %v", err)
 			}
@@ -82,7 +82,7 @@ func TestReplicationBaselineStoragePrimitivesResetDurableState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txId := proto.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
 	redo, err := storage.OpenRedoLog(dir)
 	if err != nil {
 		t.Fatal(err)

@@ -17,13 +17,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 type RedoLogItem struct {
-	TransactionId proto.TransactionID `json:"tid"`
-	HostIds       []uint32            `json:"participants"`
-	WriteItems    []proto.WriteItem   `json:"write_items"`
+	TransactionId sinfonia.TransactionID `json:"tid"`
+	HostIds       []uint32               `json:"participants"`
+	WriteItems    []sinfonia.WriteItem   `json:"write_items"`
 }
 
 type DiskImage struct {
@@ -419,11 +419,11 @@ func (r *RedoLog) flushBatch(batch []appendReq) error {
 	}
 	return nil
 }
-func (r *RedoLog) LastTID() proto.TransactionID {
+func (r *RedoLog) LastTID() sinfonia.TransactionID {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.entries) == 0 {
-		return proto.TransactionID{}
+		return sinfonia.TransactionID{}
 	}
 	return r.entries[len(r.entries)-1].TransactionId
 }
@@ -517,14 +517,14 @@ func OpenForcedAbortLog(dir string) (*ForcedAbortLog, error) {
 	return &ForcedAbortLog{path: p, set: out}, nil
 }
 
-func (s *ForcedAbortLog) IsForcedAbort(txId proto.TransactionID) bool {
+func (s *ForcedAbortLog) IsForcedAbort(txId sinfonia.TransactionID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, ok := s.set[tidKey(txId)]
 	return ok
 }
 
-func (s *ForcedAbortLog) AddItem(txId proto.TransactionID) error {
+func (s *ForcedAbortLog) AddItem(txId sinfonia.TransactionID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := tidKey(txId)
@@ -546,7 +546,7 @@ func (s *ForcedAbortLog) AddItem(txId proto.TransactionID) error {
 	return nil
 }
 
-func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]proto.TransactionID, error) {
+func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]sinfonia.TransactionID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if currentEpoch <= 2 {
@@ -554,7 +554,7 @@ func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]proto.TransactionID, 
 	}
 	threshold := currentEpoch - 2
 	changed := false
-	removed := make([]proto.TransactionID, 0)
+	removed := make([]sinfonia.TransactionID, 0)
 	for key := range s.set {
 		txId, ok := parseTidKey(key)
 		if !ok {
@@ -632,14 +632,14 @@ func openOutcomeStore(path string) (*DecidedTransactionLog, error) {
 	return &DecidedTransactionLog{path: path, outcomes: m}, nil
 }
 
-func (s *DecidedTransactionLog) Get(txId proto.TransactionID) (bool, bool) {
+func (s *DecidedTransactionLog) Get(txId sinfonia.TransactionID) (bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, ok := s.outcomes[tidKey(txId)]
 	return v, ok
 }
 
-func (s *DecidedTransactionLog) AddItem(txId proto.TransactionID, committed bool) error {
+func (s *DecidedTransactionLog) AddItem(txId sinfonia.TransactionID, committed bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := tidKey(txId)
@@ -662,7 +662,7 @@ func (s *DecidedTransactionLog) AddItem(txId proto.TransactionID, committed bool
 	return nil
 }
 
-func (s *DecidedTransactionLog) Remove(txId proto.TransactionID) error {
+func (s *DecidedTransactionLog) Remove(txId sinfonia.TransactionID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := tidKey(txId)
@@ -763,26 +763,26 @@ func StoreProcessedPointer(dir string, idx int) error {
 	return closeErr
 }
 
-func tidKey(t proto.TransactionID) string {
+func tidKey(t sinfonia.TransactionID) string {
 	return fmt.Sprintf("%d:%d:%d", t.CoordinatorID, t.Counter, t.Epoch)
 }
 
-func parseTidKey(k string) (proto.TransactionID, bool) {
+func parseTidKey(k string) (sinfonia.TransactionID, bool) {
 	parts := strings.Split(k, ":")
 	if len(parts) != 3 {
-		return proto.TransactionID{}, false
+		return sinfonia.TransactionID{}, false
 	}
 	coord, err := strconv.ParseUint(parts[0], 10, 64)
 	if err != nil {
-		return proto.TransactionID{}, false
+		return sinfonia.TransactionID{}, false
 	}
 	counter, err := strconv.ParseUint(parts[1], 10, 64)
 	if err != nil {
-		return proto.TransactionID{}, false
+		return sinfonia.TransactionID{}, false
 	}
 	epoch, err := strconv.ParseUint(parts[2], 10, 64)
 	if err != nil {
-		return proto.TransactionID{}, false
+		return sinfonia.TransactionID{}, false
 	}
-	return proto.TransactionID{CoordinatorID: coord, Counter: counter, Epoch: epoch}, true
+	return sinfonia.TransactionID{CoordinatorID: coord, Counter: counter, Epoch: epoch}, true
 }

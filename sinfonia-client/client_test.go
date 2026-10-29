@@ -8,7 +8,7 @@ import (
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
@@ -22,10 +22,10 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 		compare   string
 		committed bool
 		status    sinfoniaclient.Status
-		vote      proto.Vote
+		vote      sinfonia.Vote
 	}{
-		{name: "commit", compare: "a", committed: true, status: sinfoniaclient.StatusCommitted, vote: proto.VoteOk},
-		{name: "compare abort", compare: "stale", status: sinfoniaclient.StatusAborted, vote: proto.VoteBadCmp},
+		{name: "commit", compare: "a", committed: true, status: sinfoniaclient.StatusCommitted, vote: sinfonia.VoteOk},
+		{name: "compare abort", compare: "stale", status: sinfoniaclient.StatusAborted, vote: sinfonia.VoteBadCmp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -47,7 +47,7 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 			if result.Committed != tc.committed || result.Status != tc.status || result.UnknownOutcome {
 				t.Fatalf("unexpected transaction result: %+v", result)
 			}
-			if len(result.ParticipantVotes) != 2 || result.ParticipantVotes[1] != int(tc.vote) || result.ParticipantVotes[2] != int(proto.VoteOk) {
+			if len(result.ParticipantVotes) != 2 || result.ParticipantVotes[1] != int(tc.vote) || result.ParticipantVotes[2] != int(sinfonia.VoteOk) {
 				t.Fatalf("unexpected participant votes: %v", result.ParticipantVotes)
 			}
 			if tc.committed {
@@ -81,12 +81,12 @@ type lostOnePCReplyParticipant struct {
 	*memnode.Participant
 }
 
-func (n *lostOnePCReplyParticipant) ExecCommit1PC(ctx context.Context, req proto.ExecCommit1PCRequest) (proto.ExecCommit1PCResponse, error) {
+func (n *lostOnePCReplyParticipant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
 	resp, err := n.Participant.ExecCommit1PC(ctx, req)
 	if err != nil {
 		return resp, err
 	}
-	return proto.ExecCommit1PCResponse{}, errors.New("lost commit reply")
+	return sinfonia.ExecCommit1PCResponse{}, errors.New("lost commit reply")
 }
 
 func TestExecuteAndCommitReportsUnknownAfterLostReply(t *testing.T) {

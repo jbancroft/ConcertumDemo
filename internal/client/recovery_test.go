@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func TestCoordinatorLogsReadOnlyProjectionWhenTransactionHasWrites(t *testing.T) {
@@ -28,8 +28,8 @@ func TestCoordinatorLogsReadOnlyProjectionWhenTransactionHasWrites(t *testing.T)
 		ctx,
 		"",
 		nil,
-		[]proto.ReadItem{{MemID: 2, Addr: 0, Len: 1}},
-		[]proto.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
+		[]sinfonia.ReadItem{{MemID: 2, Addr: 0, Len: 1}},
+		[]sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
 	)
 	if !result.Committed {
 		t.Fatalf("transaction should commit: %+v", result)

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func TestClientNormalizesServerErrors(t *testing.T) {
@@ -18,8 +18,8 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 	server.Register("test.fail", func(context.Context, any) (any, error) {
 		return nil, errors.New("request rejected")
 	})
-	RegisterTyped(server, "test.typed", func(context.Context, proto.ReadRequest) (proto.ReadResponse, error) {
-		return proto.ReadResponse{}, nil
+	RegisterTyped(server, "test.typed", func(context.Context, sinfonia.ReadRequest) (sinfonia.ReadResponse, error) {
+		return sinfonia.ReadResponse{}, nil
 	})
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -41,19 +41,19 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 		{
 			name:        "handler rejection",
 			method:      "test.fail",
-			request:     proto.ReadRequest{},
+			request:     sinfonia.ReadRequest{},
 			wantMessage: "request rejected",
 		},
 		{
 			name:        "unknown method",
 			method:      "test.missing",
-			request:     proto.ReadRequest{},
+			request:     sinfonia.ReadRequest{},
 			wantMessage: `unknown rpc method "test.missing"`,
 		},
 		{
 			name:      "unexpected request type",
 			method:    "test.typed",
-			request:   proto.WriteRequest{},
+			request:   sinfonia.WriteRequest{},
 			wantParts: []string{"unexpected request type", "test.typed"},
 		},
 	}
@@ -62,7 +62,7 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			out := proto.ReadResponse{Data: []byte("unchanged")}
+			out := sinfonia.ReadResponse{Data: []byte("unchanged")}
 			err := client.Call(ctx, tt.method, tt.request, &out)
 			if err == nil {
 				t.Fatal("Call succeeded, want remote error")
@@ -95,7 +95,7 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 func TestClientRejectsUnexpectedSuccessBody(t *testing.T) {
 	server := NewServer(nil, nil)
 	server.Register("test.wrong_response", func(context.Context, any) (any, error) {
-		return proto.WriteResponse{Ack: true}, nil
+		return sinfonia.WriteResponse{Ack: true}, nil
 	})
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -109,8 +109,8 @@ func TestClientRejectsUnexpectedSuccessBody(t *testing.T) {
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	out := proto.ReadResponse{Data: []byte("unchanged")}
-	err = client.Call(ctx, "test.wrong_response", proto.ReadRequest{}, &out)
+	out := sinfonia.ReadResponse{Data: []byte("unchanged")}
+	err = client.Call(ctx, "test.wrong_response", sinfonia.ReadRequest{}, &out)
 	if err == nil || !strings.Contains(err.Error(), "unexpected response type") {
 		t.Fatalf("Call error = %v, want unexpected response type", err)
 	}
@@ -145,8 +145,8 @@ func TestClientRetiresConnectionAfterMalformedResponse(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	out := proto.ReadResponse{Data: []byte("unchanged")}
-	err := client.Call(ctx, "test.read", proto.ReadRequest{}, &out)
+	out := sinfonia.ReadResponse{Data: []byte("unchanged")}
+	err := client.Call(ctx, "test.read", sinfonia.ReadRequest{}, &out)
 	if err == nil {
 		t.Fatal("Call accepted malformed response")
 	}
@@ -170,7 +170,7 @@ func TestServerDoesNotDispatchMalformedRequest(t *testing.T) {
 	var called atomic.Bool
 	server.Register("test.read", func(context.Context, any) (any, error) {
 		called.Store(true)
-		return proto.ReadResponse{}, nil
+		return sinfonia.ReadResponse{}, nil
 	})
 
 	clientConn, serverConn := net.Pipe()

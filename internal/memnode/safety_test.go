@@ -6,14 +6,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func TestRateLimitRejectsGracefully(t *testing.T) {
 	n := NewParticipantWithId(1, 256)
 	n.ConfigureSafety(SafetyConfig{PrepareRate: 1, Burst: 1})
-	_, err1 := n.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: proto.TransactionID{Epoch: 1}})
-	_, err2 := n.ExecAndPrepare(context.Background(), proto.ExecPrepareRequest{TID: proto.TransactionID{Epoch: 1, Counter: 2}})
+	_, err1 := n.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: sinfonia.TransactionID{Epoch: 1}})
+	_, err2 := n.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: sinfonia.TransactionID{Epoch: 1, Counter: 2}})
 	if err1 != nil && err1 == ErrResourceExhausted {
 		t.Fatalf("first request should pass")
 	}

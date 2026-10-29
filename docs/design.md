@@ -11,7 +11,7 @@ flowchart TD
         Library --> Transaction[minitxn]
         Library --> Coordinator[internal/client]
     end
-    Coordinator --> Wire[internal/rpcwire + internal/proto]
+    Coordinator --> Wire[internal/rpcwire + internal/proto/sinfonia]
     Wire --> Node[internal/memnode]
     Node --> Storage[internal/storage]
 ```

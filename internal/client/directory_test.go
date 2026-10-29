@@ -4,14 +4,14 @@ import (
 	"testing"
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func TestDirectoryResolvePrimaryAndReplica(t *testing.T) {
 	d := client.NewDirectory()
 	d.Set(10, client.MemEndpoints{
-		Primary: proto.Endpoint{RPC: "127.0.0.1:4001"},
-		Replica: &proto.Endpoint{RPC: "127.0.0.1:4002"},
+		Primary: sinfonia.Endpoint{RPC: "127.0.0.1:4001"},
+		Replica: &sinfonia.Endpoint{RPC: "127.0.0.1:4002"},
 	})
 	primary, ok := d.ResolvePrimary(10)
 	if !ok || primary.RPC != "127.0.0.1:4001" {

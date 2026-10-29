@@ -8,7 +8,7 @@ import (
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
-	"github.com/jbancroft/ConcertumDemo/internal/proto"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
@@ -92,7 +92,7 @@ func NewClient(backend any) *Client {
 		Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error)
 		Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
 		GetStats(hostId uint32) (memnode.StatsResponse, error)
-		ExecuteAndCommit(ctx context.Context, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) client.ExecResult
+		ExecuteAndCommit(ctx context.Context, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) client.ExecResult
 	}:
 		return &Client{backend: &coordinatorBackend{inner: b}}
 	default:
@@ -179,7 +179,7 @@ type coordinatorBackend struct {
 		Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error)
 		Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
 		GetStats(hostId uint32) (memnode.StatsResponse, error)
-		ExecuteAndCommit(ctx context.Context, class string, compares []proto.CmpItem, reads []proto.ReadItem, writes []proto.WriteItem) client.ExecResult
+		ExecuteAndCommit(ctx context.Context, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) client.ExecResult
 	}
 }
 
@@ -200,17 +200,17 @@ func (b *coordinatorBackend) GetStats(hostId uint32) (Stats, error) {
 }
 
 func (b *coordinatorBackend) ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult {
-	internalCmp := make([]proto.CmpItem, 0, len(compares))
+	internalCmp := make([]sinfonia.CmpItem, 0, len(compares))
 	for _, item := range compares {
-		internalCmp = append(internalCmp, proto.CmpItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
+		internalCmp = append(internalCmp, sinfonia.CmpItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
 	}
-	internalReads := make([]proto.ReadItem, 0, len(reads))
+	internalReads := make([]sinfonia.ReadItem, 0, len(reads))
 	for _, item := range reads {
-		internalReads = append(internalReads, proto.ReadItem{MemID: item.HostId, Addr: item.Address, Len: item.Length})
+		internalReads = append(internalReads, sinfonia.ReadItem{MemID: item.HostId, Addr: item.Address, Len: item.Length})
 	}
-	internalWrites := make([]proto.WriteItem, 0, len(writes))
+	internalWrites := make([]sinfonia.WriteItem, 0, len(writes))
 	for _, item := range writes {
-		internalWrites = append(internalWrites, proto.WriteItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
+		internalWrites = append(internalWrites, sinfonia.WriteItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
 	}
 	res := b.inner.ExecuteAndCommit(ctx, class, internalCmp, internalReads, internalWrites)
 	readsOut := make(map[ReadKey][]byte, len(res.ReadResults))
