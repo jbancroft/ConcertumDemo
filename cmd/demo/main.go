@@ -25,8 +25,8 @@ const balanceAddr = 768 // Separate from the SQL catalog and index pages.
 const (
 	demoTimeout     = 30 * time.Second
 	shutdownTimeout = 5 * time.Second
-	nodeMemorySize  = 2 << 20
-	indexBaseAddr   = 64 << 10
+	nodeMemorySize  = 2 << 20  // 2 MiB
+	indexBaseAddr   = 64 << 10 // 64 KiB
 )
 
 func main() {
