@@ -1,6 +1,10 @@
 package sinfonia
 
-import "github.com/jbancroft/ConcertumDemo/minitxn"
+import (
+	"strconv"
+
+	"github.com/jbancroft/ConcertumDemo/minitxn"
+)
 
 // TransactionID combines a coordinator ID, counter, and epoch to identify an attempt.
 type TransactionID struct {
@@ -10,22 +14,7 @@ type TransactionID struct {
 }
 
 func (t TransactionID) CorrelationID() string {
-	return "txn-" + itoa64(t.CoordinatorID) + "-" + itoa64(t.Epoch) + "-" + itoa64(t.Counter)
-}
-
-func itoa64(v uint64) string {
-	if v == 0 {
-		return "0"
-	}
-	const digits = "0123456789"
-	buf := [20]byte{}
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = digits[v%10]
-		v /= 10
-	}
-	return string(buf[i:])
+	return "txn-" + strconv.FormatUint(t.CoordinatorID, 10) + "-" + strconv.FormatUint(t.Epoch, 10) + "-" + strconv.FormatUint(t.Counter, 10)
 }
 
 // CmpItem requires the bytes at (MemID, Addr) to match Data.
