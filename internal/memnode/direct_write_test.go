@@ -47,7 +47,7 @@ func TestDurableDirectWriteRejectedWithoutLiveOrRestartMutation(t *testing.T) {
 
 	resp, err := restarted.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{
 		RequestID:  "transactional-write",
-		TID:        sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1},
+		TID:        sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())},
 		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 4, Data: []byte("mtx")}},
 	})
 	if err != nil {

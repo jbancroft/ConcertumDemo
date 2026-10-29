@@ -90,7 +90,7 @@ func NewCoordinator(nodes map[uint32]Participant) *Coordinator {
 	for id, node := range nodes {
 		cpy[id] = node
 	}
-	c := &Coordinator{nodes: cpy, primaryFor: map[uint32]uint32{}, generations: map[uint32]uint64{}, coordID: newCoordinatorID(), epoch: 1, backoff: RandomBackoff{}, maxRetries: 5, workers: map[uint32]*rpcWorker{}, stats: map[uint32]StatsReader{}}
+	c := &Coordinator{nodes: cpy, primaryFor: map[uint32]uint32{}, generations: map[uint32]uint64{}, coordID: newCoordinatorID(), epoch: sinfonia.EpochAt(time.Now()), backoff: RandomBackoff{}, maxRetries: 5, workers: map[uint32]*rpcWorker{}, stats: map[uint32]StatsReader{}}
 	for id, node := range cpy {
 		c.workers[id] = newRPCWorker(id, node)
 	}
@@ -184,6 +184,9 @@ func (c *Coordinator) Write(ctx context.Context, hostId uint32, addr uint64, dat
 func (c *Coordinator) nextTID() sinfonia.TransactionID {
 	c.genMu.Lock()
 	defer c.genMu.Unlock()
+	if epoch := sinfonia.EpochAt(time.Now()); epoch > c.epoch {
+		c.epoch = epoch
+	}
 	c.tidCounter++
 	return sinfonia.TransactionID{CoordinatorID: c.coordID, Counter: c.tidCounter, Epoch: c.epoch}
 }
@@ -243,8 +246,8 @@ func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compar
 	attempt := 0
 	for {
 		txId := c.nextTID()
-		res, badLock := c.execAttempt(ctx, txId, hostIds, class, compares, reads, writes)
-		if !badLock {
+		res, retry := c.execAttempt(ctx, txId, hostIds, class, compares, reads, writes)
+		if !retry {
 			return res
 		}
 		if attempt >= c.maxRetries {
@@ -453,7 +456,8 @@ func (w *rpcWorker) flushPending(ctx context.Context) error {
 
 func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.TransactionID, hostIds []uint32, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) (ExecResult, bool) {
 	if len(hostIds) == 1 {
-		return c.execSingleParticipant1PC(ctx, txId, hostIds[0], class, compares, reads, writes), false
+		res := c.execSingleParticipant1PC(ctx, txId, hostIds[0], class, compares, reads, writes)
+		return res, res.Status == sinfonia.VoteBadStaleEpoch
 	}
 
 	results := make(chan prepareResult, len(hostIds))
@@ -485,7 +489,7 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 
 	decideCommit := true
 	status := sinfonia.VoteOk
-	badLock := false
+	retry := false
 	aggregatedReads := map[sinfonia.ReadItem][]byte{}
 	participantVotes := map[uint32]sinfonia.Vote{}
 	for range hostIds {
@@ -505,8 +509,8 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 			c.observeEpoch(r.resp.CurrentEpoch)
 			decideCommit = false
 			status = r.resp.Vote
-			if r.resp.Vote == sinfonia.VoteBadLock {
-				badLock = true
+			if r.resp.Vote == sinfonia.VoteBadLock || r.resp.Vote == sinfonia.VoteBadStaleEpoch {
+				retry = true
 			}
 			continue
 		}
@@ -525,7 +529,7 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 	}
 
 	if !decideCommit {
-		return ExecResult{Committed: false, ReadResults: map[sinfonia.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes}, badLock
+		return ExecResult{Committed: false, ReadResults: map[sinfonia.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes}, retry
 	}
 	return ExecResult{Committed: true, ReadResults: aggregatedReads, Status: sinfonia.VoteOk, ParticipantVotes: participantVotes}, false
 }

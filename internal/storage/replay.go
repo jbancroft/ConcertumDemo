@@ -40,7 +40,7 @@ type ReplayStore struct {
 	records map[string]replayRecord
 }
 
-// PublicRetryHorizon limits a transaction's age in epochs when a client retries it.
+// PublicRetryHorizon rejects transaction IDs two UTC-hour epochs behind the node.
 const PublicRetryHorizon uint64 = 2
 
 func OpenReplayStore(dir string) (*ReplayStore, error) {

@@ -10,7 +10,7 @@ import (
 type TransactionID struct {
 	CoordinatorID uint64
 	Counter       uint64
-	Epoch         uint64
+	Epoch         uint64 // UTC hours since the Unix epoch.
 }
 
 func (t TransactionID) CorrelationID() string {

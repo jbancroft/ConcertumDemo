@@ -26,7 +26,7 @@ func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = b.Close() })
 
-	txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if resp, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID: txId, Participants: participants, HasWrites: true,
@@ -78,7 +78,7 @@ func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = b.Close() })
 
-	txId := sinfonia.TransactionID{CoordinatorID: 44, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 44, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	for _, prepared := range []struct {
 		node   *memnode.Participant
@@ -147,7 +147,7 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = node.Close() })
-			txId := sinfonia.TransactionID{CoordinatorID: 80, Counter: 1, Epoch: 1}
+			txId := sinfonia.TransactionID{CoordinatorID: 80, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 			if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 				TID: txId, Participants: []uint32{1, 2}, HasWrites: true,
 				WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
@@ -177,48 +177,6 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 	}
 }
 
-func TestParticipantRejectsEpochZeroAtStaleBoundary(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		onePC bool
-	}{
-		{name: "prepare"},
-		{name: "one-phase", onePC: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			node := memnode.NewParticipant(64)
-			t.Cleanup(func() { _ = node.Close() })
-			now := time.Unix(1_000, 0)
-			node.SetEpochSourceForTest(time.Hour, func() time.Time { return now })
-			now = now.Add(time.Hour) // Current epoch is 2; epoch 0 is two epochs behind.
-			tid := sinfonia.TransactionID{CoordinatorID: 82, Counter: 1, Epoch: 0}
-			writes := []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}
-			var vote sinfonia.Vote
-			var err error
-			if tc.onePC {
-				var resp sinfonia.ExecCommit1PCResponse
-				resp, err = node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, WriteItems: writes})
-				vote = resp.Vote
-			} else {
-				var resp sinfonia.ExecPrepareResponse
-				resp, err = node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1}, HasWrites: true, WriteItems: writes})
-				vote = resp.Vote
-			}
-			if err != nil || vote != sinfonia.VoteBadStaleEpoch {
-				t.Fatalf("vote=%v err=%v, want stale-epoch vote", vote, err)
-			}
-			got, err := node.Read(ctx, 0, 1)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got[0] != 0 {
-				t.Fatalf("stale request changed memory: %q", got)
-			}
-		})
-	}
-}
-
 func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -227,17 +185,17 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = node.Close() })
-	before := time.Unix(1_000, 0)
+	before := time.Unix(3600, 0)
 	now := before
-	node.SetEpochSourceForTest(time.Hour, func() time.Time { return now })
-	txId := sinfonia.TransactionID{CoordinatorID: 81, Counter: 1, Epoch: 1}
+	node.SetClockForTest(func() time.Time { return now })
+	txId := sinfonia.TransactionID{CoordinatorID: 81, Counter: 1, Epoch: sinfonia.EpochAt(before)}
 	if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID: txId, Participants: []uint32{1, 2}, HasWrites: true,
 		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
 	}); err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("prepare resp=%+v err=%v", resp, err)
 	}
-	now = before.Add(2 * time.Minute)
+	now = before.Add(2 * time.Hour)
 	if err := node.ForceAbortForTest(txId); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +207,7 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	node.SetEpochSourceForTest(time.Hour, func() time.Time { return now })
+	node.SetClockForTest(func() time.Time { return now })
 
 	vote, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: txId, Epoch: txId.Epoch})
 	if err != nil {

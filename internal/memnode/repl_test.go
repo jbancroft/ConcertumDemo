@@ -78,7 +78,7 @@ func TestPrimaryCopyBasicDurabilityWithPromotion(t *testing.T) {
 	replica.ConfigureAsReplica(1)
 	primary.ConfigureAsPrimary(2, replica)
 
-	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	prep, err := primary.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 4, Data: []byte("R")}}})
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestExactReplaySurvivesBaselineTransferAndPromotion(t *testing.T) {
 				if err := primary.ApplyWriteForTest(0, []byte("seed")); err != nil {
 					return nil, err
 				}
-				id := sinfonia.TransactionID{CoordinatorID: 201, Counter: 1, Epoch: 1}
+				id := sinfonia.TransactionID{CoordinatorID: 201, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 				req := sinfonia.ExecPrepareRequest{TID: id, RequestID: "first", Participants: []uint32{1}, ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 4}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 				first, err := primary.ExecAndPrepare(ctx, req)
 				if err != nil || first.Vote != sinfonia.VoteOk || string(first.ReadData[0]) != "seed" {
@@ -158,7 +158,7 @@ func TestExactReplaySurvivesBaselineTransferAndPromotion(t *testing.T) {
 		{
 			name: "prepare-negative",
 			setup: func(ctx context.Context, primary *memnode.Participant) (func(context.Context, *memnode.Participant) error, error) {
-				id := sinfonia.TransactionID{CoordinatorID: 202, Counter: 1, Epoch: 1}
+				id := sinfonia.TransactionID{CoordinatorID: 202, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 				req := sinfonia.ExecPrepareRequest{TID: id, RequestID: "first", Participants: []uint32{1}, CmpItems: []sinfonia.CmpItem{{MemID: 1, Addr: 0, Data: []byte("Y")}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 				first, err := primary.ExecAndPrepare(ctx, req)
 				if err != nil || first.Vote != sinfonia.VoteBadCmp {
@@ -190,7 +190,7 @@ func TestExactReplaySurvivesBaselineTransferAndPromotion(t *testing.T) {
 				if err := primary.ApplyWriteForTest(0, []byte("seed")); err != nil {
 					return nil, err
 				}
-				id := sinfonia.TransactionID{CoordinatorID: 203, Counter: 1, Epoch: 1}
+				id := sinfonia.TransactionID{CoordinatorID: 203, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 				req := sinfonia.ExecCommit1PCRequest{TID: id, RequestID: "first", ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 4}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 				first, err := primary.ExecCommit1PC(ctx, req)
 				if err != nil || first.Vote != sinfonia.VoteOk || string(first.ReadData[0]) != "seed" {
@@ -223,7 +223,7 @@ func TestExactReplaySurvivesBaselineTransferAndPromotion(t *testing.T) {
 		{
 			name: "one-pc-negative",
 			setup: func(ctx context.Context, primary *memnode.Participant) (func(context.Context, *memnode.Participant) error, error) {
-				id := sinfonia.TransactionID{CoordinatorID: 204, Counter: 1, Epoch: 1}
+				id := sinfonia.TransactionID{CoordinatorID: 204, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 				req := sinfonia.ExecCommit1PCRequest{TID: id, RequestID: "first", CmpItems: []sinfonia.CmpItem{{MemID: 1, Addr: 0, Data: []byte("Y")}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 				first, err := primary.ExecCommit1PC(ctx, req)
 				if err != nil || first.Vote != sinfonia.VoteBadCmp {
@@ -309,7 +309,7 @@ func TestExactReplayLiveReplicationSurvivesPromotion(t *testing.T) {
 		}
 		replica.ConfigureAsReplica(1)
 		primary.ConfigureAsPrimary(2, replica)
-		txId := sinfonia.TransactionID{CoordinatorID: 205, Counter: 1, Epoch: 1}
+		txId := sinfonia.TransactionID{CoordinatorID: 205, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 		req := sinfonia.ExecPrepareRequest{TID: txId, RequestID: "first", Participants: []uint32{1}, CmpItems: []sinfonia.CmpItem{{MemID: 1, Addr: 0, Data: []byte("Y")}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 		first, err := primary.ExecAndPrepare(ctx, req)
 		if err != nil || first.Vote != sinfonia.VoteBadCmp {
@@ -360,7 +360,7 @@ func TestExactReplayLiveReplicationSurvivesPromotion(t *testing.T) {
 		}
 		replica.ConfigureAsReplica(1)
 		primary.ConfigureAsPrimary(2, replica)
-		id := sinfonia.TransactionID{CoordinatorID: 206, Counter: 1, Epoch: 1}
+		id := sinfonia.TransactionID{CoordinatorID: 206, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 		req := sinfonia.ExecCommit1PCRequest{TID: id, RequestID: "first", ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 4}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 		first, err := primary.ExecCommit1PC(ctx, req)
 		if err != nil || first.Vote != sinfonia.VoteOk || string(first.ReadData[0]) != "seed" {
@@ -399,7 +399,7 @@ func TestReplicationBlockingPrimaryWaitsForReplicaAck(t *testing.T) {
 	replica.ConfigureAsReplica(1)
 	primary.ConfigureAsPrimary(2, &slowReplica{node: replica, delay: 80 * time.Millisecond})
 
-	txId := sinfonia.TransactionID{CoordinatorID: 3, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 3, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	start := time.Now()
 	resp, err := primary.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("x")}}})
 	if err != nil {
@@ -420,7 +420,7 @@ func TestReplicaCrashDuringPrepareVotesBadInternal(t *testing.T) {
 	t.Cleanup(func() { _ = primary.Close() })
 	primary.ConfigureAsPrimary(2, failingReplica{})
 
-	txId := sinfonia.TransactionID{CoordinatorID: 8, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 8, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	resp, err := primary.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("q")}}})
 	if err != nil {
 		t.Fatal(err)
@@ -446,7 +446,7 @@ func TestReplayReplicationFailureIsRepairedOnRetry(t *testing.T) {
 	replica.ConfigureAsReplica(1)
 	primary.ConfigureAsPrimary(2, replayFailingReplica{node: replica})
 
-	txId := sinfonia.TransactionID{CoordinatorID: 207, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 207, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecPrepareRequest{
 		TID:          txId,
 		RequestID:    "first",
@@ -491,7 +491,7 @@ func TestCommitDecisionReplicationAndReplicaRecovery(t *testing.T) {
 	replica.ConfigureAsReplica(1)
 	primary.ConfigureAsPrimary(2, replica)
 
-	txId := sinfonia.TransactionID{CoordinatorID: 5, Counter: 2, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 5, Counter: 2, Epoch: sinfonia.EpochAt(time.Now())}
 	prepare, err := primary.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 9, Data: []byte("m")}}})
 	if err != nil {
 		t.Fatal(err)

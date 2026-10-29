@@ -285,6 +285,12 @@ func TestReplayStoreCompactPreservesRetryableTID(t *testing.T) {
 	if err := store.AppendOnePC(zeroEpoch, sinfonia.ExecCommit1PCResponse{RequestID: "zero", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Compact(storage.ReplayRetention{CurrentEpoch: 2, RetryHorizon: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.GetOnePC(zeroEpoch); ok {
+		t.Fatal("epoch-zero reply retained at the expiration boundary")
+	}
 	if err := store.Compact(storage.ReplayRetention{CurrentEpoch: 10, RetryHorizon: 8}); err != nil {
 		t.Fatal(err)
 	}

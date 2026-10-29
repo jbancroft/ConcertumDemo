@@ -53,6 +53,13 @@ the transaction aborted. The API reports committed, aborted, or unknown.
 Participants remember replies so duplicate requests can get the same result
 without applying writes twice.
 
+Transaction epochs are UTC hours since the Unix epoch, shared by coordinators
+and participants regardless of when they start. Each process keeps its epoch
+from moving backward. A participant rejects an unfamiliar transaction two or
+more epochs behind; the coordinator learns newer epochs from replies and retries
+an explicit stale-epoch rejection with a fresh transaction ID, within its retry
+limit. This assumes roughly synchronized system clocks.
+
 ## Disk storage and recovery
 
 A durable node saves its memory image, redo entries, decisions, forced-abort
@@ -64,6 +71,10 @@ give a prepared participant permission to abort on its own.
 Old redo entries can be removed once there's enough evidence that the committed
 updates reached all required participants. Tests cover interrupted recovery,
 failed writes, duplicate requests, forced aborts, and log cleanup.
+
+Before discarding old replies or forced-abort records, a durable node saves an
+epoch floor. Restarts and replication baselines preserve that floor so a clock
+rollback cannot make a forgotten transaction eligible to execute again.
 
 In the demo, recovery peers call each other directly inside one process. Client
 requests use TCP on local, automatically assigned ports. Reopening the saved

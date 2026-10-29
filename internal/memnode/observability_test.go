@@ -106,7 +106,7 @@ func TestDebugEndpointAvailability(t *testing.T) {
 
 func TestMetricsCommitAbortAndRetry(t *testing.T) {
 	n := NewParticipant(32)
-	tid1 := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	tid1 := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	_, err := n.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: tid1, Participants: []uint32{1}, Class: "payments", WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("a")}}})
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestMetricsCommitAbortAndRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tid2 := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 1}
+	tid2 := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: sinfonia.EpochAt(time.Now())}
 	_, err = n.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: tid2, Participants: []uint32{1}, Class: "payments", WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("b")}}})
 	if err != nil {
 		t.Fatal(err)
@@ -196,8 +196,8 @@ func TestStatsSnapshotRateWindows(t *testing.T) {
 func TestBadLockIncludesConflictContext(t *testing.T) {
 	n := NewParticipant(64)
 	ctx := context.Background()
-	tid1 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
-	tid2 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: 1}
+	tid1 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+	tid2 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: sinfonia.EpochAt(time.Now())}
 	if resp, err := n.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID: tid1, CorrelationID: tid1.CorrelationID(), Participants: []uint32{1},
 		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("abc")}},
@@ -227,7 +227,7 @@ func TestDebugTimelineAndRedoInspectEndpoints(t *testing.T) {
 	}
 	defer n.Close()
 	n.enableDebugEndpoints = true
-	txId := sinfonia.TransactionID{CoordinatorID: 9, Counter: 5, Epoch: 3}
+	txId := sinfonia.TransactionID{CoordinatorID: 9, Counter: 5, Epoch: sinfonia.EpochAt(time.Now())}
 	if resp, err := n.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{
 		TID: txId, CorrelationID: txId.CorrelationID(), Participants: []uint32{1},
 		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("q")}},
@@ -239,7 +239,7 @@ func TestDebugTimelineAndRedoInspectEndpoints(t *testing.T) {
 	}
 	srv := httptest.NewServer(n.HTTPHandler(false))
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/debug/txn_timeline?coord=9&counter=5&epoch=3")
+	resp, err := http.Get(srv.URL + "/debug/txn_timeline?coord=9&counter=5&epoch=" + strconv.FormatUint(txId.Epoch, 10))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestFsyncHistogramAndReplicationLag(t *testing.T) {
 	replica.ConfigureAsReplica(1)
 
 	primary.ConfigureAsPrimary(2, replica)
-	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	_, err = primary.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("x")}}})
 	if err != nil {
 		t.Fatal(err)

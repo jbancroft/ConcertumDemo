@@ -102,7 +102,7 @@ func (n *Participant) ExportReplicationBaselineChunk(ctx context.Context, req si
 	if err := readAt(data, int64(req.Offset)); err != nil {
 		return sinfonia.ExportReplicationBaselineChunkResponse{Ack: false}, err
 	}
-	resp := sinfonia.ExportReplicationBaselineChunkResponse{Ack: true, Data: data, TotalSize: uint64(total)}
+	resp := sinfonia.ExportReplicationBaselineChunkResponse{Ack: true, Data: data, TotalSize: uint64(total), EpochFloor: n.epochFloor}
 	if artifact == baselineArtifactImage && req.Offset == 0 && n.replay != nil {
 		replaySize, err := n.replay.Size()
 		if err != nil {
@@ -197,6 +197,7 @@ func (n *Participant) BeginReplicationBaseline(ctx context.Context, req sinfonia
 		replayChecksum:  append([]byte(nil), req.ReplaySHA256...),
 		replayPresent:   replayPresent,
 		boundary:        req.BoundaryTID,
+		epochFloor:      req.EpochFloor,
 	}
 	return sinfonia.BeginReplicationBaselineResponse{Ack: true}, nil
 }
@@ -301,7 +302,7 @@ func (n *Participant) CommitReplicationBaseline(ctx context.Context, req sinfoni
 	path := transfer.path
 	replayPath := transfer.replayPath
 	boundary := transfer.boundary
-	if _, err := n.installReplicationBaselineFileLocked(req.BarrierOwner, path, replayPath, boundary); err != nil {
+	if _, err := n.installReplicationBaselineFileLocked(req.BarrierOwner, path, replayPath, boundary, transfer.epochFloor); err != nil {
 		n.abortBaselineTransferLocked()
 		return sinfonia.CommitReplicationBaselineResponse{Ack: false}, err
 	}
@@ -346,19 +347,23 @@ func (n *Participant) abortBaselineTransferLocked() {
 	n.baselineTransfer = nil
 }
 
-func (n *Participant) installReplicationBaselineFileLocked(owner, path, replayPath string, boundary sinfonia.TransactionID) (sinfonia.InstallReplicationBaselineResponse, error) {
-	return n.installReplicationBaselineLocked(owner, nil, path, replayPath, boundary)
+func (n *Participant) installReplicationBaselineFileLocked(owner, path, replayPath string, boundary sinfonia.TransactionID, epochFloor uint64) (sinfonia.InstallReplicationBaselineResponse, error) {
+	return n.installReplicationBaselineLocked(owner, nil, path, replayPath, boundary, epochFloor)
 }
 
-func (n *Participant) installReplicationBaselineBytesLocked(owner string, image, checksum []byte, boundary sinfonia.TransactionID) (sinfonia.InstallReplicationBaselineResponse, error) {
+func (n *Participant) installReplicationBaselineBytesLocked(owner string, image, checksum []byte, boundary sinfonia.TransactionID, epochFloor uint64) (sinfonia.InstallReplicationBaselineResponse, error) {
 	if len(checksum) != sha256.Size || !equalBytes(checksum, sha256Bytes(image)) {
 		return sinfonia.InstallReplicationBaselineResponse{Ack: false}, errors.New("replication baseline checksum mismatch")
 	}
-	return n.installReplicationBaselineLocked(owner, image, "", "", boundary)
+	return n.installReplicationBaselineLocked(owner, image, "", "", boundary, epochFloor)
 }
 
-func (n *Participant) installReplicationBaselineLocked(owner string, image []byte, stagedPath, stagedReplayPath string, boundary sinfonia.TransactionID) (sinfonia.InstallReplicationBaselineResponse, error) {
+func (n *Participant) installReplicationBaselineLocked(owner string, image []byte, stagedPath, stagedReplayPath string, boundary sinfonia.TransactionID, epochFloor uint64) (sinfonia.InstallReplicationBaselineResponse, error) {
 	if err := n.touchGlobalLockLocked(owner); err != nil {
+		return sinfonia.InstallReplicationBaselineResponse{Ack: false}, err
+	}
+	// The floor cannot roll back with the image, even if installation fails.
+	if err := n.persistEpochFloorLocked(epochFloor); err != nil {
 		return sinfonia.InstallReplicationBaselineResponse{Ack: false}, err
 	}
 	n.baselineRecoveryRequired = true

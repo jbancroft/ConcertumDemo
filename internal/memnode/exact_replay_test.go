@@ -22,7 +22,7 @@ func TestDurableOnePCReplaysOriginalReadPayloadWithoutReapplyingWrite(t *testing
 	if err := n.ApplyWriteForTest(0, []byte("seed")); err != nil {
 		t.Fatal(err)
 	}
-	txId := sinfonia.TransactionID{CoordinatorID: 71, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 71, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecCommit1PCRequest{
 		TID:        txId,
 		RequestID:  "first",
@@ -76,7 +76,7 @@ func TestDurableSuccessfulPrepareReplaysOriginalReadPayloadAfterRestart(t *testi
 	if err := n.ApplyWriteForTest(0, []byte("seed")); err != nil {
 		t.Fatal(err)
 	}
-	txId := sinfonia.TransactionID{CoordinatorID: 74, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 74, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecPrepareRequest{
 		TID:          txId,
 		RequestID:    "first",
@@ -120,7 +120,7 @@ func TestDurableNegativePrepareOutcomeReplaysAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	txId := sinfonia.TransactionID{CoordinatorID: 72, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 72, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecPrepareRequest{
 		TID:          txId,
 		RequestID:    "first",
@@ -160,7 +160,7 @@ func TestDurableNegativeOnePCOutcomeReplaysAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	txId := sinfonia.TransactionID{CoordinatorID: 73, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 73, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecCommit1PCRequest{TID: txId, RequestID: "first", CmpItems: []sinfonia.CmpItem{{MemID: 1, Addr: 0, Data: []byte("Y")}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 4, Data: []byte("A")}}}
 	resp, err := n.ExecCommit1PC(ctx, req)
 	if err != nil || resp.Vote != sinfonia.VoteBadCmp {
@@ -211,7 +211,7 @@ func TestPrepareCrashAfterRedoBeforeReplayDoesNotReexecuteKnownTID(t *testing.T)
 		}
 		return nil
 	})
-	txId := sinfonia.TransactionID{CoordinatorID: 75, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 75, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecPrepareRequest{
 		TID:          txId,
 		RequestID:    "first",
@@ -273,7 +273,7 @@ func TestOnePCCrashAfterDecisionBeforeReplayDoesNotReexecuteKnownTID(t *testing.
 		}
 		return nil
 	})
-	txId := sinfonia.TransactionID{CoordinatorID: 76, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 76, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecCommit1PCRequest{TID: txId, RequestID: "first", WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 	resp, err := n.ExecCommit1PC(ctx, req)
 	if !errors.Is(err, crash) || resp.Vote != sinfonia.VoteBadInternal {
@@ -320,7 +320,7 @@ func TestOnePCOutOfBoundsWriteDoesNotPersistSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = n.Close() })
-	txId := sinfonia.TransactionID{CoordinatorID: 77, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 77, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	resp, err := n.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: txId, RequestID: "invalid", WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 31, Data: []byte("XX")}}})
 	if !errors.Is(err, memnode.ErrOutOfBounds) || resp.Vote != sinfonia.VoteBadInternal {
 		t.Fatalf("out-of-bounds response = %+v, err = %v", resp, err)
@@ -375,7 +375,7 @@ func TestReplicatedPrepareDuplicateWaitsForOriginalReadPayload(t *testing.T) {
 	}
 	replica := newBlockingReplica()
 	n.ConfigureAsPrimary(2, replica)
-	txId := sinfonia.TransactionID{CoordinatorID: 78, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 78, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecPrepareRequest{TID: txId, RequestID: "first", Participants: []uint32{1}, ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 4}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 	type result struct {
 		resp sinfonia.ExecPrepareResponse
@@ -415,7 +415,7 @@ func TestReplicatedOnePCDuplicateWaitsForOriginalOutcome(t *testing.T) {
 	t.Cleanup(func() { _ = n.Close() })
 	replica := newBlockingReplica()
 	n.ConfigureAsPrimary(2, replica)
-	txId := sinfonia.TransactionID{CoordinatorID: 79, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 79, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecCommit1PCRequest{TID: txId, RequestID: "first", ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 	type result struct {
 		resp sinfonia.ExecCommit1PCResponse
@@ -460,7 +460,7 @@ func TestReplicatedPrepareDuplicateSharesOriginalReplicationFailure(t *testing.T
 	replica.redoAck = false
 	replica.redoErr = context.DeadlineExceeded
 	n.ConfigureAsPrimary(2, replica)
-	txId := sinfonia.TransactionID{CoordinatorID: 80, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 80, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecPrepareRequest{TID: txId, RequestID: "first", Participants: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}}
 	type result struct {
 		resp sinfonia.ExecPrepareResponse

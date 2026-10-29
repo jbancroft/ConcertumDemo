@@ -84,7 +84,7 @@ func TestCoordinatorReportsUnknownWhenPrepareResponseLostAfterVote(t *testing.T)
 	if !res.UnknownOutcome || res.TransportErr == nil || res.Committed {
 		t.Fatalf("expected unknown outcome with transport error, got %+v", res)
 	}
-	resp, err := n1.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, RequestID: "retry", Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}})
+	resp, err := n1.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}, RequestID: "retry", Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}})
 	if err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("expected idempotent prepared vote on retry, resp=%+v err=%v", resp, err)
 	}

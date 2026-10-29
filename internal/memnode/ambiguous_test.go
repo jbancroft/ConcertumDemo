@@ -3,13 +3,14 @@ package memnode
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testing.T) {
 	n := NewParticipant(8)
-	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecCommit1PCRequest{TID: txId, RequestID: "first", ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
 	resp, err := n.ExecCommit1PC(context.Background(), req)
 	if err != nil || resp.Vote != sinfonia.VoteOk || string(resp.ReadData[0]) != "\x00" {
@@ -30,7 +31,7 @@ func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testin
 
 func TestPrepareAndCommitDuplicateTIDReturnOriginalOutcomeAfterResponseLoss(t *testing.T) {
 	n := NewParticipant(8)
-	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: sinfonia.EpochAt(time.Now())}
 	prep := sinfonia.ExecPrepareRequest{TID: txId, RequestID: "prepare-1", Participants: []uint32{1}, ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
 	resp, err := n.ExecAndPrepare(context.Background(), prep)
 	if err != nil || resp.Vote != sinfonia.VoteOk || string(resp.ReadData[0]) != "\x00" {

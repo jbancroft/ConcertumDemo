@@ -76,7 +76,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = b.Close() })
 
-	txId := sinfonia.TransactionID{CoordinatorID: 41, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 41, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID:          txId,
@@ -224,7 +224,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = b.Close() })
 
-			txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
+			txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 			participants := []uint32{1, 2}
 			if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 				TID:          txId,
@@ -325,7 +325,7 @@ func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	}
 	primary.ConfigureAsPrimary(2, blocking)
 
-	txId := sinfonia.TransactionID{CoordinatorID: 43, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 43, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	if prep, err := primary.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID:          txId,
 		Participants: []uint32{1, 3},
@@ -407,7 +407,7 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 	}
 	b := memnode.NewParticipantWithId(2, 64)
 
-	txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID:          txId,

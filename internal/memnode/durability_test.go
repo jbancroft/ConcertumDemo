@@ -34,7 +34,7 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
 
-	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: participants, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}); err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = b.Close() })
-	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 4, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 4, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: participants, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 5, Data: []byte("K")}}}); err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
 	if err := n.ApplyWriteForTest(0, []byte("seed")); err != nil {
 		t.Fatal(err)
 	}
-	txId := sinfonia.TransactionID{CoordinatorID: 9, Counter: 9, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 9, Counter: 9, Epoch: sinfonia.EpochAt(time.Now())}
 	resp, err := n.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1}, ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 4}}})
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +145,7 @@ func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
 
-	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 11, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 11, Epoch: sinfonia.EpochAt(time.Now())}
 	parts := []uint32{1, 2}
 	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("a")}}})
 	_, _ = b.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 2, Addr: 0, Data: []byte("b")}}})
@@ -173,7 +173,7 @@ func TestRedoLogGCNoPrematureTruncationWithoutRemoteConfirm(t *testing.T) {
 	root := t.TempDir()
 	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
 	t.Cleanup(func() { _ = a.Close() })
-	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 12, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 12, Epoch: sinfonia.EpochAt(time.Now())}
 	parts := []uint32{1, 2}
 	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("a")}}})
 	_, _ = a.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: true})
@@ -191,7 +191,7 @@ func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
 	root := t.TempDir()
 	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
 	t.Cleanup(func() { _ = a.Close() })
-	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 13, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 13, Epoch: sinfonia.EpochAt(time.Now())}
 	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 2, Data: []byte("a")}}})
 	_, _ = a.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: false})
 
@@ -208,13 +208,13 @@ func TestForcedAbortEpochGC(t *testing.T) {
 	root := t.TempDir()
 	n, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "n"))
 	t.Cleanup(func() { _ = n.Close() })
-	base := time.Unix(1000, 0)
-	n.SetEpochSourceForTest(time.Second, func() time.Time { return base })
-	old := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	base := time.Unix(3600, 0)
+	n.SetClockForTest(func() time.Time { return base })
+	old := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(base)}
 	recent := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 5}
 	_, _ = n.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: old})
 	_, _ = n.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: recent})
-	base = base.Add(6 * time.Second)
+	base = base.Add(6 * time.Hour)
 
 	if err := n.RunForcedAbortGC(); err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 	t.Cleanup(func() { _ = b.Close() })
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
-	txId := sinfonia.TransactionID{CoordinatorID: 5, Counter: 1, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 5, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	parts := []uint32{1, 2}
 	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 7, Data: []byte("x")}}})
 	_, _ = b.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 2, Addr: 7, Data: []byte("y")}}})
@@ -282,7 +282,7 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 
 	fault := errors.New("injected write apply failure")
 	n.SetWriteApplyFaultForTest(func(uint64, []byte) error { return fault })
-	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 99, Epoch: 1}
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 99, Epoch: sinfonia.EpochAt(time.Now())}
 	resp, err := n.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{
 		TID:        txId,
 		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 4, Data: []byte("redo")}},

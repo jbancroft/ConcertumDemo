@@ -191,6 +191,7 @@ type ExportReplicationBaselineResponse struct {
 	Image       []byte
 	SHA256      []byte
 	BoundaryTID TransactionID
+	EpochFloor  uint64
 }
 
 type InstallReplicationBaselineRequest struct {
@@ -198,6 +199,7 @@ type InstallReplicationBaselineRequest struct {
 	Image        []byte
 	SHA256       []byte
 	BoundaryTID  TransactionID
+	EpochFloor   uint64
 }
 
 type InstallReplicationBaselineResponse struct {
@@ -222,6 +224,7 @@ type ExportReplicationBaselineChunkResponse struct {
 	ReplaySize   uint64
 	ReplaySHA256 []byte
 	BoundaryTID  TransactionID
+	EpochFloor   uint64
 }
 
 type BeginReplicationBaselineRequest struct {
@@ -232,6 +235,7 @@ type BeginReplicationBaselineRequest struct {
 	ReplaySize   uint64
 	ReplaySHA256 []byte
 	BoundaryTID  TransactionID
+	EpochFloor   uint64
 }
 
 type BeginReplicationBaselineResponse struct {

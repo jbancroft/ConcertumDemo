@@ -127,6 +127,7 @@ type baselineTransfer struct {
 	replayChecksum   []byte
 	replayPresent    bool
 	boundary         sinfonia.TransactionID
+	epochFloor       uint64
 }
 
 func (m *LockManager) tryLock(start, end uint64, write bool) bool {
@@ -233,25 +234,24 @@ type PrimarySyncPeer interface {
 }
 
 type Participant struct {
-	mu            sync.Mutex
-	cond          *sync.Cond
-	hostId        uint32
-	memory        []byte
-	storageDir    string
-	durable       bool
-	diskImage     *storage.DiskImage
-	redoLog       *storage.RedoLog
-	decided       *storage.DecidedTransactionLog
-	forcedAborts  *storage.ForcedAbortLog
-	replay        *storage.ReplayStore
-	inDoubt       map[sinfonia.TransactionID]*preparedTxn
-	locks         LockManager
-	epoch         uint64
-	allLogTxIds   map[sinfonia.TransactionID]struct{}
-	participants  map[uint32]RecoveryPeer
-	epochDuration time.Duration
-	nowFn         func() time.Time
-	epochBase     time.Time
+	mu           sync.Mutex
+	cond         *sync.Cond
+	hostId       uint32
+	memory       []byte
+	storageDir   string
+	durable      bool
+	diskImage    *storage.DiskImage
+	redoLog      *storage.RedoLog
+	decided      *storage.DecidedTransactionLog
+	forcedAborts *storage.ForcedAbortLog
+	replay       *storage.ReplayStore
+	inDoubt      map[sinfonia.TransactionID]*preparedTxn
+	locks        LockManager
+	epoch        uint64
+	epochFloor   uint64
+	allLogTxIds  map[sinfonia.TransactionID]struct{}
+	participants map[uint32]RecoveryPeer
+	nowFn        func() time.Time
 
 	appliedLocal    map[sinfonia.TransactionID]bool
 	appliedRemote   map[sinfonia.TransactionID]map[uint32]bool
@@ -321,8 +321,7 @@ func (n *Participant) initSafetyDefaults() {
 }
 
 func NewParticipant(size int) *Participant {
-	now := time.Now()
-	n := &Participant{memory: make([]byte, size), inDoubt: make(map[sinfonia.TransactionID]*preparedTxn), epoch: 1, allLogTxIds: map[sinfonia.TransactionID]struct{}{}, epochDuration: time.Minute, nowFn: time.Now, epochBase: now, participants: map[uint32]RecoveryPeer{}, appliedLocal: map[sinfonia.TransactionID]bool{}, appliedRemote: map[sinfonia.TransactionID]map[uint32]bool{}, pendingNotify: map[uint32]map[sinfonia.TransactionID]struct{}{}, logParticipants: map[sinfonia.TransactionID][]uint32{}, timelines: map[sinfonia.TransactionID][]sinfonia.TxnTimelineEvent{}, prepareOutcomes: map[sinfonia.TransactionID]prepareOutcome{}, onePCOutcomes: map[sinfonia.TransactionID]onePCOutcome{}, commitOutcomes: map[sinfonia.TransactionID]commitOutcome{}, prepareFlights: map[sinfonia.TransactionID]*prepareFlight{}, onePCFlights: map[sinfonia.TransactionID]*onePCFlight{}}
+	n := &Participant{memory: make([]byte, size), inDoubt: make(map[sinfonia.TransactionID]*preparedTxn), allLogTxIds: map[sinfonia.TransactionID]struct{}{}, nowFn: time.Now, participants: map[uint32]RecoveryPeer{}, appliedLocal: map[sinfonia.TransactionID]bool{}, appliedRemote: map[sinfonia.TransactionID]map[uint32]bool{}, pendingNotify: map[uint32]map[sinfonia.TransactionID]struct{}{}, logParticipants: map[sinfonia.TransactionID][]uint32{}, timelines: map[sinfonia.TransactionID][]sinfonia.TxnTimelineEvent{}, prepareOutcomes: map[sinfonia.TransactionID]prepareOutcome{}, onePCOutcomes: map[sinfonia.TransactionID]onePCOutcome{}, commitOutcomes: map[sinfonia.TransactionID]commitOutcome{}, prepareFlights: map[sinfonia.TransactionID]*prepareFlight{}, onePCFlights: map[sinfonia.TransactionID]*onePCFlight{}}
 	n.mode = ModeSingle
 	n.metrics = newNodeMetrics()
 	n.recoveryComplete = true
@@ -353,6 +352,10 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 		return nil, err
 	}
 	if err := storage.RecoverBaselineInstall(dir); err != nil {
+		return nil, err
+	}
+	epochFloor, err := storage.LoadEpochFloor(dir)
+	if err != nil {
 		return nil, err
 	}
 	generation, err := loadFencingGeneration(dir)
@@ -393,13 +396,12 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 		decided:          decided,
 		forcedAborts:     forcedAbort,
 		inDoubt:          make(map[sinfonia.TransactionID]*preparedTxn),
-		epoch:            1,
+		epoch:            epochFloor,
+		epochFloor:       epochFloor,
 		allLogTxIds:      map[sinfonia.TransactionID]struct{}{},
 		participants:     map[uint32]RecoveryPeer{},
 		replay:           replay,
-		epochDuration:    time.Minute,
 		nowFn:            time.Now,
-		epochBase:        now,
 		appliedLocal:     map[sinfonia.TransactionID]bool{},
 		appliedRemote:    map[sinfonia.TransactionID]map[uint32]bool{},
 		pendingNotify:    map[uint32]map[sinfonia.TransactionID]struct{}{},
@@ -472,18 +474,6 @@ func (n *Participant) Close() error {
 	return disk.Close()
 }
 
-func (n *Participant) SetEpochSourceForTest(epochDuration time.Duration, nowFn func() time.Time) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if epochDuration > 0 {
-		n.epochDuration = epochDuration
-	}
-	if nowFn != nil {
-		n.nowFn = nowFn
-		n.epochBase = nowFn()
-	}
-}
-
 func (n *Participant) SetRedoBatchingForTest(window time.Duration, max int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -530,28 +520,27 @@ func (n *Participant) RedoFsyncCountForTest() uint64 {
 }
 
 func (n *Participant) currentEpochLocked() uint64 {
-	if n.epochDuration <= 0 {
-		n.epochDuration = time.Minute
-	}
-	now := time.Now()
-	if n.nowFn != nil {
-		now = n.nowFn()
-	}
-	if n.epochBase.IsZero() {
-		n.epochBase = now
-	}
-	elapsed := now.Sub(n.epochBase)
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	current := uint64(elapsed/n.epochDuration) + 1
-	if current == 0 {
-		current = 1
-	}
+	current := sinfonia.EpochAt(n.nowFn())
 	if current > n.epoch {
 		n.epoch = current
 	}
 	return n.epoch
+}
+
+func (n *Participant) persistEpochFloorLocked(epoch uint64) error {
+	if epoch > n.epoch {
+		n.epoch = epoch
+	}
+	if epoch <= n.epochFloor {
+		return nil
+	}
+	if n.storageDir != "" {
+		if err := storage.StoreEpochFloor(n.storageDir, epoch); err != nil {
+			return err
+		}
+	}
+	n.epochFloor = epoch
+	return nil
 }
 
 func (n *Participant) SetRecoveryPeers(peers map[uint32]RecoveryPeer) {
@@ -1749,7 +1738,7 @@ func (n *Participant) ExportReplicationBaseline(ctx context.Context, req sinfoni
 	if n.redoLog != nil {
 		boundary = n.redoLog.LastTID()
 	}
-	return sinfonia.ExportReplicationBaselineResponse{Ack: true, Image: image, SHA256: checksum[:], BoundaryTID: boundary}, nil
+	return sinfonia.ExportReplicationBaselineResponse{Ack: true, Image: image, SHA256: checksum[:], BoundaryTID: boundary, EpochFloor: n.epochFloor}, nil
 }
 
 // InstallReplicationBaseline replaces a replica's image and old transaction state.
@@ -1773,7 +1762,7 @@ func (n *Participant) InstallReplicationBaseline(ctx context.Context, req sinfon
 	if len(req.Image) != len(n.memory) {
 		return sinfonia.InstallReplicationBaselineResponse{Ack: false}, fmt.Errorf("replication baseline size %d does not match memory size %d", len(req.Image), len(n.memory))
 	}
-	return n.installReplicationBaselineBytesLocked(req.BarrierOwner, req.Image, req.SHA256, req.BoundaryTID)
+	return n.installReplicationBaselineBytesLocked(req.BarrierOwner, req.Image, req.SHA256, req.BoundaryTID, req.EpochFloor)
 }
 
 func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPeer) error {
@@ -1814,7 +1803,7 @@ func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPe
 		return errors.New("primary returned an invalid replay baseline manifest")
 	}
 	sessionID := fmt.Sprintf("%s/%d", owner, time.Now().UnixNano())
-	begin, err := n.BeginReplicationBaseline(ctx, sinfonia.BeginReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID, TotalSize: first.TotalSize, SHA256: first.SHA256, ReplaySize: first.ReplaySize, ReplaySHA256: first.ReplaySHA256, BoundaryTID: first.BoundaryTID})
+	begin, err := n.BeginReplicationBaseline(ctx, sinfonia.BeginReplicationBaselineRequest{BarrierOwner: owner, SessionID: sessionID, TotalSize: first.TotalSize, SHA256: first.SHA256, ReplaySize: first.ReplaySize, ReplaySHA256: first.ReplaySHA256, BoundaryTID: first.BoundaryTID, EpochFloor: first.EpochFloor})
 	if err != nil || !begin.Ack {
 		if err != nil {
 			return err
@@ -1985,10 +1974,10 @@ func (n *Participant) FlushAppliedNotifications(ctx context.Context) {
 
 func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 	n.metrics.logGCRuns.Inc()
-	n.log(slog.LevelInfo, "GC truncation", "epoch", n.epoch)
 	n.FlushAppliedNotifications(ctx)
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.log(slog.LevelInfo, "GC truncation", "epoch", n.epoch)
 	if n.redoLog == nil {
 		return nil
 	}
@@ -2058,13 +2047,16 @@ func (n *Participant) RunRedoLogGCRPC(ctx context.Context, _ sinfonia.RunRedoLog
 }
 
 func (n *Participant) RunForcedAbortGC() error {
-	n.log(slog.LevelInfo, "GC truncation", "epoch", n.epoch)
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.forcedAborts == nil {
 		return nil
 	}
 	current := n.currentEpochLocked()
+	n.log(slog.LevelInfo, "GC truncation", "epoch", current)
+	if err := n.persistEpochFloorLocked(current); err != nil {
+		return err
+	}
 	_, err := n.forcedAborts.GCByEpoch(current)
 	return err
 }
@@ -2196,8 +2188,8 @@ func (n *Participant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDe
 // The node stays unavailable if it can't safely finish recovery.
 func (n *Participant) Recover(ctx context.Context) error {
 	n.metrics.recoveryRuns.Inc()
-	n.log(slog.LevelInfo, "Recovery initiated", "epoch", n.epoch)
 	n.mu.Lock()
+	n.log(slog.LevelInfo, "Recovery initiated", "epoch", n.epoch)
 	n.recoveryComplete = false
 	entries := []storage.RedoLogItem{}
 	if n.redoLog != nil {
@@ -2297,6 +2289,10 @@ func (n *Participant) Recover(ctx context.Context) error {
 	}
 	n.mu.Lock()
 	currentEpoch := n.currentEpochLocked()
+	if err := n.persistEpochFloorLocked(currentEpoch); err != nil {
+		n.mu.Unlock()
+		return err
+	}
 	n.mu.Unlock()
 	if n.replay != nil {
 		if err := n.replay.Compact(storage.ReplayRetention{
