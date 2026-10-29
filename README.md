@@ -140,8 +140,9 @@ directly.
 - A bad superblock currently looks like an empty tree; a later update can
   overwrite existing data.
 - SQL has a few `CREATE TABLE`, `INSERT`, `SELECT`, and `DELETE` forms. No joins,
-  custom schemas, or multi-statement transactions. Table regions aren't sized
-  for arbitrary growth; the demo uses one small table.
+  custom schemas, or multi-statement transactions. The catalog holds six tables;
+  creating another returns `ErrCatalogFull`. Table regions aren't sized for
+  arbitrary growth; the demo uses one small table.
 - Replication helpers are included, but automatic failover and the services to
   manage a cluster aren't. Real power-loss safety hasn't been tested here.
 

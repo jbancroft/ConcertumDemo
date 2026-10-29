@@ -22,6 +22,7 @@ const (
 
 var (
 	ErrTableExists    = errors.New("minuet-sql: table already exists")
+	ErrCatalogFull    = errors.New("minuet-sql: catalog full")
 	ErrTableNotFound  = errors.New("minuet-sql: table not found")
 	ErrRowNotFound    = errors.New("minuet-sql: row not found")
 	ErrDuplicateKey   = errors.New("minuet-sql: duplicate key")
@@ -249,6 +250,9 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 		catalog := decodeCatalog(raw, e.cfg.NextBaseAddr)
 		if _, exists := catalog.tableByName(name); exists {
 			return ErrTableExists
+		}
+		if len(catalog.tables) >= catalogMaxRecords {
+			return ErrCatalogFull
 		}
 		rec := catalog.newTableRecord(name)
 		next := catalog.cloneWithTable(rec)

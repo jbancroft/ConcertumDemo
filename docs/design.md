@@ -123,7 +123,9 @@ and report damaged metadata as an error.
 ## The SQL layer
 
 Tables have two unsigned columns: `id` and `value`. A 512-byte catalog holds up to
-six table names and index base addresses. The parser supports `CREATE TABLE`,
+six table names and index base addresses. Creating a new table when all six slots
+are occupied returns `ErrCatalogFull` before attempting a write. Creating an
+existing table still returns `ErrTableExists`. The parser supports `CREATE TABLE`,
 `INSERT`, `SELECT` with an optional ID filter, and `DELETE` by ID.
 
 Writes to the same key through one engine are serialized. Each data change uses

@@ -1,6 +1,7 @@
 package minuetsql
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -142,6 +143,57 @@ func TestEngineRejectsDuplicatePrimaryKey(t *testing.T) {
 	_, err := e.Exec(ctx, "INSERT INTO t VALUES (7, 71)")
 	if !errors.Is(err, ErrDuplicateKey) {
 		t.Fatalf("duplicate insert err=%v want=%v", err, ErrDuplicateKey)
+	}
+}
+
+func TestEngineRejectsTableBeyondCatalogCapacity(t *testing.T) {
+	ctx := context.Background()
+	base := newMemTxnClient()
+	client := &conflictInjectingClient{base: base}
+	engine := newTestEngineWithClient(t, client)
+	staleEngine := newTestEngineWithClient(t, client)
+	names := []string{"one", "two", "three", "four", "five", "six"}
+	for _, name := range names {
+		if _, err := engine.Exec(ctx, "CREATE TABLE "+name); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	before, err := base.Read(ctx, 1, catalogAddr, catalogSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := atomic.LoadInt32(&client.calls)
+	// Both a current engine and one with an empty cached catalog must consult
+	// the stored catalog and reject creation before attempting a transaction.
+	for _, candidate := range []*Engine{engine, staleEngine} {
+		if _, err := candidate.Exec(ctx, "CREATE TABLE seven"); !errors.Is(err, ErrCatalogFull) {
+			t.Errorf("seventh create error = %v, want ErrCatalogFull", err)
+		}
+		if _, err := candidate.Exec(ctx, "SELECT id, value FROM seven"); !errors.Is(err, ErrTableNotFound) {
+			t.Errorf("rejected table is queryable: %v", err)
+		}
+		if _, err := candidate.Exec(ctx, "CREATE TABLE six"); !errors.Is(err, ErrTableExists) {
+			t.Errorf("duplicate create in full catalog = %v, want ErrTableExists", err)
+		}
+	}
+	if got := atomic.LoadInt32(&client.calls); got != attempts {
+		t.Errorf("rejected creation attempted %d transactions", got-attempts)
+	}
+	after, err := base.Read(ctx, 1, catalogAddr, catalogSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("rejected creation changed the stored catalog")
+	}
+	reopened := newTestEngineWithClient(t, base)
+	for _, name := range names {
+		if _, err := reopened.Exec(ctx, "SELECT id, value FROM "+name); err != nil {
+			t.Errorf("reopen %s: %v", name, err)
+		}
+	}
+	if _, err := reopened.Exec(ctx, "SELECT id, value FROM seven"); !errors.Is(err, ErrTableNotFound) {
+		t.Errorf("rejected table survived reopening: %v", err)
 	}
 }
 
