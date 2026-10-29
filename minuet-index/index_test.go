@@ -61,13 +61,13 @@ func (m *memTxnClient) ExecuteAndCommit(_ context.Context, _ string, compares []
 	defer m.mu.Unlock()
 	for _, c := range compares {
 		if string(m.ram[int(c.Address):int(c.Address)+len(c.Data)]) != string(c.Data) {
-			return sinfoniaclient.ExecResult{Committed: false, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
+			return sinfoniaclient.ExecResult{Committed: false, Status: sinfoniaclient.StatusAborted, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 		}
 	}
 	for _, w := range writes {
 		copy(m.ram[int(w.Address):int(w.Address)+len(w.Data)], w.Data)
 	}
-	return sinfoniaclient.ExecResult{Committed: true, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
+	return sinfoniaclient.ExecResult{Committed: true, Status: sinfoniaclient.StatusCommitted, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 }
 
 func TestInsertSearchDeleteSplitMergeRegression(t *testing.T) {
@@ -240,7 +240,7 @@ func (c *conflictInjectingClient) ExecuteAndCommit(ctx context.Context, class st
 	_ = reads
 	call := atomic.AddInt32(&c.calls, 1)
 	if call <= atomic.LoadInt32(&c.rejectFirstN) {
-		return sinfoniaclient.ExecResult{Committed: false, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
+		return sinfoniaclient.ExecResult{Committed: false, Status: sinfoniaclient.StatusAborted, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 	}
 	return c.base.ExecuteAndCommit(ctx, class, compares, reads, writes)
 }

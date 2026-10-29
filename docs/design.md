@@ -4,19 +4,22 @@
 
 ```mermaid
 flowchart TD
-    SQL[minuet-sql] --> Index[minuet-index]
-    SQL --> SDK[sinfonia-client]
-    Index --> SDK
-    SDK --> API[pkg/concertum]
-    API --> Transaction[minitxn]
-    Transaction --> Coordinator[internal/client]
+    subgraph Application[Application node]
+        SQL[minuet-sql] --> Index[minuet-index]
+        SQL --> Library[sinfonia-client]
+        Index --> Library
+        Library --> Transaction[minitxn]
+        Library --> Coordinator[internal/client]
+    end
     Coordinator --> Wire[internal/rpcwire + internal/proto]
     Wire --> Node[internal/memnode]
     Node --> Storage[internal/storage]
 ```
 
-This shows the path a request takes. Some public adapter types still refer to
-internal result types, but the index and SQL packages only use the SDK.
+The Sinfonia user library and coordinator run in the application process. The
+library provides reads, writes, transactions, and node stats. Index and SQL code
+use the same client and transaction result types; the coordinator and RPC details
+are internal implementation packages.
 
 `MiniTransaction` holds comparisons, reads, and writes. It copies the supplied
 bytes so changing the caller's buffer won't change the transaction. Its host

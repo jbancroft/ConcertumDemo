@@ -1,4 +1,4 @@
-package concertum_test
+package sinfoniaclient_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/client"
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto"
-	"github.com/jbancroft/ConcertumDemo/pkg/concertum"
+	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
 type countingNode struct {
@@ -52,10 +52,10 @@ func (n *countingNode) CommitBatch(ctx context.Context, req proto.CommitBatchReq
 func TestSingleParticipantUses1PCFastPath(t *testing.T) {
 	n := &countingNode{Participant: memnode.NewParticipant(64)}
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n})
-	c := concertum.NewClient(newCoordinatorBackend(coord))
+	c := sinfoniaclient.NewClient(coord)
 
 	committed, _, status := c.NewMiniTransaction().Write(1, 0, []byte("x")).ExecuteAndCommit(context.Background())
-	if !committed || status != concertum.StatusCommitted {
+	if !committed || status != sinfoniaclient.StatusCommitted {
 		t.Fatalf("expected commit, got committed=%v status=%v", committed, status)
 	}
 
@@ -73,7 +73,7 @@ func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
 	n1 := memnode.NewParticipant(4096)
 	n2 := memnode.NewParticipant(4096)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
-	c := concertum.NewClient(newCoordinatorBackend(coord))
+	c := sinfoniaclient.NewClient(coord)
 
 	const txns = 1000
 	var wg sync.WaitGroup
@@ -107,7 +107,7 @@ func TestCommitMessageBatchingReducesIndividualCommitRPCs(t *testing.T) {
 	n1 := &countingNode{Participant: memnode.NewParticipant(256)}
 	n2 := &countingNode{Participant: memnode.NewParticipant(256)}
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
-	c := concertum.NewClient(newCoordinatorBackend(coord))
+	c := sinfoniaclient.NewClient(coord)
 
 	for i := 0; i < 200; i++ {
 		committed, _, _ := c.NewMiniTransaction().Write(1, uint64(i%64), []byte("a")).Write(2, uint64(i%64), []byte("b")).ExecuteAndCommit(context.Background())
@@ -136,13 +136,13 @@ func TestFlushPendingCommitsAppliesQueuedDecisions(t *testing.T) {
 	n1 := memnode.NewParticipant(64)
 	n2 := memnode.NewParticipant(64)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
-	c := concertum.NewClient(coord)
+	c := sinfoniaclient.NewClient(coord)
 
 	committed, _, status := c.NewMiniTransaction().
 		Write(1, 4, []byte("one")).
 		Write(2, 8, []byte("two")).
 		ExecuteAndCommit(context.Background())
-	if !committed || status != concertum.StatusCommitted {
+	if !committed || status != sinfoniaclient.StatusCommitted {
 		t.Fatalf("unexpected transaction outcome: committed=%v status=%v", committed, status)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

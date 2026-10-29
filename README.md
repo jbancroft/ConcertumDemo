@@ -51,14 +51,16 @@ committed, so the API also has an explicit unknown result.
 | Start here | What to look for |
 | --- | --- |
 | [Demo](cmd/demo/main.go) | A complete example with checked results |
+| [Sinfonia user library](sinfonia-client/client.go) | Reads, writes, transactions, and node stats from an application |
 | [Transaction builder](minitxn/transaction.go) | The compare/read/write API and grouping work by host |
 | [Coordinator](internal/client/coordinator.go) | Votes, retries, and sending decisions |
 | [Participant](internal/memnode/participant.go) | Locks, comparisons, logging, and recovery |
 | [B+tree](minuet-index/btree.go) | Pages, splits, merges, and range scans |
 | [SQL engine](minuet-sql/engine.go) | A small parser and table layer over the tree |
 
-The [client](pkg/concertum/client.go) and [SDK](sinfonia-client/client.go) connect
-these layers. Index and SQL code use the SDK without importing node internals.
+The Sinfonia user library runs in the application process and uses the coordinator
+to execute transactions across memory nodes. Index and SQL code use this library
+directly.
 
 ## Keep the limits in mind
 

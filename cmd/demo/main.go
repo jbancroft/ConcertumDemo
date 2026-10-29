@@ -18,7 +18,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	minuetindex "github.com/jbancroft/ConcertumDemo/minuet-index"
 	minuetsql "github.com/jbancroft/ConcertumDemo/minuet-sql"
-	"github.com/jbancroft/ConcertumDemo/pkg/concertum"
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
@@ -67,7 +66,7 @@ func run(ctx context.Context, dir string, out io.Writer) (err error) {
 	// The balance is now 75, so comparing it with 100 must reject both writes.
 	ok, _, status := c.api.NewMiniTransaction().Compare(1, balanceAddr, number(100)).
 		Write(1, balanceAddr, number(0)).Write(2, balanceAddr, number(0)).ExecuteAndCommit(ctx)
-	if ok || status != concertum.StatusAborted {
+	if ok || status != sinfoniaclient.StatusAborted {
 		return fmt.Errorf("stale compare: committed=%t status=%d", ok, status)
 	}
 	if err := c.api.FlushPendingCommits(ctx); err != nil {
@@ -139,7 +138,7 @@ func number(n uint64) []byte {
 	return binary.BigEndian.AppendUint64(nil, n)
 }
 
-func commit(ctx context.Context, api *concertum.Client, tx *concertum.MiniTransaction) error {
+func commit(ctx context.Context, api *sinfoniaclient.Client, tx *sinfoniaclient.MiniTransaction) error {
 	ok, _, status := tx.ExecuteAndCommit(ctx)
 	if !ok {
 		return fmt.Errorf("transaction did not commit: status=%d", status)
@@ -148,7 +147,7 @@ func commit(ctx context.Context, api *concertum.Client, tx *concertum.MiniTransa
 	return api.FlushPendingCommits(ctx)
 }
 
-func checkBalances(ctx context.Context, api *concertum.Client) error {
+func checkBalances(ctx context.Context, api *sinfoniaclient.Client) error {
 	for i, want := range []uint64{75, 125} {
 		data, err := api.Read(ctx, uint32(i+1), balanceAddr, 8)
 		if err != nil {
@@ -161,8 +160,8 @@ func checkBalances(ctx context.Context, api *concertum.Client) error {
 	return nil
 }
 
-func newIndex(api *concertum.Client) *minuetindex.BTree {
-	return minuetindex.NewBTree(sinfoniaclient.NewFromConcertumClient(api),
+func newIndex(api *sinfoniaclient.Client) *minuetindex.BTree {
+	return minuetindex.NewBTree(api,
 		minuetindex.Config{HostId: 1, BaseAddress: 64 * 1024})
 }
 
@@ -187,11 +186,10 @@ func checkIndex(ctx context.Context, index *minuetindex.BTree) error {
 	return nil
 }
 
-func newSQL(api *concertum.Client) (*minuetsql.Engine, error) {
-	sdk := sinfoniaclient.NewFromConcertumClient(api)
-	return minuetsql.NewEngine(minuetsql.Config{HostId: 2, TxnClient: sdk,
+func newSQL(api *sinfoniaclient.Client) (*minuetsql.Engine, error) {
+	return minuetsql.NewEngine(minuetsql.Config{HostId: 2, TxnClient: api,
 		BTreeFactory: func(id uint32, base uint64) *minuetindex.BTree {
-			return minuetindex.NewBTree(sdk, minuetindex.Config{HostId: id, BaseAddress: base})
+			return minuetindex.NewBTree(api, minuetindex.Config{HostId: id, BaseAddress: base})
 		}})
 }
 
@@ -211,7 +209,7 @@ type cluster struct {
 	nodes     []*memnode.Participant
 	listeners []*closingListener
 	servers   []chan error
-	api       *concertum.Client
+	api       *sinfoniaclient.Client
 }
 
 func openCluster(ctx context.Context, dir string) (_ *cluster, err error) {
@@ -247,7 +245,7 @@ func openCluster(ctx context.Context, dir string) (_ *cluster, err error) {
 			return nil, err
 		}
 	}
-	c.api = concertum.NewClient(client.NewCoordinator(participants))
+	c.api = sinfoniaclient.NewClient(client.NewCoordinator(participants))
 	return c, nil
 }
 
