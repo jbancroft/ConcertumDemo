@@ -6,6 +6,9 @@ layer on top. It's a code sample to read, run, and tinker with.
 The idea comes from Sinfonia: describe byte ranges to **compare**, **read**, and
 **write**, then commit across memory nodes. Minuet inspired the index.
 
+New to those names? Start with the [three-minute crash course](docs/crash-course.md)
+for the core ideas, a transfer example, and a short code walkthrough.
+
 ## Try it
 
 You need Go 1.22 or newer. Everything uses the standard library; there's nothing
