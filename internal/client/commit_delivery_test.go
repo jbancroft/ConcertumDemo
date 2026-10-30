@@ -16,6 +16,200 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
+// Asynchronous commit and abort delivery, batching fallback, flushing, and interrupted delivery.
+
+func TestFlushPendingCommitsReportsEarlierTimerDeliveryFailure(t *testing.T) {
+	failing := &failingCommitNode{Participant: memnode.NewParticipant(16)}
+	coord := NewCoordinator(map[uint32]Participant{
+		1: failing,
+		2: memnode.NewParticipant(16),
+	})
+	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{
+		{MemID: 1, Addr: 0, Data: []byte("A")},
+		{MemID: 2, Addr: 0, Data: []byte("B")},
+	})
+	if !res.Committed {
+		t.Fatalf("expected commit decision before phase-two delivery: %+v", res)
+	}
+	time.Sleep(20 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := coord.FlushPendingCommits(ctx); err == nil {
+		t.Fatal("expected flush to report the earlier phase-two delivery failure")
+	}
+}
+
+func TestFlushPendingCommitsReportsUnacknowledgedFallbackDelivery(t *testing.T) {
+	unacknowledged := &unacknowledgedFallbackCommitNode{Participant: memnode.NewParticipant(16)}
+	coord := NewCoordinator(map[uint32]Participant{
+		1: unacknowledged,
+		2: memnode.NewParticipant(16),
+	})
+	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{
+		{MemID: 1, Addr: 0, Data: []byte("A")},
+		{MemID: 2, Addr: 0, Data: []byte("B")},
+	})
+	if !res.Committed {
+		t.Fatalf("expected commit decision before phase-two delivery: %+v", res)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := coord.FlushPendingCommits(ctx); err == nil {
+		t.Fatal("expected flush to report the unacknowledged fallback delivery")
+	}
+}
+
+func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	defer release()
+	n1 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
+	n2 := newPhaseTwoNode(memnode.NewParticipant(64), gate)
+	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+
+	result := coord.ExecuteAndCommit(ctx, "", nil, nil, twoParticipantWrites())
+	if !result.Committed || result.UnknownOutcome {
+		t.Fatalf("result=%+v", result)
+	}
+	first := receivePhaseTwo(t, ctx, n1.prepared)
+	if got := receivePhaseTwo(t, ctx, n2.prepared); got != first {
+		t.Fatalf("participants prepared different transactions: %v and %v", first, got)
+	}
+	if first.CoordinatorID == 0 || first.Counter == 0 || first.Epoch == 0 {
+		t.Fatalf("invalid generated transaction ID: %+v", first)
+	}
+	if got := receivePhaseTwo(t, ctx, n1.delivered); got.TID != first || !got.ActionCommit {
+		t.Fatalf("first delivery=%+v, want commit for %+v", got, first)
+	}
+	if got, err := readParticipant(ctx, n2, 8, 1); !errors.Is(err, ErrTransactionAborted) || got != nil {
+		t.Fatalf("read bypassed prepared write before delivery: %q, err=%v", got, err)
+	}
+	release()
+	if err := coord.FlushPendingCommits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := receivePhaseTwo(t, ctx, n2.delivered); got.TID != first || !got.ActionCommit {
+		t.Fatalf("second delivery=%+v, want commit for %+v", got, first)
+	}
+	if got, err := readParticipant(ctx, n2, 8, 1); err != nil || string(got) != "B" {
+		t.Fatalf("delivered write=%q, err=%v", got, err)
+	}
+
+	result = coord.ExecuteAndCommit(ctx, "", nil, nil, twoParticipantWrites())
+	if !result.Committed || result.UnknownOutcome {
+		t.Fatalf("second result=%+v", result)
+	}
+	if err := coord.FlushPendingCommits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second := receivePhaseTwo(t, ctx, n1.prepared)
+	if second.CoordinatorID != first.CoordinatorID || second.Counter <= first.Counter {
+		t.Fatalf("transaction ID did not advance: first=%+v second=%+v", first, second)
+	}
+	if got := receivePhaseTwo(t, ctx, n2.prepared); got != second {
+		t.Fatalf("second prepare=%+v, want %+v", got, second)
+	}
+	for _, node := range []*phaseTwoNode{n1, n2} {
+		if got := receivePhaseTwo(t, ctx, node.delivered); got.TID != second || !got.ActionCommit {
+			t.Fatalf("delivery=%+v, want commit for %+v", got, second)
+		}
+	}
+}
+
+func TestCoordinatorPhaseTwoDeliversAbortAfterRejectedPrepare(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	n1 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
+	n2 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
+	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+	result := coord.ExecuteAndCommit(ctx, "",
+		[]sinfonia.CmpItem{{MemID: 2, Addr: 8, Data: []byte("stale")}}, nil, twoParticipantWrites())
+	if result.Committed || result.UnknownOutcome || result.Status != sinfonia.VoteBadCmp {
+		t.Fatalf("expected compare abort, got %+v", result)
+	}
+	if err := coord.FlushPendingCommits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range []*phaseTwoNode{n1, n2} {
+		txId := receivePhaseTwo(t, ctx, node.prepared)
+		if got := receivePhaseTwo(t, ctx, node.delivered); got.TID != txId || got.ActionCommit {
+			t.Fatalf("delivery=%+v, want abort for %+v", got, txId)
+		}
+		if got, err := readParticipant(ctx, node, 8, 1); err != nil || string(got) != "\x00" {
+			t.Fatalf("aborted write was applied: %q, err=%v", got, err)
+		}
+	}
+}
+
+func TestCoordinatorRecoversAfterPartialCommitDelivery(t *testing.T) {
+	if dir := os.Getenv("CONCERTUM_PHASE_TWO_CRASH_DIR"); dir != "" {
+		runPhaseTwoCrashHelper(t, dir)
+		return
+	}
+	for _, mode := range []string{"batch", "fallback"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCoordinatorRecoversAfterPartialCommitDelivery$")
+			cmd.Env = append(os.Environ(), "CONCERTUM_PHASE_TWO_CRASH_DIR="+dir, "CONCERTUM_PHASE_TWO_DELIVERY="+mode)
+			output, err := cmd.CombinedOutput()
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 23 {
+				t.Fatalf("helper did not exit at the partial-delivery checkpoint: %v\n%s", err, output)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "transaction.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var txId sinfonia.TransactionID
+			if err := json.Unmarshal(data, &txId); err != nil {
+				t.Fatal(err)
+			}
+			if txId.CoordinatorID == 0 || txId.Counter == 0 || txId.Epoch == 0 {
+				t.Fatalf("invalid captured transaction ID: %+v", txId)
+			}
+
+			nodes := openPhaseTwoNodes(t, dir)
+			for i, node := range nodes {
+				if err := node.Recover(ctx); err != nil {
+					t.Fatalf("recover participant %d: %v", i+1, err)
+				}
+				want := twoParticipantWrites()[i].Data
+				if got, err := readParticipant(ctx, node, 8, 1); err != nil || string(got) != string(want) {
+					t.Fatalf("participant %d recovered %q, want %q, err=%v", i+1, got, want, err)
+				}
+			}
+		})
+	}
+}
+
+type failingCommitNode struct {
+	*memnode.Participant
+}
+
+type unacknowledgedFallbackCommitNode struct {
+	*memnode.Participant
+}
+
+func (n *failingCommitNode) Commit(context.Context, sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
+	return sinfonia.CommitResponse{}, errors.New("commit unavailable")
+}
+
+func (n *failingCommitNode) CommitBatch(context.Context, sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error) {
+	return sinfonia.CommitBatchResponse{}, errors.New("commit batch unavailable")
+}
+
+func (n *unacknowledgedFallbackCommitNode) Commit(_ context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
+	return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, nil
+}
+
+func (n *unacknowledgedFallbackCommitNode) CommitBatch(context.Context, sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error) {
+	return sinfonia.CommitBatchResponse{}, errors.New("commit batch unavailable")
+}
+
 // phaseTwoNode intercepts node calls so tests can delay or fail delivery while
 // the coordinator uses its normal workers and batching.
 type phaseTwoNode struct {
@@ -92,140 +286,6 @@ func receivePhaseTwo[T any](t *testing.T, ctx context.Context, events <-chan T) 
 	}
 }
 
-func phaseTwoWrites() []sinfonia.WriteItem {
-	return []sinfonia.WriteItem{
-		{MemID: 1, Addr: 8, Data: []byte("A")},
-		{MemID: 2, Addr: 8, Data: []byte("B")},
-	}
-}
-
-func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	gate := make(chan struct{})
-	release := sync.OnceFunc(func() { close(gate) })
-	defer release()
-	n1 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
-	n2 := newPhaseTwoNode(memnode.NewParticipant(64), gate)
-	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
-
-	result := coord.ExecuteAndCommit(ctx, "", nil, nil, phaseTwoWrites())
-	if !result.Committed || result.UnknownOutcome {
-		t.Fatalf("result=%+v", result)
-	}
-	first := receivePhaseTwo(t, ctx, n1.prepared)
-	if got := receivePhaseTwo(t, ctx, n2.prepared); got != first {
-		t.Fatalf("participants prepared different transactions: %v and %v", first, got)
-	}
-	if first.CoordinatorID == 0 || first.Counter == 0 || first.Epoch == 0 {
-		t.Fatalf("invalid generated transaction ID: %+v", first)
-	}
-	if got := receivePhaseTwo(t, ctx, n1.delivered); got.TID != first || !got.ActionCommit {
-		t.Fatalf("first delivery=%+v, want commit for %+v", got, first)
-	}
-	if got, err := readParticipant(ctx, n2, 8, 1); !errors.Is(err, ErrTransactionAborted) || got != nil {
-		t.Fatalf("read bypassed prepared write before delivery: %q, err=%v", got, err)
-	}
-	release()
-	if err := coord.FlushPendingCommits(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if got := receivePhaseTwo(t, ctx, n2.delivered); got.TID != first || !got.ActionCommit {
-		t.Fatalf("second delivery=%+v, want commit for %+v", got, first)
-	}
-	if got, err := readParticipant(ctx, n2, 8, 1); err != nil || string(got) != "B" {
-		t.Fatalf("delivered write=%q, err=%v", got, err)
-	}
-
-	result = coord.ExecuteAndCommit(ctx, "", nil, nil, phaseTwoWrites())
-	if !result.Committed || result.UnknownOutcome {
-		t.Fatalf("second result=%+v", result)
-	}
-	if err := coord.FlushPendingCommits(ctx); err != nil {
-		t.Fatal(err)
-	}
-	second := receivePhaseTwo(t, ctx, n1.prepared)
-	if second.CoordinatorID != first.CoordinatorID || second.Counter <= first.Counter {
-		t.Fatalf("transaction ID did not advance: first=%+v second=%+v", first, second)
-	}
-	if got := receivePhaseTwo(t, ctx, n2.prepared); got != second {
-		t.Fatalf("second prepare=%+v, want %+v", got, second)
-	}
-	for _, node := range []*phaseTwoNode{n1, n2} {
-		if got := receivePhaseTwo(t, ctx, node.delivered); got.TID != second || !got.ActionCommit {
-			t.Fatalf("delivery=%+v, want commit for %+v", got, second)
-		}
-	}
-}
-
-func TestCoordinatorPhaseTwoDeliversAbortAfterRejectedPrepare(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	n1 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
-	n2 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
-	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
-	result := coord.ExecuteAndCommit(ctx, "",
-		[]sinfonia.CmpItem{{MemID: 2, Addr: 8, Data: []byte("stale")}}, nil, phaseTwoWrites())
-	if result.Committed || result.UnknownOutcome || result.Status != sinfonia.VoteBadCmp {
-		t.Fatalf("expected compare abort, got %+v", result)
-	}
-	if err := coord.FlushPendingCommits(ctx); err != nil {
-		t.Fatal(err)
-	}
-	for _, node := range []*phaseTwoNode{n1, n2} {
-		txId := receivePhaseTwo(t, ctx, node.prepared)
-		if got := receivePhaseTwo(t, ctx, node.delivered); got.TID != txId || got.ActionCommit {
-			t.Fatalf("delivery=%+v, want abort for %+v", got, txId)
-		}
-		if got, err := readParticipant(ctx, node, 8, 1); err != nil || string(got) != "\x00" {
-			t.Fatalf("aborted write was applied: %q, err=%v", got, err)
-		}
-	}
-}
-
-func TestCoordinatorRecoversAfterPartialCommitDelivery(t *testing.T) {
-	if dir := os.Getenv("CONCERTUM_PHASE_TWO_CRASH_DIR"); dir != "" {
-		runPhaseTwoCrashHelper(t, dir)
-		return
-	}
-	for _, mode := range []string{"batch", "fallback"} {
-		t.Run(mode, func(t *testing.T) {
-			dir := t.TempDir()
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCoordinatorRecoversAfterPartialCommitDelivery$")
-			cmd.Env = append(os.Environ(), "CONCERTUM_PHASE_TWO_CRASH_DIR="+dir, "CONCERTUM_PHASE_TWO_DELIVERY="+mode)
-			output, err := cmd.CombinedOutput()
-			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 23 {
-				t.Fatalf("helper did not exit at the partial-delivery checkpoint: %v\n%s", err, output)
-			}
-			data, err := os.ReadFile(filepath.Join(dir, "transaction.json"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var txId sinfonia.TransactionID
-			if err := json.Unmarshal(data, &txId); err != nil {
-				t.Fatal(err)
-			}
-			if txId.CoordinatorID == 0 || txId.Counter == 0 || txId.Epoch == 0 {
-				t.Fatalf("invalid captured transaction ID: %+v", txId)
-			}
-
-			nodes := openPhaseTwoNodes(t, dir)
-			for i, node := range nodes {
-				if err := node.Recover(ctx); err != nil {
-					t.Fatalf("recover participant %d: %v", i+1, err)
-				}
-				want := phaseTwoWrites()[i].Data
-				if got, err := readParticipant(ctx, node, 8, 1); err != nil || string(got) != string(want) {
-					t.Fatalf("participant %d recovered %q, want %q, err=%v", i+1, got, want, err)
-				}
-			}
-		})
-	}
-}
-
 func openPhaseTwoNodes(t *testing.T, dir string) []*memnode.Participant {
 	t.Helper()
 	var nodes []*memnode.Participant
@@ -264,7 +324,7 @@ func runPhaseTwoCrashHelper(t *testing.T, dir string) {
 		n2.batchErr = n1.batchErr
 	}
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
-	if result := coord.ExecuteAndCommit(ctx, "", nil, nil, phaseTwoWrites()); !result.Committed || result.UnknownOutcome {
+	if result := coord.ExecuteAndCommit(ctx, "", nil, nil, twoParticipantWrites()); !result.Committed || result.UnknownOutcome {
 		t.Fatalf("result=%+v", result)
 	}
 	delivered := receivePhaseTwo(t, ctx, n1.delivered)

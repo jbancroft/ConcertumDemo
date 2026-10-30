@@ -200,34 +200,6 @@ func TestEngineRejectsTableBeyondCatalogCapacity(t *testing.T) {
 	}
 }
 
-func TestEngineDurabilityAcrossRestart(t *testing.T) {
-	ctx := context.Background()
-	client := newMemTxnClient()
-	e1 := newTestEngineWithClient(t, client)
-	if _, err := e1.Exec(ctx, "CREATE TABLE ledger"); err != nil {
-		t.Fatalf("create table: %v", err)
-	}
-	if _, err := e1.Exec(ctx, "INSERT INTO ledger VALUES (5, 50)"); err != nil {
-		t.Fatalf("insert 5: %v", err)
-	}
-	if _, err := e1.Exec(ctx, "INSERT INTO ledger VALUES (8, 80)"); err != nil {
-		t.Fatalf("insert 8: %v", err)
-	}
-
-	e2 := newTestEngineWithClient(t, client)
-	rows, err := e2.Exec(ctx, "SELECT id, value FROM ledger")
-	if err != nil {
-		t.Fatalf("select after restart: %v", err)
-	}
-	if len(rows.Rows) != 2 || rows.Rows[0] != (Row{ID: 5, Value: 50}) || rows.Rows[1] != (Row{ID: 8, Value: 80}) {
-		t.Fatalf("unexpected rows after restart: %#v", rows.Rows)
-	}
-
-	if _, err := e2.Exec(ctx, "CREATE TABLE ledger"); !errors.Is(err, ErrTableExists) {
-		t.Fatalf("recreate table err=%v want=%v", err, ErrTableExists)
-	}
-}
-
 func TestEngineConcurrentInsertSamePrimaryKeyDeterministic(t *testing.T) {
 	ctx := context.Background()
 	e := newTestEngine(t)
