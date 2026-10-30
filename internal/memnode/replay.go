@@ -1,6 +1,7 @@
 package memnode
 
 import (
+	"context"
 	"errors"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
@@ -63,20 +64,20 @@ func (n *Participant) callOutcomeReplayBoundaryHookLocked(phase string, txId sin
 	return n.outcomeReplayBoundaryHook(phase, txId)
 }
 
-func (n *Participant) rememberPrepareOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecPrepareResponse) (sinfonia.ExecPrepareResponse, error) {
+func (n *Participant) rememberPrepareOutcomeLocked(ctx context.Context, txId sinfonia.TransactionID, resp sinfonia.ExecPrepareResponse) (sinfonia.ExecPrepareResponse, error) {
 	if n.replay != nil {
 		if err := n.replay.AppendPrepare(txId, resp); err != nil {
 			return sinfonia.ExecPrepareResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 		}
 	}
-	if err := n.replicateReplayRecordLocked(txId, sinfonia.ReplayRecordPrepare, &resp, nil); err != nil {
+	if err := n.replicateReplayRecordLocked(ctx, txId, sinfonia.ReplayRecordPrepare, &resp, nil); err != nil {
 		return sinfonia.ExecPrepareResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 	}
 	n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(resp)}
 	return resp, nil
 }
 
-func (n *Participant) replayPrepareOutcomeLocked(txId sinfonia.TransactionID, requestID sinfonia.RequestID, currentEpoch uint64) (sinfonia.ExecPrepareResponse, bool, error) {
+func (n *Participant) replayPrepareOutcomeLocked(ctx context.Context, txId sinfonia.TransactionID, requestID sinfonia.RequestID, currentEpoch uint64) (sinfonia.ExecPrepareResponse, bool, error) {
 	var original sinfonia.ExecPrepareResponse
 	if out, ok := n.prepareOutcomes[txId]; ok {
 		original = clonePrepareResponse(out.resp)
@@ -91,7 +92,7 @@ func (n *Participant) replayPrepareOutcomeLocked(txId sinfonia.TransactionID, re
 		}
 		n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(original)}
 	}
-	if err := n.replicateReplayRecordLocked(txId, sinfonia.ReplayRecordPrepare, &original, nil); err != nil {
+	if err := n.replicateReplayRecordLocked(ctx, txId, sinfonia.ReplayRecordPrepare, &original, nil); err != nil {
 		return sinfonia.ExecPrepareResponse{RequestID: requestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, false, err
 	}
 	resp := original
@@ -100,17 +101,37 @@ func (n *Participant) replayPrepareOutcomeLocked(txId sinfonia.TransactionID, re
 	return resp, true, nil
 }
 
-func (n *Participant) rememberOnePCOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecCommit1PCResponse) (sinfonia.ExecCommit1PCResponse, error) {
+func (n *Participant) rememberOnePCOutcomeLocked(ctx context.Context, txId sinfonia.TransactionID, resp sinfonia.ExecCommit1PCResponse) (sinfonia.ExecCommit1PCResponse, error) {
 	if n.replay != nil {
 		if err := n.replay.AppendOnePC(txId, resp); err != nil {
 			return sinfonia.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 		}
 	}
-	if err := n.replicateReplayRecordLocked(txId, sinfonia.ReplayRecordOnePC, nil, &resp); err != nil {
+	if err := n.replicateReplayRecordLocked(ctx, txId, sinfonia.ReplayRecordOnePC, nil, &resp); err != nil {
 		return sinfonia.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 	}
 	n.onePCOutcomes[txId] = onePCOutcome{resp: clone1PCResponse(resp)}
 	return resp, nil
+}
+
+// rememberPendingResponseLocked preserves the original reply before recovery
+// discards its only remaining copy. The existing replay store rejects overwrites.
+// Replication may release the mutex, so callers must look up pending work again
+// afterward instead of applying writes through the supplied transaction pointer.
+func (n *Participant) rememberPendingResponseLocked(ctx context.Context, txId sinfonia.TransactionID, txn *preparedTxn, commit bool) error {
+	if txn.prepareResponse != nil {
+		if _, err := n.rememberPrepareOutcomeLocked(ctx, txId, *txn.prepareResponse); err != nil {
+			return err
+		}
+		txn.prepareResponse = nil
+	}
+	if commit && txn.onePCResponse != nil {
+		if _, err := n.rememberOnePCOutcomeLocked(ctx, txId, *txn.onePCResponse); err != nil {
+			return err
+		}
+		txn.onePCResponse = nil
+	}
+	return nil
 }
 
 func (n *Participant) SetOutcomeReplayBoundaryHookForTest(fn func(phase string, txId sinfonia.TransactionID) error) {

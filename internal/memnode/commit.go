@@ -88,6 +88,11 @@ func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, re
 		}
 		n.setReplicationErrorLocked(nil)
 	}
+	if txn := n.inDoubt[req.TID]; txn != nil {
+		if err := n.rememberPendingResponseLocked(ctx, req.TID, txn, req.ActionCommit); err != nil {
+			return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
+		}
+	}
 	class := n.classForTIDLocked(req.TID)
 	correlationID := req.CorrelationID
 	if correlationID == "" {
@@ -188,7 +193,10 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	currentEpoch := n.currentEpochLocked()
 	if out, ok := n.onePCOutcomes[req.TID]; ok {
 		original := clone1PCResponse(out.resp)
-		if err := n.replicateReplayRecordLocked(req.TID, sinfonia.ReplayRecordOnePC, nil, &original); err != nil {
+		if err := n.replicateReplayRecordLocked(ctx, req.TID, sinfonia.ReplayRecordOnePC, nil, &original); err != nil {
+			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+		}
+		if err := n.finishPendingOnePCReplayLocked(req.TID); err != nil {
 			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 		}
 		resp := original
@@ -200,7 +208,10 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	if n.replay != nil {
 		if original, ok := n.replay.GetOnePC(req.TID); ok {
 			n.onePCOutcomes[req.TID] = onePCOutcome{resp: clone1PCResponse(original)}
-			if err := n.replicateReplayRecordLocked(req.TID, sinfonia.ReplayRecordOnePC, nil, &original); err != nil {
+			if err := n.replicateReplayRecordLocked(ctx, req.TID, sinfonia.ReplayRecordOnePC, nil, &original); err != nil {
+				return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+			}
+			if err := n.finishPendingOnePCReplayLocked(req.TID); err != nil {
 				return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 			}
 			original.RequestID = req.RequestID
@@ -239,13 +250,13 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	}
 	n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_received", "")
 	if (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
-		return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
+		return n.rememberOnePCOutcomeLocked(ctx, req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
 	}
 	if out, ok := n.commitOutcomes[req.TID]; ok && !out.actionCommit {
-		return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberOnePCOutcomeLocked(ctx, req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberOnePCOutcomeLocked(ctx, req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 
 	if err := n.validateWriteRangesLocked(req.WriteItems); err != nil {
@@ -254,14 +265,14 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	acquired, conflict := n.tryTransactionLocksLocked(req.CmpItems, req.ReadItems, req.WriteItems)
 	if conflict != nil {
 		n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_bad_lock", conflict.Reason)
-		return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
+		return n.rememberOnePCOutcomeLocked(ctx, req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 	}
 
 	for _, item := range req.CmpItems {
 		actual, err := n.read(item.Addr, uint32(len(item.Data)))
 		if err != nil || string(actual) != string(item.Data) {
 			n.releaseLocks(acquired)
-			return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadCmp, CurrentEpoch: currentEpoch})
+			return n.rememberOnePCOutcomeLocked(ctx, req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadCmp, CurrentEpoch: currentEpoch})
 		}
 	}
 
@@ -322,11 +333,13 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	}
 	// The redo entry can establish a yes vote even if saving the decision fails.
 	// Keep the writes and locks recoverable before attempting that append.
+	original := sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
 	n.inDoubt[req.TID] = &preparedTxn{
 		writes: cloneWrites(req.WriteItems), readData: cloneReadData(readData), heldLocks: acquired,
 		preparedAt: n.nowFn(), participants: []uint32{n.hostId},
 		redoLoggedTid: len(req.WriteItems) > 0 && n.redoLog != nil,
 		class:         req.Class, correlationID: correlationID,
+		onePCResponse: &original,
 	}
 	if n.decided != nil {
 		if _, known := n.decided.Get(req.TID); !known {
@@ -339,21 +352,25 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	if err := n.callOutcomeReplayBoundaryHookLocked("one-pc-before-response", req.TID); err != nil {
 		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
-	resp = sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
+	resp = clone1PCResponse(original)
 	for _, item := range req.WriteItems {
 		if err := n.write(item.Addr, item.Data); err != nil {
 			n.recoveryComplete = false
 			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 		}
 	}
-	n.releaseLocks(acquired)
-	delete(n.inDoubt, req.TID)
-	n.commitOutcomes[req.TID] = commitOutcome{resp: sinfonia.CommitResponse{RequestID: req.RequestID, Ack: true}, actionCommit: true}
 	var replayErr error
-	resp, replayErr = n.rememberOnePCOutcomeLocked(req.TID, resp)
+	resp, replayErr = n.rememberOnePCOutcomeLocked(ctx, req.TID, resp)
 	if replayErr != nil {
 		return resp, replayErr
 	}
+	// A duplicate may have finished this transaction while reply replication
+	// released the mutex. Do not release a newer transaction's matching locks.
+	if txn := n.inDoubt[req.TID]; txn != nil {
+		n.releaseLocks(txn.heldLocks)
+		delete(n.inDoubt, req.TID)
+	}
+	n.commitOutcomes[req.TID] = commitOutcome{resp: sinfonia.CommitResponse{RequestID: req.RequestID, Ack: true}, actionCommit: true}
 	if _, ok := n.allLogTxIds[req.TID]; ok {
 		n.appliedLocal[req.TID] = true
 		n.enqueueAppliedNotificationsLocked(req.TID, []uint32{n.hostId})
@@ -363,6 +380,19 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	n.metrics.ObserveClassDecision(req.Class, true, n.nowFn())
 	n.recordTimelineLocked(req.TID, correlationID, "commit_applied", "1pc")
 	return resp, nil
+}
+
+// A retry can find a saved reply after its first delivery failed in replication.
+// Finish the retained work as well, so a successful retry does not leave locks.
+func (n *Participant) finishPendingOnePCReplayLocked(txId sinfonia.TransactionID) error {
+	if txn := n.inDoubt[txId]; txn == nil || txn.onePCResponse == nil {
+		return nil
+	}
+	resp, err := n.commitLocked(sinfonia.CommitRequest{TID: txId, ActionCommit: true})
+	if err == nil && resp.Ack {
+		n.commitOutcomes[txId] = commitOutcome{resp: resp, actionCommit: true}
+	}
+	return err
 }
 
 func cloneWrites(items []sinfonia.WriteItem) []sinfonia.WriteItem {

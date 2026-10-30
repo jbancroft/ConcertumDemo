@@ -170,6 +170,8 @@ the original transaction's votes and decisions. Each memnode also checks old
 prepared transactions and finishes them even if the coordinator disappeared.
 A failed decision-log write retains pending writes and locks for recovery; the
 node requires successful restart recovery before serving ordinary requests again.
+Recovery also saves original read results still held by a pending transaction
+before clearing it, preserving them for later resolution and durable restarts.
 
 An outage or deadline can still leave an unknown outcome. Both transaction APIs,
 including the builder, return an `ExecResult` with a `Recovery` handle. Save the

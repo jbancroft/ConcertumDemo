@@ -218,7 +218,7 @@ func (n *Participant) ReplicationStatus(ctx context.Context, _ sinfonia.Replicat
 // replicateReplayRecordLocked saves a reply on the replica before returning it
 // to the caller. Release the primary's mutex during the RPC so the replica can
 // take its own lock without deadlocking.
-func (n *Participant) replicateReplayRecordLocked(txId sinfonia.TransactionID, kind sinfonia.ReplayRecordKind, prepare *sinfonia.ExecPrepareResponse, onePC *sinfonia.ExecCommit1PCResponse) error {
+func (n *Participant) replicateReplayRecordLocked(ctx context.Context, txId sinfonia.TransactionID, kind sinfonia.ReplayRecordKind, prepare *sinfonia.ExecPrepareResponse, onePC *sinfonia.ExecCommit1PCResponse) error {
 	if n.mode != ModeReplPrimary || n.replica == nil {
 		return nil
 	}
@@ -234,7 +234,7 @@ func (n *Participant) replicateReplayRecordLocked(txId sinfonia.TransactionID, k
 	peer := n.replica
 	n.mu.Unlock()
 	start := time.Now()
-	replResp, replErr := peer.ReplicateReplayRecord(context.Background(), req)
+	replResp, replErr := peer.ReplicateReplayRecord(ctx, req)
 	n.metrics.replicationRoundtripLatency.Observe(time.Since(start))
 	n.mu.Lock()
 	if replErr != nil || !replResp.Ack {

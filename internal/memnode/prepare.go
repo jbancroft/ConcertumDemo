@@ -28,6 +28,9 @@ type preparedTxn struct {
 	redoLoggedTid bool
 	class         string
 	correlationID string
+	// Only live requests have exact responses; redo alone cannot reconstruct reads.
+	prepareResponse *sinfonia.ExecPrepareResponse
+	onePCResponse   *sinfonia.ExecCommit1PCResponse
 }
 
 func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (resp sinfonia.ExecPrepareResponse, err error) {
@@ -67,7 +70,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, err
 	}
 	currentEpoch := n.currentEpochLocked()
-	if resp, ok, replayErr := n.replayPrepareOutcomeLocked(req.TID, req.RequestID, currentEpoch); ok || replayErr != nil {
+	if resp, ok, replayErr := n.replayPrepareOutcomeLocked(ctx, req.TID, req.RequestID, currentEpoch); ok || replayErr != nil {
 		if replayErr != nil {
 			return resp, replayErr
 		}
@@ -100,13 +103,13 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: prepare transaction %v", ErrReplayUnavailable, req.TID)
 	}
 	if (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
-		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
+		return n.rememberPrepareOutcomeLocked(ctx, req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
 	}
 	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberPrepareOutcomeLocked(ctx, req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 	if out, ok := n.commitOutcomes[req.TID]; ok && !out.actionCommit {
-		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberPrepareOutcomeLocked(ctx, req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 	if txn, ok := n.inDoubt[req.TID]; ok {
 		resp := sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(txn.readData), CurrentEpoch: currentEpoch}
@@ -130,7 +133,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	if conflict != nil {
 		delete(n.inDoubt, req.TID)
 		n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", conflict.Reason)
-		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
+		return n.rememberPrepareOutcomeLocked(ctx, req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 	}
 
 	for _, item := range req.CmpItems {
@@ -138,7 +141,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 		if err != nil || string(actual) != string(item.Data) {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
-			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadCmp, CurrentEpoch: currentEpoch})
+			return n.rememberPrepareOutcomeLocked(ctx, req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadCmp, CurrentEpoch: currentEpoch})
 		}
 	}
 
@@ -198,8 +201,14 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	n.log(slog.LevelInfo, "Vote decision", "tid", req.TID, "epoch", req.TID.Epoch, "vote", sinfonia.VoteOk)
 	n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_ok", "")
 	resp = sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
+	original := clonePrepareResponse(resp)
+	txn.prepareResponse = &original
 	if err := n.callOutcomeReplayBoundaryHookLocked("prepare-before-response", req.TID); err != nil {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
-	return n.rememberPrepareOutcomeLocked(req.TID, resp)
+	resp, err = n.rememberPrepareOutcomeLocked(ctx, req.TID, resp)
+	if err == nil {
+		txn.prepareResponse = nil
+	}
+	return resp, err
 }

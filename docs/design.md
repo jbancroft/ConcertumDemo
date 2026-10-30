@@ -183,6 +183,10 @@ after resolving an uncertain `CREATE TABLE` to reload its catalog cache.
 
 A commit decision and its read payload are separate facts. Recovery returns saved
 reads from the original attempt; it never substitutes a new read of current data.
+Before clearing a live pending transaction, recovery saves any missing original
+response through the replay store and replication path. If saving fails, it
+retains the response and locks for another attempt. A successful recovery leaves
+the original reads available for repeated resolution and durable restarts.
 If a crash preserved the commit but lost its exact read response, the result has
 `StatusCommitted` and `ErrReadResultsUnavailable`. This does not authorize retrying
 its writes. As with normal execution, knowing the decision does not mean every
