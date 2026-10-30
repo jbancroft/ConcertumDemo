@@ -145,6 +145,12 @@ Use the printed addresses in `sinfonia-client.NewClient`'s `NodeConfig` map.
 3. If everyone votes yes, the coordinator sends commit messages. Participants
    apply writes and release locks. Saved evidence lets recovery finish after a crash.
 
+Each participant acquires its transaction's complete set of range locks together.
+Reads and comparisons protect their full ranges, including bytes outside any
+overlapping writes in the same transaction. A conflict with another transaction
+rejects the attempt; overlapping operations within one transaction do not
+conflict with each other.
+
 The B+tree stores pages through this transaction API. SQL uses the tree for two
 columns: `id` and `value`.
 

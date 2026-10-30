@@ -9,7 +9,6 @@ import (
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
-	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
 type prepareFlight struct {
@@ -127,62 +126,11 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	n.inDoubt[req.TID] = &preparedTxn{preparedAt: n.nowFn(), participants: append([]uint32(nil), req.Participants...), class: req.Class, correlationID: correlationID}
 	txn := n.inDoubt[req.TID]
 	n.recordTimelineLocked(req.TID, correlationID, "prepare_received", "")
-	acquired := make([]RangeLock, 0, len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems))
-
-	lockRead := func(item minitxn.RangeItem) (bool, *sinfonia.LockConflict) {
-		if item.Size() == 0 {
-			return true, nil
-		}
-		l := RangeLock{start: item.Offset(), end: item.Offset() + item.Size(), write: false}
-		ok, conflict := n.locks.tryLockWithConflict(l.start, l.end, false)
-		if !ok {
-			return false, conflict
-		}
-		acquired = append(acquired, l)
-		return true, nil
-	}
-	lockWrite := func(item minitxn.RangeItem) (bool, *sinfonia.LockConflict) {
-		if item.Size() == 0 {
-			return true, nil
-		}
-		l := RangeLock{start: item.Offset(), end: item.Offset() + item.Size(), write: true}
-		ok, conflict := n.locks.tryLockWithConflict(l.start, l.end, true)
-		if !ok {
-			return false, conflict
-		}
-		acquired = append(acquired, l)
-		return true, nil
-	}
-
-	for _, item := range req.WriteItems {
-		if ok, conflict := lockWrite(item); !ok {
-			n.releaseLocks(acquired)
-			delete(n.inDoubt, req.TID)
-			n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", "write-lock conflict")
-			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
-		}
-	}
-	for _, item := range req.CmpItems {
-		if overlapsAnyWrite(item, req.WriteItems) {
-			continue
-		}
-		if ok, conflict := lockRead(item); !ok {
-			n.releaseLocks(acquired)
-			delete(n.inDoubt, req.TID)
-			n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", "cmp-lock conflict")
-			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
-		}
-	}
-	for _, item := range req.ReadItems {
-		if overlapsAnyWrite(item, req.WriteItems) {
-			continue
-		}
-		if ok, conflict := lockRead(item); !ok {
-			n.releaseLocks(acquired)
-			delete(n.inDoubt, req.TID)
-			n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", "read-lock conflict")
-			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
-		}
+	acquired, conflict := n.tryTransactionLocksLocked(req.CmpItems, req.ReadItems, req.WriteItems)
+	if conflict != nil {
+		delete(n.inDoubt, req.TID)
+		n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", conflict.Reason)
+		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 	}
 
 	for _, item := range req.CmpItems {

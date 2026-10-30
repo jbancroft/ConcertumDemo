@@ -63,10 +63,17 @@ collects reads, and logs prepared writes before voting yes in durable mode.
 A participant with no local writes still logs its yes vote if the transaction
 writes elsewhere, so recovery can account for everyone's vote.
 
-Readers can share locks. A writer needs exclusive access to its range. The lock
-scan checks all earlier readers that might overlap, including a long reader
-hidden behind a shorter one. A lock conflict triggers backoff and a bounded
-number of retries with fresh transaction IDs. A failed comparison aborts.
+Readers can share locks. A writer needs exclusive access to its range. Both
+transaction paths collect all nonempty compare/read ranges as shared locks and
+write ranges as exclusive locks. Under the participant mutex, they check the
+whole set against existing locks before installing any of it. Overlaps within
+the same transaction are allowed; a partial overlap with its own write never
+leaves the rest of a comparison or read unprotected. A rejected set installs no
+locks. Successful prepares retain the set until commit or abort.
+
+The lock scan checks all earlier readers that might overlap, including a long
+reader hidden behind a shorter one. A lock conflict triggers backoff and a
+bounded number of retries with fresh transaction IDs. A failed comparison aborts.
 
 For ordinary transactions, everyone's yes vote establishes the commit decision.
 The coordinator has no durable transaction log. Workers send decisions in the

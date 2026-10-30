@@ -42,8 +42,31 @@ func (m *LockManager) tryLock(start, end uint64, write bool) bool {
 }
 
 func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, *sinfonia.LockConflict) {
+	conflict := m.tryLockRanges([]RangeLock{{start: start, end: end, write: write}})
+	return conflict == nil, conflict
+}
+
+// tryLockRanges acquires the whole transaction's lock set or leaves it untouched.
+// Check only existing locks: overlaps within this request belong to one transaction.
+// The caller must hold the participant mutex through both checking and insertion.
+func (m *LockManager) tryLockRanges(requested []RangeLock) *sinfonia.LockConflict {
+	for _, l := range requested {
+		if conflict := m.findConflict(l.start, l.end, l.write); conflict != nil {
+			return conflict
+		}
+	}
+	for _, l := range requested {
+		idx := lowerBoundLock(m.locks, l.start)
+		m.locks = append(m.locks, RangeLock{})
+		copy(m.locks[idx+1:], m.locks[idx:])
+		m.locks[idx] = l
+	}
+	return nil
+}
+
+func (m *LockManager) findConflict(start, end uint64, write bool) *sinfonia.LockConflict {
 	if m.globalWriteLock {
-		return false, &sinfonia.LockConflict{Reason: "global_write_lock", RequestedStart: start, RequestedEnd: end, RequestedWrite: write}
+		return &sinfonia.LockConflict{Reason: "global_write_lock", RequestedStart: start, RequestedEnd: end, RequestedWrite: write}
 	}
 	idx := lowerBoundLock(m.locks, start)
 	for i := idx; i < len(m.locks); i++ {
@@ -55,7 +78,7 @@ func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, 
 			continue
 		}
 		if write || l.write {
-			return false, &sinfonia.LockConflict{
+			return &sinfonia.LockConflict{
 				Reason:         "range_overlap",
 				RequestedStart: start, RequestedEnd: end, RequestedWrite: write,
 				HeldStart: l.start, HeldEnd: l.end, HeldWrite: l.write,
@@ -68,18 +91,14 @@ func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, 
 			continue
 		}
 		if rangesOverlap(start, end, l.start, l.end) && (write || l.write) {
-			return false, &sinfonia.LockConflict{
+			return &sinfonia.LockConflict{
 				Reason:         "range_overlap",
 				RequestedStart: start, RequestedEnd: end, RequestedWrite: write,
 				HeldStart: l.start, HeldEnd: l.end, HeldWrite: l.write,
 			}
 		}
 	}
-	newLock := RangeLock{start: start, end: end, write: write}
-	m.locks = append(m.locks, RangeLock{})
-	copy(m.locks[idx+1:], m.locks[idx:])
-	m.locks[idx] = newLock
-	return true, nil
+	return nil
 }
 
 func lowerBoundLock(locks []RangeLock, start uint64) int {
@@ -109,15 +128,28 @@ func rangesOverlap(aStart, aEnd, bStart, bEnd uint64) bool {
 	return (RangeLock{start: aStart, end: aEnd}).OverlapsWith(RangeLock{start: bStart, end: bEnd})
 }
 
-func overlapsAnyWrite(item minitxn.RangeItem, writes []sinfonia.WriteItem) bool {
-	start, end := item.Offset(), item.Offset()+item.Size()
-	for _, w := range writes {
-		wStart, wEnd := w.Offset(), w.Offset()+w.Size()
-		if rangesOverlap(start, end, wStart, wEnd) {
-			return true
+// tryTransactionLocksLocked protects every nonempty item, including the parts of
+// reads and comparisons that extend beyond this transaction's own writes.
+func (n *Participant) tryTransactionLocksLocked(compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ([]RangeLock, *sinfonia.LockConflict) {
+	requested := make([]RangeLock, 0, len(compares)+len(reads)+len(writes))
+	add := func(item minitxn.RangeItem, write bool) {
+		if item.Size() != 0 {
+			requested = append(requested, RangeLock{start: item.Offset(), end: item.Offset() + item.Size(), write: write})
 		}
 	}
-	return false
+	for _, item := range writes {
+		add(item, true)
+	}
+	for _, item := range compares {
+		add(item, false)
+	}
+	for _, item := range reads {
+		add(item, false)
+	}
+	if conflict := n.locks.tryLockRanges(requested); conflict != nil {
+		return nil, conflict
+	}
+	return requested, nil
 }
 
 func (n *Participant) releaseLocks(locks []RangeLock) {
