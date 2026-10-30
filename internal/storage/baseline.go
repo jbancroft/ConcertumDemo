@@ -240,7 +240,7 @@ func removeBaselineTemps(dir string) error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, baselineTempPrefix) || strings.HasPrefix(name, baselineRestorePrefix) || strings.HasPrefix(name, baselineTransferPrefix) || strings.HasPrefix(name, baselineTombstonePrefix) || strings.HasPrefix(name, ".processed.ptr.tmp-") || strings.HasPrefix(name, replayTempPrefix) {
+		if strings.HasPrefix(name, baselineTempPrefix) || strings.HasPrefix(name, baselineRestorePrefix) || strings.HasPrefix(name, baselineTransferPrefix) || strings.HasPrefix(name, baselineTombstonePrefix) || strings.HasPrefix(name, ".processed.ptr.tmp-") || strings.HasPrefix(name, replayTempPrefix) || strings.HasPrefix(name, redoTempPrefix) {
 			if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
 				return err
 			}

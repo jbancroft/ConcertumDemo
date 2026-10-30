@@ -144,6 +144,9 @@ func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 	t.Cleanup(func() { _ = b.Close() })
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	if err := a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 11, Epoch: sinfonia.EpochAt(time.Now())}
 	parts := []uint32{1, 2}
@@ -173,6 +176,9 @@ func TestRedoLogGCNoPrematureTruncationWithoutRemoteConfirm(t *testing.T) {
 	root := t.TempDir()
 	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
 	t.Cleanup(func() { _ = a.Close() })
+	if err := a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
 	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 12, Epoch: sinfonia.EpochAt(time.Now())}
 	parts := []uint32{1, 2}
 	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("a")}}})
@@ -191,6 +197,9 @@ func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
 	root := t.TempDir()
 	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
 	t.Cleanup(func() { _ = a.Close() })
+	if err := a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
 	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 13, Epoch: sinfonia.EpochAt(time.Now())}
 	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 2, Data: []byte("a")}}})
 	_, _ = a.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: false})
@@ -238,6 +247,9 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 	t.Cleanup(func() { _ = b.Close() })
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	if err := a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
 	txId := sinfonia.TransactionID{CoordinatorID: 5, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	parts := []uint32{1, 2}
 	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 7, Data: []byte("x")}}})

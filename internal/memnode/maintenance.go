@@ -89,6 +89,11 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 	if n.redoLog == nil {
 		return nil
 	}
+	// Startup recovery uses a snapshot of log indexes and writes its checkpoint
+	// between entries. Do not compact that log until recovery has finished.
+	if !n.recoveryComplete {
+		return ErrRecoveryPending
+	}
 	entries := n.redoLog.Entries()
 	truncateCount := 0
 	for _, entry := range entries {
@@ -126,6 +131,7 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 	}
 	removed := entries[:truncateCount]
 	if err := n.redoLog.TruncateHead(truncateCount); err != nil {
+		n.recoveryComplete = false
 		return err
 	}
 	for _, entry := range removed {
@@ -142,6 +148,7 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 		}
 		if n.decided != nil {
 			if err := n.decided.Remove(entry.TransactionId); err != nil {
+				n.recoveryComplete = false
 				return err
 			}
 		}

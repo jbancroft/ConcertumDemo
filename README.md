@@ -172,6 +172,8 @@ A failed decision-log write retains pending writes and locks for recovery; the
 node requires successful restart recovery before serving ordinary requests again.
 Recovery also saves original read results still held by a pending transaction
 before clearing it, preserving them for later resolution and durable restarts.
+Redo-log cleanup resets its recovery checkpoint before atomically replacing the
+log, so later restarts cannot skip retained transactions.
 
 An outage or deadline can still leave an unknown outcome. Both transaction APIs,
 including the builder, return an `ExecResult` with a `Recovery` handle. Save the

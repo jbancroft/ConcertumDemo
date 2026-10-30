@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +25,7 @@ const (
 	defaultRedoBatchSize   = 32
 	redoAppendQueueSize    = 4096
 	redoBatchCapacity      = 64
+	redoTempPrefix         = ".redo.log.tmp-"
 )
 
 type RedoLogItem struct {
@@ -439,18 +439,25 @@ func (r *RedoLog) LastTID() sinfonia.TransactionID {
 func (r *RedoLog) TruncateHead(count int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if count <= 0 {
+	if count <= 0 || len(r.entries) == 0 {
 		return nil
 	}
 	if count > len(r.entries) {
 		count = len(r.entries)
 	}
 	remaining := append([]RedoLogItem(nil), r.entries[count:]...)
+	// Compaction changes entry indexes. Persist a conservative checkpoint
+	// first: either the old or replacement log can be replayed from zero.
+	if err := StoreProcessedPointer(filepath.Dir(r.path), 0); err != nil {
+		return err
+	}
 	if err := rewriteRedoLogFile(r.path, remaining); err != nil {
 		return err
 	}
+	// Rename has published the replacement even if the directory sync fails.
+	// Keep the in-memory entries consistent with the currently visible file.
 	r.entries = remaining
-	return nil
+	return syncDir(filepath.Dir(r.path))
 }
 
 // Reset clears and syncs the redo log when a replica installs a replacement image.
@@ -461,18 +468,23 @@ func (r *RedoLog) Reset() error {
 		return err
 	}
 	r.entries = nil
-	return nil
+	return syncDir(filepath.Dir(r.path))
 }
 
+// rewriteRedoLogFile publishes a complete, synced replacement. Callers update
+// their in-memory entries and sync the directory before acknowledging success.
 func rewriteRedoLogFile(path string, entries []RedoLogItem) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := os.CreateTemp(filepath.Dir(path), redoTempPrefix)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}()
+	if err := f.Chmod(0o644); err != nil {
+		return err
+	}
 	for _, e := range entries {
 		b, err := json.Marshal(e)
 		if err != nil {
@@ -482,7 +494,13 @@ func rewriteRedoLogFile(path string, entries []RedoLogItem) error {
 			return err
 		}
 	}
-	return f.Sync()
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 type DecidedTransactionLog struct {

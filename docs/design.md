@@ -143,8 +143,13 @@ locks and returns an error so the caller can resolve the same attempt. RAM nodes
 cannot preserve data or transaction evidence across a process restart.
 
 Old redo entries can be removed once there's enough evidence that the committed
-updates reached all required participants. Tests cover interrupted recovery,
-failed writes, duplicate requests, forced aborts, and log cleanup.
+updates reached all required participants. Cleanup requires completed startup recovery,
+then durably resets the processed-entry checkpoint to zero before replacing the
+log with a synced temporary file and syncing the directory. An interruption
+leaves a complete old or new log that recovery can replay from the beginning.
+A cleanup storage failure makes the node unavailable until restart recovery.
+Tests cover full and partial cleanup after a nonzero checkpoint, interrupted
+recovery, failed writes, duplicate requests, and forced aborts.
 
 Before discarding old replies or forced-abort records, a durable node saves an
 epoch floor. Restarts and replication baselines preserve that floor so a clock
