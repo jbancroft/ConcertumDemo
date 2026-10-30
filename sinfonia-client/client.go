@@ -32,6 +32,12 @@ type CompareItem = minitxn.CompareItem
 type ReadItem = minitxn.ReadItem
 type WriteItem = minitxn.WriteItem
 type ExecResult = minitxn.ExecResult
+type RecoveryHandle = minitxn.RecoveryHandle
+type UnknownOutcomeError = minitxn.UnknownOutcomeError
+
+var ErrOutcomeExpired = minitxn.ErrOutcomeExpired
+var ErrReadResultsUnavailable = minitxn.ErrReadResultsUnavailable
+
 type MiniTransaction = minitxn.MiniTransaction
 
 type RateWindows struct {
@@ -118,6 +124,11 @@ func (c *Client) Write(ctx context.Context, hostId uint32, addr uint64, data []b
 	return c.coordinator.Write(ctx, hostId, addr, data)
 }
 
+// Resolve checks an uncertain attempt using its original participant evidence.
+func (c *Client) Resolve(ctx context.Context, handle RecoveryHandle) ExecResult {
+	return publicResult(c.coordinator.Resolve(ctx, handle))
+}
+
 func (c *Client) GetStats(hostId uint32) (Stats, error) {
 	stats, err := c.coordinator.GetStats(hostId)
 	if err != nil {
@@ -177,6 +188,10 @@ func (c *Client) ExecuteAndCommit(ctx context.Context, class string, compares []
 		internalWrites = append(internalWrites, sinfonia.WriteItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
 	}
 	res := c.coordinator.ExecuteAndCommit(ctx, class, internalCmp, internalReads, internalWrites)
+	return publicResult(res)
+}
+
+func publicResult(res client.ExecResult) ExecResult {
 	readsOut := make(map[ReadKey][]byte, len(res.ReadResults))
 	for k, v := range res.ReadResults {
 		readsOut[ReadKey{HostId: k.MemID, Address: k.Addr, Length: k.Len}] = append([]byte(nil), v...)
@@ -186,12 +201,12 @@ func (c *Client) ExecuteAndCommit(ctx context.Context, class string, compares []
 		votes[hostId] = int(vote)
 	}
 	if res.UnknownOutcome {
-		return ExecResult{Committed: false, UnknownOutcome: true, ReadResults: map[ReadKey][]byte{}, Status: StatusUnknown, ParticipantVotes: votes}
+		return ExecResult{Recovery: res.Recovery, Err: res.TransportErr, Committed: false, UnknownOutcome: true, ReadResults: map[ReadKey][]byte{}, Status: StatusUnknown, ParticipantVotes: votes}
 	}
 	if !res.Committed {
-		return ExecResult{Committed: false, ReadResults: map[ReadKey][]byte{}, Status: StatusAborted, ParticipantVotes: votes}
+		return ExecResult{Recovery: res.Recovery, Err: res.TransportErr, Committed: false, ReadResults: map[ReadKey][]byte{}, Status: StatusAborted, ParticipantVotes: votes}
 	}
-	return ExecResult{Committed: true, ReadResults: readsOut, Status: StatusCommitted, ParticipantVotes: votes}
+	return ExecResult{Recovery: res.Recovery, Err: res.TransportErr, Committed: true, ReadResults: readsOut, Status: StatusCommitted, ParticipantVotes: votes}
 }
 
 func (c *Client) NewMiniTransaction() *MiniTransaction {

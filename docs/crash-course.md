@@ -40,10 +40,11 @@ are **participants**. Execution has two phases:
 Lock conflicts cause bounded retries. A transaction touching one node uses a
 single execute-and-commit call.
 
-A lost reply can leave an **unknown outcome**: the write may have committed, so
-retrying blindly is unsafe. Durable nodes recover from saved records and peer
-evidence on restart. Automatic outcome resolution and background transaction
-recovery are not implemented here.
+After a lost reply, the client checks the original transaction's saved votes and
+decisions. Nodes also finish abandoned transactions in the background: all yes
+votes mean commit; a no vote means abort. Recovery never reruns the write.
+If an outage outlasts the caller's deadline, the result is still **unknown**, with
+a handle for checking again later. Durable nodes retain evidence across restarts.
 
 ## Minuet: an index on top
 

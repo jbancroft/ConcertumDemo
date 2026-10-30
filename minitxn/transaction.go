@@ -120,12 +120,8 @@ func (t *MiniTransaction) UniqueHostIds() []uint32 {
 	return hostIds
 }
 
-func (t *MiniTransaction) ExecuteAndCommit(ctx context.Context) (bool, map[ReadKey][]byte, Status) {
-	committed, reads, status, _ := t.ExecuteAndCommitDetailed(ctx)
-	return committed, reads, status
-}
-
-func (t *MiniTransaction) ExecuteAndCommitDetailed(ctx context.Context) (bool, map[ReadKey][]byte, Status, map[uint32]int) {
-	result := t.executor.ExecuteAndCommit(ctx, t.class, t.Compares(), t.Reads(), t.Writes())
-	return result.Committed, result.ReadResults, result.Status, result.ParticipantVotes
+// ExecuteAndCommit returns the complete result, including a recovery handle
+// when a deadline or outage prevents the client from establishing the outcome.
+func (t *MiniTransaction) ExecuteAndCommit(ctx context.Context) ExecResult {
+	return t.executor.ExecuteAndCommit(ctx, t.class, t.Compares(), t.Reads(), t.Writes())
 }

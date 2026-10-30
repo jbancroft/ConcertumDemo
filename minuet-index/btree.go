@@ -387,7 +387,7 @@ func (idx *BTree) commitSnapshot(ctx context.Context, class string, s *snapshot)
 		writes = append(writes, sinfoniaclient.WriteItem{HostId: idx.cfg.HostId, Address: addr, Data: encodeNode(n)})
 	}
 	res := idx.client.ExecuteAndCommit(ctx, "minuet-index:"+class, compares, nil, writes)
-	return res.Status, nil
+	return res.Status, res.OutcomeError()
 }
 
 func (idx *BTree) allocNode(s *snapshot, leaf bool) (*BTreeNode, error) {

@@ -34,7 +34,7 @@ func NewRPCPeer(addr string, tlsConfig *tls.Config, timeout time.Duration) *RPCP
 	if _, err := cryptorand.Read(raw[:]); err == nil {
 		owner += "/" + hex.EncodeToString(raw[:])
 	}
-	return &RPCPeer{rpc: rpcwire.NewClient(addr, rpcwire.ClientOptions{TLS: tlsConfig, DialTimeout: timeout}), owner: owner}
+	return &RPCPeer{rpc: rpcwire.NewClient(addr, rpcwire.ClientOptions{TLS: tlsConfig, DialTimeout: timeout, CallTimeout: timeout}), owner: owner}
 }
 
 func (p *RPCPeer) ReplicateRedoEntry(ctx context.Context, req sinfonia.ReplicateRedoEntryRequest) (sinfonia.ReplicateRedoEntryResponse, error) {
@@ -115,4 +115,13 @@ func (p *RPCPeer) NotifyApplied(ctx context.Context, req sinfonia.NotifyAppliedR
 func (p *RPCPeer) QueryTidStatus(ctx context.Context, req sinfonia.QueryTidStatusRequest) (sinfonia.QueryTidStatusResponse, error) {
 	var out sinfonia.QueryTidStatusResponse
 	return out, p.rpc.Call(ctx, sinfonia.MethodQueryTidStatus, req, &out)
+}
+
+func (p *RPCPeer) RecoveryForceAbort(ctx context.Context, req sinfonia.RecoverForceAbortRequest) (sinfonia.RecoverForceAbortResponse, error) {
+	var out sinfonia.RecoverForceAbortResponse
+	return out, p.rpc.Call(ctx, sinfonia.MethodRecoveryForceAbort, req, &out)
+}
+func (p *RPCPeer) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDecideRequest) (sinfonia.RecoverDecideResponse, error) {
+	var out sinfonia.RecoverDecideResponse
+	return out, p.rpc.Call(ctx, sinfonia.MethodRecoveryDecide, req, &out)
 }

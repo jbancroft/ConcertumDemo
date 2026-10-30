@@ -64,12 +64,12 @@ func (n *lostPrepareNode) ExecAndPrepare(ctx context.Context, req sinfonia.ExecP
 	return resp, err
 }
 
-func TestCoordinatorReportsUnknownWhen1PCResponseLostAfterApply(t *testing.T) {
+func TestCoordinatorResolves1PCResponseLostAfterApply(t *testing.T) {
 	n := &lost1PCNode{Participant: memnode.NewParticipant(16)}
 	coord := NewCoordinator(map[uint32]Participant{1: n})
 	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
-	if !res.UnknownOutcome || res.TransportErr == nil || res.Committed {
-		t.Fatalf("expected unknown outcome with transport error, got %+v", res)
+	if res.UnknownOutcome || res.TransportErr != nil || !res.Committed {
+		t.Fatalf("expected recovered commit, got %+v", res)
 	}
 	got, err := readParticipant(context.Background(), n.Participant, 0, 1)
 	if err != nil || string(got) != "A" {
@@ -77,7 +77,7 @@ func TestCoordinatorReportsUnknownWhen1PCResponseLostAfterApply(t *testing.T) {
 	}
 }
 
-func TestCoordinatorReportsUnknownWhenPrepareReplyFailsAfterVote(t *testing.T) {
+func TestCoordinatorResolvesPrepareReplyFailsAfterVote(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		failure error
@@ -90,9 +90,18 @@ func TestCoordinatorReportsUnknownWhenPrepareReplyFailsAfterVote(t *testing.T) {
 			n2 := memnode.NewParticipant(16)
 			coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 			coord.coordID = 1
-			res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
-			if !res.UnknownOutcome || res.TransportErr == nil || res.Committed {
-				t.Fatalf("expected unknown outcome with transport error, got %+v", res)
+			res := coord.ExecuteAndCommit(context.Background(), "", nil, []sinfonia.ReadItem{{MemID: 1, Len: 1}, {MemID: 2, Len: 1}}, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
+			if res.UnknownOutcome || res.TransportErr != nil || !res.Committed {
+				t.Fatalf("expected recovered commit, got %+v", res)
+			}
+			for id, node := range map[uint32]*memnode.Participant{1: n1.Participant, 2: n2} {
+				if got := res.ReadResults[sinfonia.ReadItem{MemID: id, Len: 1}]; string(got) != "\x00" {
+					t.Fatalf("node %d lost original read: %q", id, got)
+				}
+				pending, err := node.QueryInDoubt(context.Background(), sinfonia.QueryInDoubtRequest{})
+				if err != nil || len(pending.Entries) != 0 {
+					t.Fatalf("node %d kept transaction locked: %+v, %v", id, pending, err)
+				}
 			}
 			resp, err := n1.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}, RequestID: "retry", Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}})
 			if err != nil || resp.Vote != sinfonia.VoteOk {

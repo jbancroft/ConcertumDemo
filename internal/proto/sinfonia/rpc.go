@@ -277,6 +277,9 @@ type RecoverForceAbortRequest struct {
 
 // RecoverForceAbortResponse returns the participant's vote after that check.
 type RecoverForceAbortResponse struct {
+	Generation     uint64
+	ReadData       map[uint32][]byte
+	Expired        bool
 	Vote           Vote
 	KnownDecision  bool
 	DecisionCommit bool
@@ -284,6 +287,7 @@ type RecoverForceAbortResponse struct {
 
 // RecoverDecideRequest asks the node to apply a recovery decision.
 type RecoverDecideRequest struct {
+	Generation    uint64
 	TID           TransactionID
 	ActionCommit  bool
 	CorrelationID string

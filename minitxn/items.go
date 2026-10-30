@@ -46,6 +46,8 @@ const (
 )
 
 type ExecResult struct {
+	Recovery         *RecoveryHandle
+	Err              error
 	Committed        bool
 	ReadResults      map[ReadKey][]byte
 	Status           Status

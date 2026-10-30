@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
+	"github.com/jbancroft/ConcertumDemo/internal/recovery"
 )
 
 const (
@@ -96,9 +97,12 @@ func run(ctx context.Context, args []string, input io.Reader, out, errOut io.Wri
 			return err
 		}
 	}
+	recoveryWorkers := make(map[uint32]recovery.Participant)
 	recoveryPeers := make(map[uint32]memnode.RecoveryPeer)
 	for peerID, addr := range peers {
-		recoveryPeers[peerID] = memnode.NewRPCPeer(addr, nil, peerTimeout)
+		peer := memnode.NewRPCPeer(addr, nil, peerTimeout)
+		recoveryPeers[peerID] = peer
+		recoveryWorkers[peerID] = peer
 	}
 	node.SetRecoveryPeers(recoveryPeers)
 	finished := make(chan error, 1)
@@ -128,6 +132,10 @@ func run(ctx context.Context, args []string, input io.Reader, out, errOut io.Wri
 		case <-time.After(recoveryRetry):
 		}
 	}
+	maintenanceCtx, stopMaintenance := context.WithCancel(ctx)
+	maintenanceDone := make(chan struct{})
+	go func() { defer close(maintenanceDone); node.RunRecovery(maintenanceCtx, recoveryWorkers) }()
+	defer func() { stopMaintenance(); <-maintenanceDone }()
 	// One JSON line is the startup handshake used by the demo launcher.
 	if err := json.NewEncoder(out).Encode(struct {
 		ID         uint32 `json:"id"`

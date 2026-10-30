@@ -100,21 +100,6 @@ func (n *Participant) replayPrepareOutcomeLocked(txId sinfonia.TransactionID, re
 	return resp, true, nil
 }
 
-func (n *Participant) prepareVotedOKLocked(txId sinfonia.TransactionID) bool {
-	if out, ok := n.prepareOutcomes[txId]; ok {
-		return out.resp.Vote == sinfonia.VoteOk
-	}
-	if n.replay == nil {
-		return false
-	}
-	resp, ok := n.replay.GetPrepare(txId)
-	if !ok {
-		return false
-	}
-	n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(resp)}
-	return resp.Vote == sinfonia.VoteOk
-}
-
 func (n *Participant) rememberOnePCOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecCommit1PCResponse) (sinfonia.ExecCommit1PCResponse, error) {
 	if n.replay != nil {
 		if err := n.replay.AppendOnePC(txId, resp); err != nil {

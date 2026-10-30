@@ -165,12 +165,23 @@ definite rejection. Read-only calls currently save transaction decisions and
 replay responses too, so reads on durable nodes incur disk writes.
 
 Commit messages normally run in the background; `FlushPendingCommits` waits for
-delivery. A network failure or server error can leave the caller unsure whether
-a transaction committed, so the API also has an explicit unknown result.
-The read/write convenience methods, index, and SQL layer return
-`sinfoniaclient.ErrUnknownOutcome` in that case and stop retrying. The operation
-may have committed; callers can recognize this error with `errors.Is` and must
-not retry blindly.
+queued delivery. After an ambiguous RPC error, the client automatically checks
+the original transaction's votes and decisions. Each memnode also checks old
+prepared transactions and finishes them even if the coordinator disappeared.
+A failed decision-log write retains pending writes and locks for recovery; the
+node requires successful restart recovery before serving ordinary requests again.
+
+An outage or deadline can still leave an unknown outcome. Both transaction APIs,
+including the builder, return an `ExecResult` with a `Recovery` handle. Save the
+handle and call `Client.Resolve(ctx, handle)` later; it checks the same attempt
+without rerunning the write. The handle can be serialized as JSON and used with
+a new client configured for the same nodes.
+
+Read/write, index, and SQL errors preserve that handle in
+`*sinfoniaclient.UnknownOutcomeError` (`errors.As`); `errors.Is(err,
+sinfoniaclient.ErrUnknownOutcome)` still identifies uncertainty. Resolve before
+retrying a mutation. See [recovery details and a short example](docs/design.md#resolving-an-unknown-outcome)
+for deadlines, evidence retention, and missing read results.
 
 ## Where to read
 
@@ -186,7 +197,8 @@ not retry blindly.
 | [Participant](internal/memnode/participant.go) | Shared state, construction, and private byte-access helpers |
 | [Prepare](internal/memnode/prepare.go) | Range locks, comparisons, reads, and durable yes votes |
 | [Commit](internal/memnode/commit.go) | Commit/abort decisions and the single-participant path |
-| [Recovery](internal/memnode/recovery.go) | Saved decisions, epoch floors, and peer evidence |
+| [Recovery coordinator](internal/recovery/resolve.go) | Collecting votes and delivering recovery decisions |
+| [Participant recovery](internal/memnode/recovery.go) | Saved decisions, epoch floors, and peer evidence |
 | [B+tree](minuet-index/btree.go) | Pages, splits, merges, and range scans |
 | [SQL engine](minuet-sql/engine.go) | A small parser and table layer over the tree |
 

@@ -51,89 +51,132 @@ func (n *Participant) SetRecoveryPeers(peers map[uint32]RecoveryPeer) {
 }
 
 func (n *Participant) QueryTidStatus(ctx context.Context, req sinfonia.QueryTidStatusRequest) (sinfonia.QueryTidStatusResponse, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if out, ok := n.commitOutcomes[req.TID]; ok {
-		if out.actionCommit {
-			return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeCommit, VotedOK: true}, nil
+	vote, err := n.recoveryVote(ctx, req.TID)
+	if err != nil {
+		return sinfonia.QueryTidStatusResponse{}, err
+	}
+	if vote.Expired {
+		return sinfonia.QueryTidStatusResponse{}, fmt.Errorf("%w: transaction evidence expired", ErrRecoveryPending)
+	}
+	outcome := sinfonia.TidOutcomeUnknown
+	if vote.KnownDecision {
+		outcome = sinfonia.TidOutcomeAbort
+		if vote.DecisionCommit {
+			outcome = sinfonia.TidOutcomeCommit
 		}
-		return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeAbort, VotedOK: false}, nil
+	} else if vote.Vote != sinfonia.VoteOk {
+		outcome = sinfonia.TidOutcomeAbort
 	}
-	if n.decided != nil {
-		if c, ok := n.decided.Get(req.TID); ok {
-			if c {
-				return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeCommit, VotedOK: true}, nil
-			}
-			return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeAbort, VotedOK: false}, nil
-		}
-	}
-	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return sinfonia.QueryTidStatusResponse{KnownDecision: false, Outcome: sinfonia.TidOutcomeAbort, VotedOK: false}, nil
-	}
-	if _, ok := n.allLogTxIds[req.TID]; ok {
-		return sinfonia.QueryTidStatusResponse{KnownDecision: false, Outcome: sinfonia.TidOutcomeUnknown, VotedOK: true}, nil
-	}
-	if n.prepareVotedOKLocked(req.TID) {
-		return sinfonia.QueryTidStatusResponse{KnownDecision: false, Outcome: sinfonia.TidOutcomeUnknown, VotedOK: true}, nil
-	}
-	if n.forcedAborts != nil {
-		if err := n.forcedAborts.AddItem(req.TID); err != nil {
-			return sinfonia.QueryTidStatusResponse{}, err
-		}
-	}
-	n.metrics.forcedAbortCount.Inc()
-	n.metrics.forcedAbortCountCurrent.Set(int64(n.metrics.forcedAbortCountCurrent.Value() + 1))
-	return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeAbort, VotedOK: false}, nil
+	return sinfonia.QueryTidStatusResponse{KnownDecision: vote.KnownDecision, Outcome: outcome, VotedOK: vote.Vote == sinfonia.VoteOk}, nil
 }
 
 func (n *Participant) RecoveryForceAbort(ctx context.Context, req sinfonia.RecoverForceAbortRequest) (sinfonia.RecoverForceAbortResponse, error) {
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
-		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
+		return sinfonia.RecoverForceAbortResponse{}, ErrResourceExhausted
 	}
+	return n.recoveryVote(ctx, req.TID)
+}
 
+// recoveryVote never changes a yes vote. Wait for a request that temporarily
+// released the mutex (for replication) before deciding whether it has voted.
+func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.TransactionID) (sinfonia.RecoverForceAbortResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	correlationID := req.CorrelationID
-	if correlationID == "" {
-		correlationID = n.correlationForTIDLocked(req.TID)
-	}
-	n.recordTimelineLocked(req.TID, correlationID, "recovery_force_abort", "")
-	if out, ok := n.commitOutcomes[req.TID]; ok {
-		if out.actionCommit {
-			return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteOk, KnownDecision: true, DecisionCommit: true}, nil
+	for {
+		var done <-chan struct{}
+		if flight := n.prepareFlights[tid]; flight != nil {
+			done = flight.done
 		}
-		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadForced, KnownDecision: true}, nil
-	}
-	if n.decided != nil {
-		if committed, ok := n.decided.Get(req.TID); ok {
-			if committed {
-				return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteOk, KnownDecision: true, DecisionCommit: true}, nil
-			}
-			return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadForced, KnownDecision: true}, nil
+		if flight := n.onePCFlights[tid]; flight != nil {
+			done = flight.done
+		}
+		if done == nil {
+			break
+		}
+		n.mu.Unlock()
+		select {
+		case <-done:
+			n.mu.Lock()
+		case <-ctx.Done():
+			n.mu.Lock()
+			return sinfonia.RecoverForceAbortResponse{}, ctx.Err()
 		}
 	}
-	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadForced}, nil
+	if err := ctx.Err(); err != nil {
+		return sinfonia.RecoverForceAbortResponse{}, err
 	}
-	if _, ok := n.allLogTxIds[req.TID]; ok {
-		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteOk}, nil
+	out := sinfonia.RecoverForceAbortResponse{Generation: n.generation, Vote: sinfonia.VoteUnknown}
+	// Inspect saved replies without replaying operations or doing replication I/O.
+	one, oneOK := n.onePCOutcomes[tid]
+	prep, prepOK := n.prepareOutcomes[tid]
+	if n.replay != nil {
+		if !oneOK {
+			one.resp, oneOK = n.replay.GetOnePC(tid)
+		}
+		if !prepOK {
+			prep.resp, prepOK = n.replay.GetPrepare(tid)
+		}
 	}
-	if n.prepareVotedOKLocked(req.TID) {
-		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteOk}, nil
+	if oneOK {
+		out.Vote, out.ReadData = one.resp.Vote, cloneReadData(one.resp.ReadData)
+		out.KnownDecision, out.DecisionCommit = true, one.resp.Vote == sinfonia.VoteOk
+	} else if prepOK {
+		out.Vote, out.ReadData = prep.resp.Vote, cloneReadData(prep.resp.ReadData)
+	}
+	if tx := n.inDoubt[tid]; tx != nil {
+		out.Vote = sinfonia.VoteOk
+		if out.ReadData == nil {
+			out.ReadData = cloneReadData(tx.readData)
+		}
+	}
+	if decision, ok := n.commitOutcomes[tid]; ok {
+		out.KnownDecision, out.DecisionCommit = true, decision.actionCommit
+	} else if n.decided != nil {
+		if commit, ok := n.decided.Get(tid); ok {
+			out.KnownDecision, out.DecisionCommit = true, commit
+		}
+	}
+	if out.KnownDecision {
+		out.Vote = sinfonia.VoteBadForced
+		if out.DecisionCommit {
+			out.Vote = sinfonia.VoteOk
+		}
+		return out, nil
+	}
+	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(tid) {
+		out.Vote = sinfonia.VoteBadForced
+		return out, nil
+	}
+	if _, ok := n.allLogTxIds[tid]; ok {
+		out.Vote = sinfonia.VoteOk
+	}
+	if out.Vote != sinfonia.VoteUnknown {
+		return out, nil
+	}
+	// Missing evidence after retention is not evidence of an abort.
+	if (storage.ReplayRetention{CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.PublicRetryHorizon}).Expired(tid) {
+		out.Expired = true
+		return out, nil
 	}
 	if n.forcedAborts != nil {
-		if err := n.forcedAborts.AddItem(req.TID); err != nil {
-			return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadInternal}, err
+		if err := n.forcedAborts.AddItem(tid); err != nil {
+			return out, err
 		}
+	} else {
+		// RAM nodes also have to reject a late request for this same attempt.
+		n.commitOutcomes[tid] = commitOutcome{actionCommit: false}
 	}
-	return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteBadForced}, nil
+	out.Vote = sinfonia.VoteBadForced
+	n.metrics.forcedAbortCount.Inc()
+	n.metrics.forcedAbortCountCurrent.Set(n.metrics.forcedAbortCountCurrent.Value() + 1)
+	return out, nil
 }
 
 func (n *Participant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDecideRequest) (sinfonia.RecoverDecideResponse, error) {
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
 		return sinfonia.RecoverDecideResponse{Ack: false}, ErrResourceExhausted
 	}
-	resp, err := n.commit(ctx, sinfonia.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit, CorrelationID: req.CorrelationID}, true)
+	resp, err := n.commit(ctx, sinfonia.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit, CorrelationID: req.CorrelationID, Generation: req.Generation}, true)
 	if err != nil {
 		return sinfonia.RecoverDecideResponse{Ack: false}, err
 	}

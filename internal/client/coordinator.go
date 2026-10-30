@@ -15,6 +15,8 @@ import (
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
+	"github.com/jbancroft/ConcertumDemo/internal/recovery"
+	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
 var coordinatorIDFallback atomic.Uint64
@@ -31,6 +33,7 @@ const (
 
 // Participant is the node interface used by the coordinator.
 type Participant interface {
+	recovery.Participant
 	ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error)
 	ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error)
 	Commit(ctx context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error)
@@ -194,6 +197,7 @@ func (c *Coordinator) observeEpoch(epoch uint64) {
 }
 
 type ExecResult struct {
+	Recovery         *minitxn.RecoveryHandle
 	Committed        bool
 	ReadResults      map[sinfonia.ReadItem][]byte
 	Status           sinfonia.Vote
@@ -218,6 +222,8 @@ func (c *Coordinator) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff tim
 }
 
 func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ExecResult {
+	ctx, cancel := context.WithTimeout(ctx, defaultExecuteTimeout)
+	defer cancel()
 	seen := make(map[uint32]struct{})
 	for _, i := range compares {
 		seen[c.resolveHostId(i.MemID)] = struct{}{}
@@ -238,7 +244,18 @@ func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compar
 	for {
 		txId := c.nextTID()
 		res, retry := c.execAttempt(ctx, txId, hostIds, class, compares, reads, writes)
-		if !retry {
+		if res.UnknownOutcome {
+			handle := &minitxn.RecoveryHandle{TID: txId, Participants: append([]uint32(nil), hostIds...)}
+			for _, item := range reads {
+				handle.Reads = append(handle.Reads, minitxn.RecoveryRead{ParticipantID: c.resolveHostId(item.MemID), Item: minitxn.ReadItem{HostId: item.MemID, Address: item.Addr, Length: item.Len}})
+			}
+			resolved := c.Resolve(ctx, *handle)
+			if resolved.UnknownOutcome {
+				resolved.TransportErr = errors.Join(res.TransportErr, resolved.TransportErr)
+			}
+			return resolved
+		}
+		if !retry || ctx.Err() != nil {
 			return res
 		}
 		if attempt >= c.maxRetries {
@@ -459,7 +476,7 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 				return
 			}
 			reqReads := readItemsForHost(hostId, reads, c.resolveHostId)
-			worker.prepareCh <- prepareCall{ctx: ctx, req: sinfonia.ExecPrepareRequest{
+			call := prepareCall{ctx: ctx, req: sinfonia.ExecPrepareRequest{
 				TID:           txId,
 				RequestID:     sinfonia.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
 				CorrelationID: txId.CorrelationID(),
@@ -472,6 +489,11 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 				Class:         class,
 				Generation:    c.generationFor(hostId),
 			}, respC: results}
+			select {
+			case worker.prepareCh <- call:
+			case <-ctx.Done():
+				results <- prepareResult{hostId: hostId, err: ctx.Err()}
+			}
 		}(hostId)
 	}
 
@@ -480,13 +502,20 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 	retry := false
 	aggregatedReads := map[sinfonia.ReadItem][]byte{}
 	participantVotes := map[uint32]sinfonia.Vote{}
+	var prepareErr error
 	for range hostIds {
-		r := <-results
+		var r prepareResult
+		select {
+		case r = <-results:
+		case <-ctx.Done():
+			return ExecResult{UnknownOutcome: true, Status: sinfonia.VoteBadInternal, TransportErr: ctx.Err()}, false
+		}
 		if r.err != nil {
 			participantVotes[r.hostId] = sinfonia.VoteBadInternal
 			// An error may follow a saved yes vote; only a returned vote
 			// establishes that this participant rejected the transaction.
-			return ExecResult{UnknownOutcome: true, Status: sinfonia.VoteBadInternal, ParticipantVotes: participantVotes, TransportErr: r.err}, false
+			prepareErr = errors.Join(prepareErr, r.err)
+			continue
 		}
 		participantVotes[r.hostId] = r.resp.Vote
 		if r.resp.Vote != sinfonia.VoteOk {
@@ -503,12 +532,22 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 		}
 		c.observeEpoch(r.resp.CurrentEpoch)
 	}
+	if prepareErr != nil {
+		return ExecResult{UnknownOutcome: true, Status: sinfonia.VoteBadInternal, ParticipantVotes: participantVotes, TransportErr: prepareErr}, false
+	}
 	for _, hostId := range hostIds {
 		c.workersMu.Lock()
 		worker := c.workers[hostId]
 		c.workersMu.Unlock()
 		if worker != nil {
-			worker.commitCh <- commitDispatch{tid: txId, requestID: sinfonia.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(hostId), 10)), correlationID: txId.CorrelationID(), actionCommit: decideCommit, generation: c.generationFor(hostId)}
+			decision := commitDispatch{tid: txId, requestID: sinfonia.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(hostId), 10)), correlationID: txId.CorrelationID(), actionCommit: decideCommit, generation: c.generationFor(hostId)}
+			select {
+			case worker.commitCh <- decision:
+			case <-ctx.Done():
+				// The votes already establish the decision. Participant recovery finishes
+				// delivery if the caller cannot wait for room in the dispatch queue.
+				return ExecResult{Committed: decideCommit, ReadResults: aggregatedReads, Status: status, ParticipantVotes: participantVotes, TransportErr: ctx.Err()}, false
+			}
 		}
 	}
 

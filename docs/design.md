@@ -99,7 +99,10 @@ call instead.
 If an RPC fails after the request might have arrived, the caller can't assume
 the transaction aborted. This includes server errors after a saved vote or
 commit decision; an error is not an abort vote. The API reports committed,
-aborted, or unknown.
+aborted, or unknown. An ambiguous result first triggers bounded resolution of the
+same transaction ID; it never triggers a fresh mutation. Both the direct client
+and transaction builder return the complete `ExecResult`, preserving its recovery
+handle and any error.
 Participants remember replies so duplicate requests can get the same result
 without applying writes twice.
 
@@ -118,6 +121,27 @@ peers for evidence about unfinished transactions. Missing evidence can keep it
 from finishing recovery or serving requests. A coordinator disappearing doesn't
 give a prepared participant permission to abort on its own.
 
+The shared [recovery coordinator](../internal/recovery/resolve.go) asks participants
+for their existing votes. A node that has not voted records a forced abort and
+rejects a late request for that transaction ID, including on RAM nodes. A saved
+decision takes precedence; otherwise all yes votes establish commit and any no
+vote establishes abort. Missing or expired evidence is never counted as a no.
+Probes and decision deliveries run concurrently, with time reserved for delivery
+so an unreachable peer cannot block progress at reachable nodes. Recovery waits
+for an in-flight prepare or one-node request before determining its vote.
+
+After startup recovery, each standalone memnode runs a scan every 250 ms for
+prepared transactions at least one second old. It runs the same recovery protocol
+using itself and its configured peers. Several nodes can help the same transaction
+concurrently. Each attempt is bounded to one second; unresolved entries are
+checked again on later scans. Shutdown cancels and joins the worker. Embedded
+participants can opt in by running `RunRecovery` with their peers and a context.
+A failed storage write leaves a node unavailable until successful restart recovery;
+the background worker does not repair failed storage. If a one-node transaction
+cannot save its decision after logging redo, it retains its pending writes and
+locks and returns an error so the caller can resolve the same attempt. RAM nodes
+cannot preserve data or transaction evidence across a process restart.
+
 Old redo entries can be removed once there's enough evidence that the committed
 updates reached all required participants. Tests cover interrupted recovery,
 failed writes, duplicate requests, forced aborts, and log cleanup.
@@ -133,6 +157,42 @@ durable participants can restart together and exchange evidence. The full demo
 restarts both processes with their saved files to demonstrate an orderly restart.
 Tests also restart nodes with prepared transactions whose coordinator vanished.
 The demos don't test automatic failover or sudden power loss.
+
+## Resolving an unknown outcome
+
+The client bounds execution to five seconds (or the caller's earlier deadline).
+After an ambiguous error, automatic resolution uses at most one second of the
+remaining time. `Client.Resolve` also uses at most one second per call, probing in
+250 ms attempts with a 25 ms delay between attempts. RPC I/O responds to context
+cancellation, including when a connection is already open.
+
+```go
+result := api.NewMiniTransaction().Write(1, 0, []byte("hello")).ExecuteAndCommit(ctx)
+if result.UnknownOutcome {
+    // Save *result.Recovery before returning to the caller. After connectivity
+    // returns, use a fresh context to check this attempt, not execute it again.
+    result = api.Resolve(recoveryCtx, *result.Recovery)
+}
+// Check result.Status for the decision and result.OutcomeError() for uncertainty
+// or unavailable original reads. Resolve can still return unknown during an outage.
+```
+
+`Client.Read`/`Write`, the index, and SQL propagate `*UnknownOutcomeError`, whose
+`Handle` and `Cause` survive wrapping through `errors.As`. Reopen a SQL engine
+after resolving an uncertain `CREATE TABLE` to reload its catalog cache.
+
+A commit decision and its read payload are separate facts. Recovery returns saved
+reads from the original attempt; it never substitutes a new read of current data.
+If a crash preserved the commit but lost its exact read response, the result has
+`StatusCommitted` and `ErrReadResultsUnavailable`. This does not authorize retrying
+its writes. As with normal execution, knowing the decision does not mean every
+participant has already applied it; background recovery finishes delivery.
+
+Replay records are retained for the current and previous UTC-hour epochs. Once
+old evidence is removed, resolution returns unknown with `ErrOutcomeExpired`,
+not a fabricated abort. Save and resolve handles promptly; the demo does not keep
+an indefinite application-level transaction history. An unreachable participant
+can leave a transaction unresolved until it returns.
 
 ## The B+tree
 
@@ -151,9 +211,9 @@ merges.
 An update reads the reachable pages into a working copy and changes that copy.
 It then compares the original superblock and page bytes and writes the result
 in one minitransaction. A confirmed abort causes it to reload and try again.
-An unknown outcome returns `sinfoniaclient.ErrUnknownOutcome` immediately,
-because the update may already have committed. Automatic outcome resolution
-is not implemented.
+The client first tries to resolve an uncertain attempt. If it remains unknown,
+the index returns `sinfoniaclient.ErrUnknownOutcome` with its recovery handle,
+because the update may already have committed.
 Reading the whole tree keeps this simple, but makes updates expensive.
 
 Loading a tree reads the superblock again after its pages. Every mutation updates

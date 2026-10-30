@@ -1,0 +1,46 @@
+package recovery_test
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/jbancroft/ConcertumDemo/internal/memnode"
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
+	"github.com/jbancroft/ConcertumDemo/internal/recovery"
+)
+
+type unavailable struct{ recovery.Participant }
+
+func (unavailable) RecoveryForceAbort(ctx context.Context, _ sinfonia.RecoverForceAbortRequest) (sinfonia.RecoverForceAbortResponse, error) {
+	<-ctx.Done()
+	return sinfonia.RecoverForceAbortResponse{}, ctx.Err()
+}
+
+func TestKnownDecisionStillReachesPreparedNodeWithAnotherPeerUnavailable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+	decided, prepared := memnode.NewParticipantWithId(2, 16), memnode.NewParticipantWithId(3, 16)
+	for _, node := range []*memnode.Participant{decided, prepared} {
+		resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1, 2, 3}, WriteItems: []sinfonia.WriteItem{{Data: []byte("A")}}})
+		if err != nil || resp.Vote != sinfonia.VoteOk {
+			t.Fatalf("prepare: %+v, %v", resp, err)
+		}
+	}
+	if _, err := decided.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: true}); err != nil {
+		t.Fatal(err)
+	}
+	result := recovery.Resolve(ctx, tid, []uint32{1, 2, 3}, map[uint32]recovery.Participant{1: unavailable{}, 2: decided, 3: prepared})
+	if !result.Known || !result.Committed {
+		t.Fatalf("lost known decision: %+v", result)
+	}
+	pending, err := prepared.QueryInDoubt(ctx, sinfonia.QueryInDoubtRequest{})
+	if err != nil || len(pending.Entries) != 0 {
+		t.Fatalf("unreachable peer prevented decision delivery: %+v, %v", pending, err)
+	}
+	response, err := prepared.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: sinfonia.TransactionID{CoordinatorID: 2, Counter: 1, Epoch: tid.Epoch}, ReadItems: []sinfonia.ReadItem{{Len: 1}}})
+	if err != nil || response.Vote != sinfonia.VoteOk || string(response.ReadData[0]) != "A" {
+		t.Fatalf("prepared write not visible: %+v, %v", response, err)
+	}
+}

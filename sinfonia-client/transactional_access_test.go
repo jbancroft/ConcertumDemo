@@ -127,7 +127,7 @@ func TestClientWritePersistsAndUsesFencingGeneration(t *testing.T) {
 	}
 }
 
-func TestClientWriteReportsUnknownAfterServerCommitError(t *testing.T) {
+func TestClientWriteResolvesDecisionAfterServerCommitError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	dir := t.TempDir()
@@ -142,8 +142,12 @@ func TestClientWriteReportsUnknownAfterServerCommitError(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := c.Write(ctx, 1, 4, []byte("saved"))
-	if !errors.Is(err, ErrUnknownOutcome) || errors.Is(err, ErrTransactionAborted) {
-		t.Fatalf("postcommit error = %v, want unknown outcome", err)
+	if err != nil {
+		t.Fatalf("saved commit decision did not resolve: %v", err)
+	}
+	n.SetOutcomeReplayBoundaryHookForTest(nil)
+	if data, readErr := c.Read(ctx, 1, 4, 5); readErr != nil || string(data) != "saved" {
+		t.Fatalf("recovery did not apply the committed write: %q, %v", data, readErr)
 	}
 	if attempts.Load() != 1 {
 		t.Fatalf("ambiguous write was retried: %d attempts", attempts.Load())
@@ -155,7 +159,7 @@ func TestClientWriteReportsUnknownAfterServerCommitError(t *testing.T) {
 	reopened := durableAccessNode(t, dir)
 	c, _ = accessClient(t, reopened, 0)
 	if data, err := c.Read(ctx, 1, 4, 5); err != nil || string(data) != "saved" {
-		t.Fatalf("unknown write did not recover: %q, %v", data, err)
+		t.Fatalf("committed write did not recover: %q, %v", data, err)
 	}
 }
 

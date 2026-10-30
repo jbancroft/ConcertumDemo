@@ -14,6 +14,7 @@ type unknownOutcomeClient struct {
 	sinfoniaclient.TxnClient
 	applyWrites bool
 	attempts    int
+	handle      sinfoniaclient.RecoveryHandle
 }
 
 func (c *unknownOutcomeClient) ExecuteAndCommit(ctx context.Context, class string, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
@@ -27,7 +28,7 @@ func (c *unknownOutcomeClient) ExecuteAndCommit(ctx context.Context, class strin
 			return result
 		}
 	}
-	return sinfoniaclient.ExecResult{Status: sinfoniaclient.StatusUnknown, UnknownOutcome: true}
+	return sinfoniaclient.ExecResult{Status: sinfoniaclient.StatusUnknown, UnknownOutcome: true, Recovery: &c.handle}
 }
 
 func TestCreateTableUnknownOutcomeIsNotRetried(t *testing.T) {
@@ -46,6 +47,10 @@ func TestCreateTableUnknownOutcomeIsNotRetried(t *testing.T) {
 			_, err := engine.Exec(ctx, "CREATE TABLE scores")
 			if !errors.Is(err, sinfoniaclient.ErrUnknownOutcome) {
 				t.Errorf("create error = %v, want ErrUnknownOutcome", err)
+			}
+			var uncertain *sinfoniaclient.UnknownOutcomeError
+			if !errors.As(err, &uncertain) || uncertain.Handle != &client.handle {
+				t.Fatalf("lost recovery handle: %v", err)
 			}
 			if client.attempts != 1 {
 				t.Errorf("commit attempts = %d, want 1", client.attempts)

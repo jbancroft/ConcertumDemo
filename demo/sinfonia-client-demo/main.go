@@ -55,17 +55,17 @@ func demonstrate(ctx context.Context, api *sinfoniaclient.Client, out io.Writer)
 	}
 
 	// Both comparisons must succeed for either write to commit.
-	committed, _, status := api.NewMiniTransaction().
+	result := api.NewMiniTransaction().
 		Compare(1, balanceAddress, number(100)).
 		Compare(2, balanceAddress, number(100)).
 		Write(1, balanceAddress, number(75)).
 		Write(2, balanceAddress, number(125)).
 		ExecuteAndCommit(ctx)
-	if status == sinfoniaclient.StatusUnknown {
-		return errors.New("transfer outcome is unknown; do not retry blindly")
+	if err := result.OutcomeError(); err != nil {
+		return err
 	}
-	if !committed || status != sinfoniaclient.StatusCommitted {
-		return fmt.Errorf("transfer: committed=%t status=%d", committed, status)
+	if !result.Committed || result.Status != sinfoniaclient.StatusCommitted {
+		return fmt.Errorf("transfer: committed=%t status=%d", result.Committed, result.Status)
 	}
 	// Commit delivery runs in the background. Wait before reading the new values.
 	if err := api.FlushPendingCommits(ctx); err != nil {
@@ -76,13 +76,13 @@ func demonstrate(ctx context.Context, api *sinfoniaclient.Client, out io.Writer)
 	}
 
 	// Node 1 now holds 75, so this stale comparison must reject BOTH writes.
-	committed, _, status = api.NewMiniTransaction().
+	result = api.NewMiniTransaction().
 		Compare(1, balanceAddress, number(100)).
 		Write(1, balanceAddress, number(0)).
 		Write(2, balanceAddress, number(0)).
 		ExecuteAndCommit(ctx)
-	if committed || status != sinfoniaclient.StatusAborted {
-		return fmt.Errorf("stale comparison: committed=%t status=%d, want aborted", committed, status)
+	if result.Committed || result.Status != sinfoniaclient.StatusAborted {
+		return fmt.Errorf("stale comparison: committed=%t status=%d, want aborted", result.Committed, result.Status)
 	}
 	if err := api.FlushPendingCommits(ctx); err != nil {
 		return err

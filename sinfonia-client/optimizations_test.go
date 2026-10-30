@@ -53,7 +53,9 @@ func TestSingleParticipantUses1PCFastPath(t *testing.T) {
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n})
 	c := &Client{coordinator: coord}
 
-	committed, _, status := c.NewMiniTransaction().Write(1, 0, []byte("x")).ExecuteAndCommit(context.Background())
+	execution := c.NewMiniTransaction().Write(1, 0, []byte("x")).ExecuteAndCommit(context.Background())
+
+	committed, status := execution.Committed, execution.Status
 	if !committed || status != StatusCommitted {
 		t.Fatalf("expected commit, got committed=%v status=%v", committed, status)
 	}
@@ -81,10 +83,11 @@ func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			committed, _, _ := c.NewMiniTransaction().
+			execution := c.NewMiniTransaction().
 				Write(1, uint64(i), []byte{byte(i)}).
 				Write(2, uint64(i), []byte{byte(i)}).
 				ExecuteAndCommit(context.Background())
+			committed := execution.Committed
 			if !committed {
 				t.Errorf("txn %d aborted", i)
 			}
@@ -109,7 +112,8 @@ func TestCommitMessageBatchingReducesIndividualCommitRPCs(t *testing.T) {
 	c := &Client{coordinator: coord}
 
 	for i := 0; i < 200; i++ {
-		committed, _, _ := c.NewMiniTransaction().Write(1, uint64(i%64), []byte("a")).Write(2, uint64(i%64), []byte("b")).ExecuteAndCommit(context.Background())
+		execution := c.NewMiniTransaction().Write(1, uint64(i%64), []byte("a")).Write(2, uint64(i%64), []byte("b")).ExecuteAndCommit(context.Background())
+		committed := execution.Committed
 		if !committed {
 			t.Fatalf("unexpected abort at %d", i)
 		}
@@ -137,10 +141,12 @@ func TestFlushPendingCommitsAppliesQueuedDecisions(t *testing.T) {
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	c := &Client{coordinator: coord}
 
-	committed, _, status := c.NewMiniTransaction().
+	execution := c.NewMiniTransaction().
 		Write(1, 4, []byte("one")).
 		Write(2, 8, []byte("two")).
 		ExecuteAndCommit(context.Background())
+
+	committed, status := execution.Committed, execution.Status
 	if !committed || status != StatusCommitted {
 		t.Fatalf("unexpected transaction outcome: committed=%v status=%v", committed, status)
 	}

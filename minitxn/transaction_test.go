@@ -63,7 +63,9 @@ func TestMiniTransactionRetainsOperationsAndOwnsData(t *testing.T) {
 		t.Fatalf("changing returned host IDs changed the transaction: %v", got)
 	}
 
-	committed, _, status := tx.ExecuteAndCommit(context.Background())
+	execution := tx.ExecuteAndCommit(context.Background())
+
+	committed, status := execution.Committed, execution.Status
 	if !committed || status != StatusCommitted || executor.class != "gofonia" {
 		t.Fatalf("commit=%t status=%d class=%q", committed, status, executor.class)
 	}

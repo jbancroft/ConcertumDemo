@@ -190,3 +190,34 @@ func TestServerDoesNotDispatchMalformedRequest(t *testing.T) {
 		t.Fatal("server dispatched malformed request")
 	}
 }
+
+func TestClientCancellationInterruptsBlockedResponse(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := NewClient("unused", ClientOptions{})
+	client.idle = []net.Conn{clientConn}
+	defer client.Close()
+	defer serverConn.Close()
+	received := make(chan struct{})
+	go func() {
+		var request Request
+		_ = readFrame(serverConn, &request)
+		close(received)
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Call(ctx, "test.block", sinfonia.ExecCommit1PCRequest{}, nil) }()
+	<-received
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled RPC succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not interrupt blocked socket read")
+	}
+	if len(client.idle) != 0 {
+		t.Fatal("cancelled connection was returned to pool")
+	}
+}

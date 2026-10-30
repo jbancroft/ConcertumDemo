@@ -90,13 +90,13 @@ func (n *lostOnePCReplyParticipant) ExecCommit1PC(ctx context.Context, req sinfo
 	return sinfonia.ExecCommit1PCResponse{}, errors.New("lost commit reply")
 }
 
-func TestExecuteAndCommitReportsUnknownAfterLostReply(t *testing.T) {
+func TestExecuteAndCommitResolvesLostReply(t *testing.T) {
 	ctx := context.Background()
 	n := &lostOnePCReplyParticipant{Participant: memnode.NewParticipant(16)}
 	c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: n})}
 	result := c.ExecuteAndCommit(ctx, "", nil, nil, []WriteItem{{HostId: 1, Address: 0, Data: []byte("x")}})
-	if result.Committed || !result.UnknownOutcome || result.Status != StatusUnknown {
-		t.Fatalf("lost reply should produce an unknown outcome: %+v", result)
+	if !result.Committed || result.UnknownOutcome || result.Status != StatusCommitted {
+		t.Fatalf("lost reply should resolve to committed: %+v", result)
 	}
 	if got, err := c.Read(ctx, 1, 0, 1); err != nil || string(got) != "x" {
 		t.Fatalf("write should have applied before the reply was lost: data=%q error=%v", got, err)
@@ -116,12 +116,14 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	committed, _, status := c.NewMiniTransaction().
+	execution := c.NewMiniTransaction().
 		Compare(1, 0, []byte("a")).
 		Compare(2, 0, []byte("x")).
 		Write(1, 1, []byte("b")).
 		Write(2, 1, []byte("y")).
 		ExecuteAndCommit(context.Background())
+
+	committed, status := execution.Committed, execution.Status
 
 	if !committed || status != StatusCommitted {
 		t.Fatalf("expected committed, got committed=%v status=%v", committed, status)
@@ -139,7 +141,9 @@ func TestCompareAbortNoWritesApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	committed, _, status := c.NewMiniTransaction().Compare(1, 0, []byte("nope")).Write(1, 0, []byte("new!")).ExecuteAndCommit(context.Background())
+	execution := c.NewMiniTransaction().Compare(1, 0, []byte("nope")).Write(1, 0, []byte("new!")).ExecuteAndCommit(context.Background())
+
+	committed, status := execution.Committed, execution.Status
 	if committed {
 		t.Fatalf("expected abort")
 	}
@@ -179,12 +183,14 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 	}))
 	coord.SetMaxRetriesForTest(3)
 
-	committed, _, status := c.NewMiniTransaction().
+	execution := c.NewMiniTransaction().
 		Compare(1, 0, []byte("ab")).
 		Compare(2, 0, []byte("xy")).
 		Write(1, 0, []byte("cd")).
 		Write(2, 0, []byte("zw")).
 		ExecuteAndCommit(context.Background())
+
+	committed, status := execution.Committed, execution.Status
 
 	if !committed || status != StatusCommitted {
 		t.Fatalf("expected commit after retry, got committed=%v status=%v", committed, status)
@@ -207,7 +213,8 @@ func TestMTxWithClassExposesClassStats(t *testing.T) {
 	c := NewClient(map[uint32]NodeConfig{
 		1: {RPCAddress: listener.Addr().String(), StatsURL: statsServer.URL},
 	})
-	committed, _, status := c.NewMiniTransaction().WithClass("inventory").Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
+	execution := c.NewMiniTransaction().WithClass("inventory").Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
+	committed, status := execution.Committed, execution.Status
 	if !committed || status != StatusCommitted {
 		t.Fatalf("expected committed inventory transaction")
 	}
@@ -228,7 +235,8 @@ func TestMTxWithoutClassFallsBackToUnclassified(t *testing.T) {
 	n1 := memnode.NewParticipant(32)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
 	c := &Client{coordinator: coord}
-	committed, _, status := c.NewMiniTransaction().Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
+	execution := c.NewMiniTransaction().Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
+	committed, status := execution.Committed, execution.Status
 	if !committed || status != StatusCommitted {
 		t.Fatalf("expected committed unclassified transaction")
 	}

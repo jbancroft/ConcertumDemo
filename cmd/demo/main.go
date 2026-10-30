@@ -68,10 +68,10 @@ func run(ctx context.Context, executable, dir string, out io.Writer) (err error)
 		return err
 	}
 	// The balance is now 75, so comparing it with 100 must reject both writes.
-	ok, _, status := c.Client.NewMiniTransaction().Compare(1, balanceAddr, number(100)).
+	result := c.Client.NewMiniTransaction().Compare(1, balanceAddr, number(100)).
 		Write(1, balanceAddr, number(0)).Write(2, balanceAddr, number(0)).ExecuteAndCommit(ctx)
-	if ok || status != sinfoniaclient.StatusAborted {
-		return fmt.Errorf("stale compare: committed=%t status=%d", ok, status)
+	if result.Committed || result.Status != sinfoniaclient.StatusAborted {
+		return fmt.Errorf("stale compare: committed=%t status=%d", result.Committed, result.Status)
 	}
 	if err := c.Client.FlushPendingCommits(ctx); err != nil {
 		return err
@@ -150,9 +150,12 @@ func number(n uint64) []byte {
 }
 
 func commit(ctx context.Context, api *sinfoniaclient.Client, tx *sinfoniaclient.MiniTransaction) error {
-	ok, _, status := tx.ExecuteAndCommit(ctx)
-	if !ok {
-		return fmt.Errorf("transaction did not commit: status=%d", status)
+	result := tx.ExecuteAndCommit(ctx)
+	if err := result.OutcomeError(); err != nil {
+		return err
+	}
+	if !result.Committed {
+		return fmt.Errorf("transaction did not commit: status=%d", result.Status)
 	}
 	// Wait for the background commit messages before checking the saved values.
 	return api.FlushPendingCommits(ctx)

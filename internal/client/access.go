@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
+	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
 // Read executes a single read item through the ordinary transaction path.
@@ -31,10 +32,10 @@ func (c *Coordinator) Write(ctx context.Context, hostId uint32, addr uint64, dat
 
 func accessError(res ExecResult) error {
 	if res.UnknownOutcome {
-		return errors.Join(ErrUnknownOutcome, res.TransportErr)
+		return &minitxn.UnknownOutcomeError{Handle: res.Recovery, Cause: res.TransportErr}
 	}
 	if !res.Committed {
 		return fmt.Errorf("%w: vote %v", ErrTransactionAborted, res.Status)
 	}
-	return nil
+	return res.TransportErr
 }

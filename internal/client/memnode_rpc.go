@@ -21,7 +21,7 @@ func NewRPCParticipant(addr string, tlsConfig *tls.Config, timeout time.Duration
 
 func NewRPCParticipantWithGeneration(addr string, tlsConfig *tls.Config, timeout time.Duration, generation uint64) *RPCParticipant {
 	return &RPCParticipant{
-		rpc:        rpcwire.NewClient(strings.TrimSpace(addr), rpcwire.ClientOptions{TLS: tlsConfig, DialTimeout: timeout}),
+		rpc:        rpcwire.NewClient(strings.TrimSpace(addr), rpcwire.ClientOptions{TLS: tlsConfig, DialTimeout: timeout, CallTimeout: timeout}),
 		generation: generation,
 	}
 }
@@ -58,4 +58,13 @@ func (n *RPCParticipant) CommitBatch(ctx context.Context, req sinfonia.CommitBat
 		}
 	}
 	return out, n.rpc.Call(ctx, sinfonia.MethodCommitBatch, req, &out)
+}
+
+func (p *RPCParticipant) RecoveryForceAbort(ctx context.Context, req sinfonia.RecoverForceAbortRequest) (sinfonia.RecoverForceAbortResponse, error) {
+	var out sinfonia.RecoverForceAbortResponse
+	return out, p.rpc.Call(ctx, sinfonia.MethodRecoveryForceAbort, req, &out)
+}
+func (p *RPCParticipant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDecideRequest) (sinfonia.RecoverDecideResponse, error) {
+	var out sinfonia.RecoverDecideResponse
+	return out, p.rpc.Call(ctx, sinfonia.MethodRecoveryDecide, req, &out)
 }

@@ -287,7 +287,7 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 			time.Sleep(e.cfg.RetryBackoff)
 			continue
 		default:
-			return sinfoniaclient.ErrUnknownOutcome
+			return result.OutcomeError()
 		}
 		e.tables[name] = t
 		return nil

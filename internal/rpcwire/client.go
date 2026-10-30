@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	defaultMaxIdle    = 4
-	defaultDialTimout = 5 * time.Second
-	maxFrameSize      = 64 << 20
+	defaultMaxIdle     = 4
+	defaultDialTimout  = 5 * time.Second
+	defaultCallTimeout = 5 * time.Second
+	maxFrameSize       = 64 << 20
 )
 
 type Request struct {
@@ -49,6 +50,7 @@ func (e *RemoteError) Error() string {
 type ClientOptions struct {
 	TLS         *tls.Config
 	DialTimeout time.Duration
+	CallTimeout time.Duration
 	MaxIdle     int
 }
 
@@ -64,6 +66,9 @@ func NewClient(addr string, opts ClientOptions) *Client {
 	if opts.DialTimeout <= 0 {
 		opts.DialTimeout = defaultDialTimout
 	}
+	if opts.CallTimeout <= 0 {
+		opts.CallTimeout = defaultCallTimeout
+	}
 	if opts.MaxIdle <= 0 {
 		opts.MaxIdle = defaultMaxIdle
 	}
@@ -71,6 +76,12 @@ func NewClient(addr string, opts ClientOptions) *Client {
 }
 
 func (c *Client) Call(ctx context.Context, method string, req any, resp any) error {
+	timeout := c.opts.CallTimeout
+	if timeout <= 0 {
+		timeout = defaultCallTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	conn, reused, err := c.borrow(ctx)
 	if err != nil {
 		return err
@@ -90,6 +101,16 @@ func (c *Client) Call(ctx context.Context, method string, req any, resp any) err
 		return err
 	}
 
+	// Closing the connection interrupts blocked I/O even for cancellation before
+	// the deadline. Join the callback before returning a connection to the pool.
+	cancelled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close(); close(cancelled) })
+	defer func() {
+		if !stop() {
+			<-cancelled
+			reusable = false
+		}
+	}()
 	if err := writeFrame(conn, Request{Method: method, Body: req}); err != nil {
 		reusable = false
 		return err
