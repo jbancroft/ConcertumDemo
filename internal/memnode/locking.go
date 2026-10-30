@@ -184,6 +184,9 @@ func (n *Participant) LockAllBlockingOwned(ctx context.Context, owner string) er
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for {
+		if n.restartRequired != nil {
+			return n.restartRequired
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -249,6 +252,9 @@ func (n *Participant) clearGlobalLockLocked() {
 }
 
 func (n *Participant) touchGlobalLockLocked(owner string) error {
+	if n.restartRequired != nil {
+		return n.restartRequired
+	}
 	n.expireGlobalLockLocked()
 	if owner == "" || !n.locks.globalWriteLock || n.locks.globalOwner != owner {
 		return ErrReplicationBaselineLease

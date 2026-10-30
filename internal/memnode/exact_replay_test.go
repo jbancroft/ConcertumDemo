@@ -485,7 +485,7 @@ func TestReplicatedPrepareDuplicateSharesOriginalReplicationFailure(t *testing.T
 	close(replica.releaseRedo)
 	a := <-first
 	b := <-duplicate
-	if a.err != nil || b.err != nil || a.resp.Vote != sinfonia.VoteBadInternal || b.resp.Vote != sinfonia.VoteBadInternal || a.resp.RequestID != "first" || b.resp.RequestID != "retry" {
+	if !errors.Is(a.err, context.DeadlineExceeded) || !errors.Is(b.err, context.DeadlineExceeded) || a.resp.Vote != sinfonia.VoteBadInternal || b.resp.Vote != sinfonia.VoteBadInternal || a.resp.RequestID != "first" || b.resp.RequestID != "retry" {
 		t.Fatalf("original=%+v err=%v duplicate=%+v err=%v", a.resp, a.err, b.resp, b.err)
 	}
 }

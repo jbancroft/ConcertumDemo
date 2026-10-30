@@ -138,6 +138,9 @@ func (n *Participant) ConfigureReplication(ctx context.Context, req sinfonia.Con
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.restartRequired != nil {
+		return sinfonia.ConfigureReplicationResponse{}, n.restartRequired
+	}
 
 	switch req.Role {
 	case sinfonia.ReplicationRoleSingle:
@@ -219,6 +222,9 @@ func (n *Participant) ReplicationStatus(ctx context.Context, _ sinfonia.Replicat
 // to the caller. Release the primary's mutex during the RPC so the replica can
 // take its own lock without deadlocking.
 func (n *Participant) replicateReplayRecordLocked(ctx context.Context, txId sinfonia.TransactionID, kind sinfonia.ReplayRecordKind, prepare *sinfonia.ExecPrepareResponse, onePC *sinfonia.ExecCommit1PCResponse) error {
+	if n.restartRequired != nil {
+		return n.restartRequired
+	}
 	if n.mode != ModeReplPrimary || n.replica == nil {
 		return nil
 	}
@@ -237,6 +243,9 @@ func (n *Participant) replicateReplayRecordLocked(ctx context.Context, txId sinf
 	replResp, replErr := peer.ReplicateReplayRecord(ctx, req)
 	n.metrics.replicationRoundtripLatency.Observe(time.Since(start))
 	n.mu.Lock()
+	if n.restartRequired != nil {
+		return n.restartRequired
+	}
 	if replErr != nil || !replResp.Ack {
 		n.metrics.replicationFailures.Inc()
 		if replErr != nil {
@@ -254,6 +263,9 @@ func (n *Participant) replicateReplayRecordLocked(ctx context.Context, txId sinf
 func (n *Participant) ReplicateRedoEntry(ctx context.Context, req sinfonia.ReplicateRedoEntryRequest) (sinfonia.ReplicateRedoEntryResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.restartRequired != nil {
+		return sinfonia.ReplicateRedoEntryResponse{}, n.restartRequired
+	}
 	if n.mode != ModeReplReplica {
 		return sinfonia.ReplicateRedoEntryResponse{Ack: false}, errors.New("node is not configured as replica")
 	}
@@ -263,13 +275,16 @@ func (n *Participant) ReplicateRedoEntry(ctx context.Context, req sinfonia.Repli
 	if n.redoLog == nil {
 		return sinfonia.ReplicateRedoEntryResponse{Ack: false}, errors.New("redo log unavailable")
 	}
-	if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.Entry.TID, HostIds: append([]uint32(nil), req.Entry.Participants...), WriteItems: cloneWrites(req.Entry.WriteItems)}); err != nil {
-		return sinfonia.ReplicateRedoEntryResponse{Ack: false}, err
+	correlationID := req.Entry.TID.CorrelationID()
+	txn := &preparedTxn{writes: cloneWrites(req.Entry.WriteItems), participants: append([]uint32(nil), req.Entry.Participants...), preparedAt: n.nowFn(), correlationID: correlationID}
+	n.inDoubt[req.Entry.TID] = txn
+	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
+	if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.Entry.TID, HostIds: txn.participants, WriteItems: txn.writes}); err != nil {
+		return sinfonia.ReplicateRedoEntryResponse{}, n.failUncertainLocked("append replicated redo", err)
 	}
 	n.allLogTxIds[req.Entry.TID] = struct{}{}
 	n.logParticipants[req.Entry.TID] = append([]uint32(nil), req.Entry.Participants...)
-	correlationID := req.Entry.TID.CorrelationID()
-	n.inDoubt[req.Entry.TID] = &preparedTxn{writes: cloneWrites(req.Entry.WriteItems), participants: append([]uint32(nil), req.Entry.Participants...), redoLoggedTid: true, preparedAt: n.nowFn(), correlationID: correlationID}
+	txn.redoLoggedTid = true
 	n.recordTimelineLocked(req.Entry.TID, correlationID, "replicated_prepare", "")
 	return sinfonia.ReplicateRedoEntryResponse{Ack: true}, nil
 }
@@ -277,6 +292,9 @@ func (n *Participant) ReplicateRedoEntry(ctx context.Context, req sinfonia.Repli
 func (n *Participant) ReplicateCommitDecision(ctx context.Context, req sinfonia.ReplicateCommitDecisionRequest) (sinfonia.ReplicateCommitDecisionResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.restartRequired != nil {
+		return sinfonia.ReplicateCommitDecisionResponse{}, n.restartRequired
+	}
 	if n.mode != ModeReplReplica {
 		return sinfonia.ReplicateCommitDecisionResponse{Ack: false}, errors.New("node is not configured as replica")
 	}
@@ -285,7 +303,7 @@ func (n *Participant) ReplicateCommitDecision(ctx context.Context, req sinfonia.
 	}
 	resp, err := n.commitLocked(sinfonia.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit})
 	if err != nil {
-		return sinfonia.ReplicateCommitDecisionResponse{Ack: false}, err
+		return sinfonia.ReplicateCommitDecisionResponse{}, n.failUncertainLocked("apply replicated decision", err)
 	}
 	return sinfonia.ReplicateCommitDecisionResponse{Ack: resp.Ack}, nil
 }
@@ -295,6 +313,9 @@ func (n *Participant) ReplicateCommitDecision(ctx context.Context, req sinfonia.
 func (n *Participant) ReplicateReplayRecord(ctx context.Context, req sinfonia.ReplicateReplayRecordRequest) (sinfonia.ReplicateReplayRecordResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.restartRequired != nil {
+		return sinfonia.ReplicateReplayRecordResponse{}, n.restartRequired
+	}
 	if n.mode != ModeReplReplica {
 		return sinfonia.ReplicateReplayRecordResponse{Ack: false}, errors.New("node is not configured as replica")
 	}

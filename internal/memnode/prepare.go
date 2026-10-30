@@ -63,6 +63,9 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	start := time.Now()
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.restartRequired != nil {
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, n.restartRequired
+	}
 	if n.mode == ModeReplReplica {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrReplicaRejectsCoordinator
 	}
@@ -156,53 +159,54 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 		readData[uint32(idx)] = data
 	}
 
+	// Retain the complete operation before persistence can become uncertain.
+	txn.writes = cloneWrites(req.WriteItems)
+	txn.readData = readData
+	txn.heldLocks = acquired
+	original := sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
+	txn.prepareResponse = &original
+	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
+
 	// Save our yes vote before replying. Even with no local writes, we need an
 	// empty entry if the transaction writes elsewhere: recovery needs every vote.
 	if n.redoLog != nil && (req.HasWrites || len(req.WriteItems) > 0) {
 		participants := append([]uint32(nil), req.Participants...)
 		clonedWrites := cloneWrites(req.WriteItems)
 		if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.TID, HostIds: participants, WriteItems: clonedWrites}); err != nil {
-			n.releaseLocks(acquired)
-			delete(n.inDoubt, req.TID)
-			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
+			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, n.failUncertainLocked("append prepare redo", err)
 		}
+		n.allLogTxIds[req.TID] = struct{}{}
+		n.logParticipants[req.TID] = participants
+		txn.redoLoggedTid = true
 		if n.mode == ModeReplPrimary && n.replica != nil {
+			peer := n.replica
 			n.mu.Unlock()
 			replStart := time.Now()
-			replResp, replErr := n.replica.ReplicateRedoEntry(context.Background(), sinfonia.ReplicateRedoEntryRequest{Entry: sinfonia.RedoEntryPayload{TID: req.TID, Participants: participants, WriteItems: clonedWrites}})
+			replResp, replErr := peer.ReplicateRedoEntry(ctx, sinfonia.ReplicateRedoEntryRequest{Entry: sinfonia.RedoEntryPayload{TID: req.TID, Participants: participants, WriteItems: clonedWrites}})
 			n.metrics.replicationRoundtripLatency.Observe(time.Since(replStart))
 			n.metrics.replicationEntriesSent.Inc()
 			n.mu.Lock()
 			if replErr != nil || !replResp.Ack {
 				n.metrics.replicationFailures.Inc()
-				if replErr != nil {
-					n.setReplicationErrorLocked(replErr)
-				} else {
-					n.setReplicationErrorLocked(errors.New("replication redo entry not acknowledged"))
+				if replErr == nil {
+					replErr = errors.New("replication redo entry not acknowledged")
 				}
-				n.releaseLocks(acquired)
-				delete(n.inDoubt, req.TID)
-				return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, nil
+				n.setReplicationErrorLocked(replErr)
+				return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, n.failUncertainLocked("replicate prepare redo", replErr)
+			}
+			if n.restartRequired != nil {
+				return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, n.restartRequired
 			}
 			n.setReplicationErrorLocked(nil)
 		}
-		n.allLogTxIds[req.TID] = struct{}{}
-		n.logParticipants[req.TID] = participants
-		txn.redoLoggedTid = true
 	}
-
-	txn.writes = cloneWrites(req.WriteItems)
-	txn.readData = readData
-	txn.heldLocks = acquired
 
 	n.metrics.prepareLatency.Observe(time.Since(start))
 	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
 	n.log(slog.LevelInfo, "ExecAndPrepare received", "tid", req.TID, "epoch", req.TID.Epoch)
 	n.log(slog.LevelInfo, "Vote decision", "tid", req.TID, "epoch", req.TID.Epoch, "vote", sinfonia.VoteOk)
 	n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_ok", "")
-	resp = sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
-	original := clonePrepareResponse(resp)
-	txn.prepareResponse = &original
+	resp = clonePrepareResponse(original)
 	if err := n.callOutcomeReplayBoundaryHookLocked("prepare-before-response", req.TID); err != nil {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}

@@ -2,6 +2,7 @@ package memnode_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -413,7 +414,7 @@ func TestReplicationBlockingPrimaryWaitsForReplicaAck(t *testing.T) {
 	}
 }
 
-func TestReplicaCrashDuringPrepareVotesBadInternal(t *testing.T) {
+func TestReplicaCrashDuringPrepareReturnsUncertainty(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	primary, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "primary"))
@@ -422,8 +423,8 @@ func TestReplicaCrashDuringPrepareVotesBadInternal(t *testing.T) {
 
 	txId := sinfonia.TransactionID{CoordinatorID: 8, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	resp, err := primary.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("q")}}})
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, memnode.ErrRestartRequired) {
+		t.Fatalf("expected ambiguous replication error, got %v", err)
 	}
 	if resp.Vote != sinfonia.VoteBadInternal {
 		t.Fatalf("expected BAD_INTERNAL vote, got %v", resp.Vote)

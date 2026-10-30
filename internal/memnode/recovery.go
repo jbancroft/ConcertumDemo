@@ -83,6 +83,9 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for {
+		if n.restartRequired != nil {
+			return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteUnknown}, n.restartRequired
+		}
 		var done <-chan struct{}
 		if flight := n.prepareFlights[tid]; flight != nil {
 			done = flight.done
@@ -188,6 +191,11 @@ func (n *Participant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDe
 func (n *Participant) Recover(ctx context.Context) error {
 	n.metrics.recoveryRuns.Inc()
 	n.mu.Lock()
+	if n.restartRequired != nil {
+		err := n.restartRequired
+		n.mu.Unlock()
+		return err
+	}
 	n.log(slog.LevelInfo, "Recovery initiated", "epoch", n.epoch)
 	n.recoveryComplete = false
 	entries := []storage.RedoLogItem{}
@@ -221,6 +229,11 @@ func (n *Participant) Recover(ctx context.Context) error {
 		known := false
 
 		n.mu.Lock()
+		if n.restartRequired != nil {
+			err := n.restartRequired
+			n.mu.Unlock()
+			return err
+		}
 		if n.decided != nil {
 			if c, ok := n.decided.Get(entry.TransactionId); ok {
 				outcomeCommit = c
@@ -237,6 +250,11 @@ func (n *Participant) Recover(ctx context.Context) error {
 		}
 
 		n.mu.Lock()
+		if n.restartRequired != nil {
+			err := n.restartRequired
+			n.mu.Unlock()
+			return err
+		}
 		if n.decided != nil {
 			if decidedCommit, decided := n.decided.Get(entry.TransactionId); decided {
 				outcomeCommit = decidedCommit
@@ -287,6 +305,11 @@ func (n *Participant) Recover(ctx context.Context) error {
 		}
 	}
 	n.mu.Lock()
+	if n.restartRequired != nil {
+		err := n.restartRequired
+		n.mu.Unlock()
+		return err
+	}
 	currentEpoch := n.currentEpochLocked()
 	if err := n.persistEpochFloorLocked(currentEpoch); err != nil {
 		n.mu.Unlock()
@@ -305,6 +328,11 @@ func (n *Participant) Recover(ctx context.Context) error {
 		}
 	}
 	n.mu.Lock()
+	if n.restartRequired != nil {
+		err := n.restartRequired
+		n.mu.Unlock()
+		return err
+	}
 	n.recoveryComplete = true
 	n.mu.Unlock()
 	return nil

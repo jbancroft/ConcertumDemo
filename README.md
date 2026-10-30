@@ -170,6 +170,15 @@ the original transaction's votes and decisions. Each memnode also checks old
 prepared transactions and finishes them even if the coordinator disappeared.
 A failed decision-log write retains pending writes and locks for recovery; the
 node requires successful restart recovery before serving ordinary requests again.
+An uncertain redo append or redo/decision replication failure also retains the
+transaction and locks, but faults the participant: it rejects new work and recovery
+votes/decisions until its storage is reopened. The caller receives an error and
+may retain an unknown outcome, never an abort inferred from that failure. Calling
+`Recover` on the same object or changing its replication role cannot clear this
+fault. For a replicated pair, keep application traffic stopped while restarting
+and recovering the primary, then resynchronize the replica with `SyncFromPrimary`
+before resuming traffic or promoting it. Restart alone does not repair replica
+lag; this recovery procedure is manual in the demo.
 Recovery also saves original read results still held by a pending transaction
 before clearing it, preserving them for later resolution and durable restarts.
 Redo-log cleanup resets its recovery checkpoint before atomically replacing the

@@ -376,7 +376,7 @@ func (n *Participant) isReady() bool {
 }
 
 func (n *Participant) isReadyLocked() bool {
-	if !n.recoveryComplete || n.backupMode {
+	if n.restartRequired != nil || !n.recoveryComplete || n.backupMode {
 		return false
 	}
 	if n.mode == ModeReplReplica && !n.replicaSynced {

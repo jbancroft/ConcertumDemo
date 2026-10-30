@@ -10,6 +10,9 @@ import (
 func (n *Participant) requireRecoveryComplete() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.restartRequired != nil {
+		return n.restartRequired
+	}
 	if !n.recoveryComplete {
 		return ErrRecoveryPending
 	}

@@ -147,6 +147,30 @@ cannot save its decision after logging redo, it retains its pending writes and
 locks and returns an error so the caller can resolve the same attempt. RAM nodes
 cannot preserve data or transaction evidence across a process restart.
 
+A redo append error is ambiguous: bytes can reach disk before `fsync` reports
+failure, leaving the log's in-memory index incomplete. Likewise, a replica may
+save redo or apply a decision before its acknowledgement is lost. These errors
+retain the full pending operation and locks and set a separate, sticky
+`ErrRestartRequired` fault. New execution, duplicate replay, commit delivery,
+recovery probes/decisions, and baseline/role changes cannot bypass it. Requests
+already waiting on replication recheck the fault after reacquiring the mutex.
+The node stays unready, and `Recover` on that instance cannot clear the fault.
+Ordinary startup recovery is different: newly opened participants can exchange
+evidence before readiness, so nodes can recover together.
+
+This deliberately trades availability for a small failure protocol. Reopen the
+storage and recover from the files before resolving the caller's saved handle.
+A surviving complete redo entry can still commit; an absent record can establish
+an abort; malformed or incomplete records keep startup from succeeding. Original
+reads retained only in memory may be unavailable after restart. For replication
+failures, keep application traffic stopped during primary restart/recovery and
+replica baseline synchronization (`SyncFromPrimary`), restarting a faulted replica
+too before synchronizing it. Restore traffic or allow promotion only after that
+sync succeeds. Roles and this operator procedure are not persisted or automated;
+successful primary restart alone says nothing about replica catch-up. Failed
+exact-reply replication remains retryable through the existing idempotent replay
+path when no redo/decision fault has occurred.
+
 Old redo entries can be removed once there's enough evidence that the committed
 updates reached all required participants. Cleanup requires completed startup recovery,
 then durably resets the processed-entry checkpoint to zero before replacing the

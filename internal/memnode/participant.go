@@ -76,6 +76,7 @@ type Participant struct {
 	logger           *slog.Logger
 	metrics          *nodeMetrics
 	recoveryComplete bool
+	restartRequired  error
 	replicaSynced    bool
 
 	maxInFlightPrepare          int
