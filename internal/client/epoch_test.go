@@ -102,3 +102,36 @@ func TestCoordinatorRetriesStaleEpochWithFreshID(t *testing.T) {
 		}
 	}
 }
+
+func TestCoordinatorRetriesSingleParticipantLockConflict(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		t.Run(fmt.Sprintf("release=%t", release), func(t *testing.T) {
+			ctx := context.Background()
+			node := memnode.NewParticipant(16)
+			defer node.Close()
+			if err := node.LockAllBlocking(ctx); err != nil {
+				t.Fatal(err)
+			}
+			defer node.UnlockAll()
+			recorded := &epochRecordingNode{Participant: node}
+			coord := NewCoordinator(map[uint32]Participant{1: recorded})
+			coord.maxRetries = 1
+			coord.backoff = epochRetryBackoff(func(context.Context, int) {
+				if release {
+					node.UnlockAll()
+				}
+			})
+			result := coord.ExecuteAndCommit(ctx, "", nil, nil, []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}})
+			want := sinfonia.VoteBadLock
+			if release {
+				want = sinfonia.VoteOk
+			}
+			if result.Status != want || result.Committed != release || result.UnknownOutcome || result.TransportErr != nil {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+			if len(recorded.tids) != 2 || recorded.tids[0] == recorded.tids[1] {
+				t.Fatalf("expected one retry with a fresh transaction ID: %v", recorded.tids)
+			}
+		})
+	}
+}

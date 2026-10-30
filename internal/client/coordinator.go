@@ -462,7 +462,7 @@ func (w *rpcWorker) flushPending(ctx context.Context) error {
 func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.TransactionID, hostIds []uint32, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) (ExecResult, bool) {
 	if len(hostIds) == 1 {
 		res := c.execSingleParticipant1PC(ctx, txId, hostIds[0], class, compares, reads, writes)
-		return res, res.Status == sinfonia.VoteBadStaleEpoch
+		return res, res.Status == sinfonia.VoteBadLock || res.Status == sinfonia.VoteBadStaleEpoch
 	}
 
 	results := make(chan prepareResult, len(hostIds))

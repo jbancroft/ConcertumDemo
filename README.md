@@ -157,6 +157,8 @@ conflict with each other.
 All application reads and writes use this transaction API. `Client.Read` and
 `Client.Write` submit a single read or write item as a minitransaction, with the
 same locking rules on RAM and durable nodes. There are no raw data-access RPCs.
+Explicit lock conflicts use bounded retries with backoff and fresh transaction
+IDs, including single-node transactions. Failed comparisons are not retried.
 Separate reads are separate snapshots; the B+tree still validates the pages it
 loads. SQL uses the tree for two columns: `id` and `value`.
 
