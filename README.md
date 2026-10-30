@@ -59,6 +59,49 @@ It waits for background commit
 delivery before reading results and checks transaction statuses, including an
 unknown transfer outcome. It does not simulate network failures or recovery.
 
+## Try SQL interactively
+
+```sh
+make repl
+```
+
+The console starts the same two local memnode processes; SQL tables live on
+node 2, matching the scripted demo. Each default session starts empty and keeps
+data in memory.
+
+```text
+sql> CREATE TABLE scores;
+OK
+sql> INSERT INTO scores VALUES (1, 100);
+OK
+sql> SELECT id, value FROM scores;
+id  value
+1   100
+(1 row)
+sql> .quit
+```
+
+Enter one statement per line, with an optional trailing semicolon. `.help` shows
+the supported forms. Invalid statements print an error and leave the session
+open. An unknown transaction outcome is reported as potentially committed and
+is never retried automatically. `.quit`, EOF, or Ctrl-C closes the session and
+stops its child processes. Input lines must be shorter than 64 KiB; multiline
+statements, history, and completion aren't implemented.
+
+`make repl` also builds `bin/repl`. To save tables and reopen them in later
+sessions, run this command from the repository root:
+
+```sh
+./bin/repl -data-dir tmp/repl
+```
+
+Use one session per data directory. The directory contains both nodes' saved
+files. Omitting `-data-dir` starts a fresh in-memory session. Use
+`-memnode-bin /path/to/memnode` to choose another prebuilt node executable.
+You can also pass the saved `tmp/demo/run-...` directory printed by `make demo`
+to query its `scores` table.
+The six-table catalog and fixed 64 KiB table regions apply in the console too.
+
 ## Run a memnode on its own
 
 ```sh
@@ -118,11 +161,15 @@ error with `errors.Is` and must not retry blindly.
 | --- | --- |
 | [Demo](cmd/demo/main.go) | A complete example with checked results |
 | [Sinfonia client demo](demo/sinfonia-client-demo/main.go) | Direct reads/writes, a two-node transfer, and a comparison abort |
+| [SQL REPL](cmd/repl/main.go) | Interactive queries, readable results, and local node cleanup |
 | [Memnode command](cmd/memnode/main.go) | Standalone participant startup, recovery peers, and shutdown |
 | [Sinfonia user library](sinfonia-client/client.go) | Reads, writes, transactions, and node stats from an application |
 | [Transaction builder](minitxn/transaction.go) | The compare/read/write API and grouping work by host |
 | [Coordinator](internal/client/coordinator.go) | Votes, retries, and sending decisions |
-| [Participant](internal/memnode/participant.go) | Locks, comparisons, logging, and recovery |
+| [Participant](internal/memnode/participant.go) | Shared state, construction, and direct memory access |
+| [Prepare](internal/memnode/prepare.go) | Range locks, comparisons, reads, and durable yes votes |
+| [Commit](internal/memnode/commit.go) | Commit/abort decisions and the single-participant path |
+| [Recovery](internal/memnode/recovery.go) | Saved decisions, epoch floors, and peer evidence |
 | [B+tree](minuet-index/btree.go) | Pages, splits, merges, and range scans |
 | [SQL engine](minuet-sql/engine.go) | A small parser and table layer over the tree |
 
@@ -167,6 +214,7 @@ make check       # formatting, go vet, build, and tests
 make race        # tests with the Go race detector
 make memnode     # build bin/memnode for standalone use
 make demo
+make repl        # interactive SQL console
 make sinfonia-client-demo
 make bench       # a quick benchmark run, not a performance claim
 ```

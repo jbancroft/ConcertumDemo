@@ -1,8 +1,9 @@
-.PHONY: prepare check fmt-check vet build test race memnode demo sinfonia-client-demo bench
+.PHONY: prepare check fmt-check vet build test race memnode demo repl sinfonia-client-demo bench
 
 export TMPDIR := $(CURDIR)/tmp
 MEMNODE_BIN := $(CURDIR)/bin/memnode
 MEMNODE_RACE_BIN := $(CURDIR)/bin/memnode-race
+REPL_BIN := $(CURDIR)/bin/repl
 
 prepare:
 	@mkdir -p tmp
@@ -31,6 +32,10 @@ memnode: prepare
 
 demo: memnode
 	go run ./cmd/demo -memnode-bin "$(MEMNODE_BIN)"
+
+repl: memnode
+	go build -o "$(REPL_BIN)" ./cmd/repl
+	"$(REPL_BIN)" -memnode-bin "$(MEMNODE_BIN)"
 
 sinfonia-client-demo: memnode
 	go run ./demo/sinfonia-client-demo -memnode-bin "$(MEMNODE_BIN)"

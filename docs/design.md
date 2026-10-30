@@ -31,6 +31,29 @@ helpers return copies too. An `Executor` connects the builder to the client;
 there's no global list of hosts. Public items use `HostId`, `Address`, and
 `Length`; internal messages use `MemID`, `Addr`, and `Len`.
 
+## Finding the participant code
+
+The participant remains one type in `internal/memnode`. Its files separate the
+main transaction path from recovery and supporting operations. Methods share
+the same state and mutex; the split adds no package or API boundary.
+
+| File | Responsibility |
+| --- | --- |
+| [participant.go](../internal/memnode/participant.go) | Shared state, construction, shutdown, and direct memory access |
+| [locking.go](../internal/memnode/locking.go) | Range locks and the leased global barrier |
+| [prepare.go](../internal/memnode/prepare.go) | Comparisons, reads, prepared writes, and yes/no votes |
+| [commit.go](../internal/memnode/commit.go) | Applying commit/abort decisions and single-participant execution |
+| [replay.go](../internal/memnode/replay.go) | Remembering and replaying exact transaction replies |
+| [recovery.go](../internal/memnode/recovery.go) | Epoch floors, recovery evidence, and unfinished transactions |
+| [replication.go](../internal/memnode/replication.go) | Roles, fencing checks, and replication of redo entries, decisions, and replies |
+| [replication_sync.go](../internal/memnode/replication_sync.go) | Synchronizing a replica from a primary's saved state |
+| [replication_baseline.go](../internal/memnode/replication_baseline.go) | Transferring and installing that state in chunks |
+| [maintenance.go](../internal/memnode/maintenance.go) | Applied notifications, log cleanup, and backup phases |
+| [observability.go](../internal/memnode/observability.go) | Metrics, status, and transaction timelines |
+
+For the main walkthrough, follow `ExecAndPrepare` in `prepare.go` and then
+`Commit` in `commit.go`. `ExecCommit1PC` handles the single-participant shortcut.
+
 ## A transaction
 
 All byte addresses must be known before the transaction starts. For a transaction

@@ -567,3 +567,58 @@ func (n *Participant) prometheusMetrics() string {
 	appendHist("concertum_replication_roundtrip_latency_seconds", n.metrics.replicationRoundtripLatency)
 	return strings.Join(lines, "\n") + "\n"
 }
+
+func (n *Participant) classForTIDLocked(txId sinfonia.TransactionID) string {
+	if txn, ok := n.inDoubt[txId]; ok {
+		return txn.class
+	}
+	return ""
+}
+
+func (n *Participant) correlationForTIDLocked(txId sinfonia.TransactionID) string {
+	if txn, ok := n.inDoubt[txId]; ok && txn.correlationID != "" {
+		return txn.correlationID
+	}
+	return txId.CorrelationID()
+}
+
+func (n *Participant) recordTimelineLocked(txId sinfonia.TransactionID, correlationID, event, details string) {
+	if correlationID == "" {
+		correlationID = txId.CorrelationID()
+	}
+	n.timelines[txId] = append(n.timelines[txId], sinfonia.TxnTimelineEvent{
+		AtNanos:       n.nowFn().UnixNano(),
+		Component:     "memnode",
+		Event:         event,
+		CorrelationID: correlationID,
+		Details:       details,
+	})
+}
+
+func (n *Participant) QueryInDoubt(ctx context.Context, _ sinfonia.QueryInDoubtRequest) (sinfonia.QueryInDoubtResponse, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	resp := sinfonia.QueryInDoubtResponse{Entries: make([]sinfonia.InDoubtEntry, 0, len(n.inDoubt))}
+	for txId, tx := range n.inDoubt {
+		correlationID := tx.correlationID
+		if correlationID == "" {
+			correlationID = txId.CorrelationID()
+		}
+		resp.Entries = append(resp.Entries, sinfonia.InDoubtEntry{
+			TID:           txId,
+			PreparedAt:    tx.preparedAt.UnixNano(),
+			CorrelationID: correlationID,
+			Participants:  append([]uint32(nil), tx.participants...),
+		})
+	}
+	return resp, nil
+}
+
+func (n *Participant) TimelineForTID(txId sinfonia.TransactionID) []sinfonia.TxnTimelineEvent {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	src := n.timelines[txId]
+	out := make([]sinfonia.TxnTimelineEvent, len(src))
+	copy(out, src)
+	return out
+}
