@@ -16,6 +16,154 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
+// Log and epoch cleanup preserve the evidence required for subsequent recovery.
+
+func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
+	b, _ := memnode.NewDurableParticipant(2, 64, filepath.Join(root, "b"))
+	t.Cleanup(func() { _ = a.Close() })
+	t.Cleanup(func() { _ = b.Close() })
+	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
+	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	if err := a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 11, Epoch: sinfonia.EpochAt(time.Now())}
+	parts := []uint32{1, 2}
+	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("a")}}})
+	_, _ = b.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 2, Addr: 0, Data: []byte("b")}}})
+	_, _ = a.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: true})
+	_, _ = b.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: true})
+	a.FlushAppliedNotifications(ctx)
+	b.FlushAppliedNotifications(ctx)
+
+	if err := a.RunRedoLogGC(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a.RedoEntryCountForTest() != 0 {
+		t.Fatalf("expected redo gc to truncate committed entry")
+	}
+	if a.HasDecidedForTest(txId) {
+		t.Fatalf("expected decided entry cleaned")
+	}
+	if a.HasAppliedTrackingForTest(txId) {
+		t.Fatalf("expected applied tracking cleaned")
+	}
+}
+
+func TestRedoLogGCNoPrematureTruncationWithoutRemoteConfirm(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
+	t.Cleanup(func() { _ = a.Close() })
+	if err := a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 12, Epoch: sinfonia.EpochAt(time.Now())}
+	parts := []uint32{1, 2}
+	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("a")}}})
+	_, _ = a.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: true})
+
+	if err := a.RunRedoLogGC(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a.RedoEntryCountForTest() != 1 {
+		t.Fatalf("expected redo entry to remain without remote applied confirmation")
+	}
+}
+
+func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
+	t.Cleanup(func() { _ = a.Close() })
+	if err := a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 13, Epoch: sinfonia.EpochAt(time.Now())}
+	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 2, Data: []byte("a")}}})
+	_, _ = a.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: false})
+
+	if err := a.RunRedoLogGC(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a.RedoEntryCountForTest() != 0 {
+		t.Fatalf("expected abort entry gc immediately")
+	}
+}
+
+func TestForcedAbortEpochGC(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	n, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "n"))
+	t.Cleanup(func() { _ = n.Close() })
+	base := time.Unix(3600, 0)
+	n.SetClockForTest(func() time.Time { return base })
+	old := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(base)}
+	recent := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 5}
+	_, _ = n.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: old})
+	_, _ = n.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: recent})
+	base = base.Add(6 * time.Hour)
+
+	if err := n.RunForcedAbortGC(); err != nil {
+		t.Fatal(err)
+	}
+	if n.HasForcedAbortForTest(old) {
+		t.Fatalf("expected old forced-abort removed")
+	}
+	if !n.HasForcedAbortForTest(recent) {
+		t.Fatalf("expected recent forced-abort preserved")
+	}
+}
+
+func TestRecoveryAfterPartialGC(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	aDir := filepath.Join(root, "a")
+	bDir := filepath.Join(root, "b")
+	a, _ := memnode.NewDurableParticipant(1, 64, aDir)
+	b, _ := memnode.NewDurableParticipant(2, 64, bDir)
+	t.Cleanup(func() { _ = a.Close() })
+	t.Cleanup(func() { _ = b.Close() })
+	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
+	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	if err := a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	txId := sinfonia.TransactionID{CoordinatorID: 5, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+	parts := []uint32{1, 2}
+	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 7, Data: []byte("x")}}})
+	_, _ = b.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 2, Addr: 7, Data: []byte("y")}}})
+	_, _ = a.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: true})
+	_, _ = b.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: true})
+	a.FlushAppliedNotifications(ctx)
+	b.FlushAppliedNotifications(ctx)
+	if err := a.RunRedoLogGC(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = a.Close()
+	a2, err := memnode.NewDurableParticipant(1, 64, aDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a2.Close() })
+	a2.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
+	if err := a2.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a2.ReadBytesForTest(7, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "x" {
+		t.Fatalf("expected recovered value x, got %q", got)
+	}
+}
+
 func TestRecoveryAfterGCWithProcessedCheckpoint(t *testing.T) {
 	for _, partial := range []bool{false, true} {
 		t.Run(map[bool]string{false: "full", true: "partial"}[partial], func(t *testing.T) {
