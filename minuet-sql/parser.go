@@ -30,7 +30,7 @@ func (deleteStmt) isStatement()      {}
 
 func Parse(sql string) (statement, error) {
 	s := strings.TrimSpace(strings.TrimSuffix(sql, ";"))
-	upper := strings.ToUpper(s)
+	upper := upperASCII(s)
 	switch {
 	case strings.HasPrefix(upper, "CREATE TABLE "):
 		name, err := parseIdentifier(strings.TrimSpace(s[len("CREATE TABLE "):]))
@@ -40,7 +40,7 @@ func Parse(sql string) (statement, error) {
 		return createTableStmt{name: name}, nil
 	case strings.HasPrefix(upper, "INSERT INTO "):
 		rest := strings.TrimSpace(s[len("INSERT INTO "):])
-		upRest := strings.ToUpper(rest)
+		upRest := upperASCII(rest)
 		idx := strings.Index(upRest, " VALUES ")
 		if idx < 0 {
 			return nil, fmt.Errorf("%w: insert syntax", ErrUnsupportedSQL)
@@ -109,6 +109,17 @@ func Parse(sql string) (statement, error) {
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedSQL, sql)
 	}
+}
+
+// Preserve byte offsets when matching ASCII SQL keywords.
+func upperASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'a' && c <= 'z' {
+			b[i] = c - 'a' + 'A'
+		}
+	}
+	return string(b)
 }
 
 func parseUint(v string) (uint64, error) {

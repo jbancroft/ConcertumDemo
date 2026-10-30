@@ -231,7 +231,8 @@ directly.
   There are no multiversion snapshots or writable clones.
 - Trees require an explicit byte region. Nonzero invalid metadata and changed
   region bounds are rejected; all-zero metadata still means unused storage.
-- SQL has a few `CREATE TABLE`, `INSERT`, `SELECT`, and `DELETE` forms. No joins,
+- SQL has a few `CREATE TABLE`, `INSERT`, `SELECT`, and `DELETE` forms.
+  Keywords are ASCII and case-insensitive. No joins,
   custom schemas, or multi-statement transactions. The catalog holds six tables;
   creating another returns `ErrCatalogFull`. Each table has a fixed region
   (64 KiB by default). A split that cannot fit returns `ErrTableFull` without

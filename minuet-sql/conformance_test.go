@@ -67,6 +67,10 @@ func TestParserConformanceRejectsDocumentedUnsupportedSyntax(t *testing.T) {
 		"DELETE FROM accounts",
 		"UPDATE accounts SET value = 101 WHERE id = 1",
 		"BEGIN",
+		"INSERT INTO " + strings.Repeat("ȿ", 16) + " VALUES (1, 2)",
+		"SELECT id, value FROM " + strings.Repeat("ȿ", 16) + " WHERE id = 1",
+		"DELETE FROM " + strings.Repeat("ȿ", 16) + " WHERE id = 1",
+		"ſELECT id, value FROM accounts",
 	}
 
 	for _, sql := range unsupported {
