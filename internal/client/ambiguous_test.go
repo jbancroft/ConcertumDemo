@@ -8,6 +8,7 @@ import (
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
+	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
 type lost1PCNode struct {
@@ -27,6 +28,7 @@ func (n *lost1PCNode) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 type lostPrepareNode struct {
 	*memnode.Participant
 	dropped bool
+	failure error
 }
 
 type failingCommitNode struct {
@@ -57,7 +59,7 @@ func (n *lostPrepareNode) ExecAndPrepare(ctx context.Context, req sinfonia.ExecP
 	resp, err := n.Participant.ExecAndPrepare(ctx, req)
 	if !n.dropped {
 		n.dropped = true
-		return sinfonia.ExecPrepareResponse{}, errors.New("lost prepare response")
+		return sinfonia.ExecPrepareResponse{}, n.failure
 	}
 	return resp, err
 }
@@ -69,24 +71,34 @@ func TestCoordinatorReportsUnknownWhen1PCResponseLostAfterApply(t *testing.T) {
 	if !res.UnknownOutcome || res.TransportErr == nil || res.Committed {
 		t.Fatalf("expected unknown outcome with transport error, got %+v", res)
 	}
-	got, err := n.Read(context.Background(), 0, 1)
+	got, err := readParticipant(context.Background(), n.Participant, 0, 1)
 	if err != nil || string(got) != "A" {
 		t.Fatalf("expected applied write despite lost response, got %q err=%v", got, err)
 	}
 }
 
-func TestCoordinatorReportsUnknownWhenPrepareResponseLostAfterVote(t *testing.T) {
-	n1 := &lostPrepareNode{Participant: memnode.NewParticipant(16)}
-	n2 := memnode.NewParticipant(16)
-	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
-	coord.coordID = 1
-	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
-	if !res.UnknownOutcome || res.TransportErr == nil || res.Committed {
-		t.Fatalf("expected unknown outcome with transport error, got %+v", res)
-	}
-	resp, err := n1.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}, RequestID: "retry", Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}})
-	if err != nil || resp.Vote != sinfonia.VoteOk {
-		t.Fatalf("expected idempotent prepared vote on retry, resp=%+v err=%v", resp, err)
+func TestCoordinatorReportsUnknownWhenPrepareReplyFailsAfterVote(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		failure error
+	}{
+		{name: "lost reply", failure: errors.New("lost prepare response")},
+		{name: "server error", failure: &rpcwire.RemoteError{Method: sinfonia.MethodExecPrepare, Message: "failed to save reply after yes vote"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n1 := &lostPrepareNode{Participant: memnode.NewParticipant(16), failure: tc.failure}
+			n2 := memnode.NewParticipant(16)
+			coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+			coord.coordID = 1
+			res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
+			if !res.UnknownOutcome || res.TransportErr == nil || res.Committed {
+				t.Fatalf("expected unknown outcome with transport error, got %+v", res)
+			}
+			resp, err := n1.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}, RequestID: "retry", Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}})
+			if err != nil || resp.Vote != sinfonia.VoteOk {
+				t.Fatalf("expected idempotent prepared vote on retry, resp=%+v err=%v", resp, err)
+			}
+		})
 	}
 }
 

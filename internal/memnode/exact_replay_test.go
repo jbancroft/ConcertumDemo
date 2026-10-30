@@ -57,7 +57,7 @@ func TestDurableOnePCReplaysOriginalReadPayloadWithoutReapplyingWrite(t *testing
 	if err != nil || resp.Vote != sinfonia.VoteOk || resp.RequestID != "retry" || string(resp.ReadData[0]) != "seed" {
 		t.Fatalf("retry response = %+v, err = %v", resp, err)
 	}
-	got, err := restarted.Read(ctx, 8, 1)
+	got, err := restarted.ReadBytesForTest(8, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestDurableNegativeOnePCOutcomeReplaysAfterRestart(t *testing.T) {
 	if err != nil || resp.Vote != sinfonia.VoteBadCmp || resp.RequestID != "retry" {
 		t.Fatalf("retry response = %+v, err = %v", resp, err)
 	}
-	got, err := restarted.Read(ctx, 4, 1)
+	got, err := restarted.ReadBytesForTest(4, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestPrepareCrashAfterRedoBeforeReplayDoesNotReexecuteKnownTID(t *testing.T)
 	if got := restarted.RedoEntryCountForTest(); got != 1 {
 		t.Fatalf("retry appended redo: entries = %d, want 1", got)
 	}
-	got, err := restarted.Read(ctx, 8, 1)
+	got, err := restarted.ReadBytesForTest(8, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestOnePCCrashAfterDecisionBeforeReplayDoesNotReexecuteKnownTID(t *testing.
 	if got := restarted.RedoEntryCountForTest(); got != 1 {
 		t.Fatalf("retry appended redo: entries = %d, want 1", got)
 	}
-	got, err := restarted.Read(ctx, 8, 1)
+	got, err := restarted.ReadBytesForTest(8, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestReplicatedOnePCDuplicateWaitsForOriginalOutcome(t *testing.T) {
 	if a.err != nil || b.err != nil || a.resp.Vote != sinfonia.VoteOk || b.resp.Vote != sinfonia.VoteOk || b.resp.RequestID != "retry" || string(a.resp.ReadData[0]) != "\x00" || string(b.resp.ReadData[0]) != "\x00" {
 		t.Fatalf("original=%+v err=%v duplicate=%+v err=%v", a.resp, a.err, b.resp, b.err)
 	}
-	got, err := n.Read(ctx, 8, 1)
+	got, err := n.ReadBytesForTest(8, 1)
 	if err != nil || string(got) != "A" {
 		t.Fatalf("write=%q err=%v, want original A", got, err)
 	}

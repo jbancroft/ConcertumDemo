@@ -1,8 +1,6 @@
 package sinfonia
 
 const (
-	MethodRead                           = "memnode.read"
-	MethodWrite                          = "memnode.write"
 	MethodExecPrepare                    = "memnode.exec_prepare"
 	MethodExecCommit1PC                  = "memnode.exec_commit_1pc"
 	MethodCommit                         = "memnode.commit"

@@ -56,7 +56,7 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	if err := a2.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := a2.Read(ctx, 0, 1)
+	got, err := a2.ReadBytesForTest(0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
 	if err := a2.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := a2.Read(ctx, 5, 1)
+	got, err := a2.ReadBytesForTest(5, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 	if err := a2.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := a2.Read(ctx, 7, 1)
+	got, err := a2.ReadBytesForTest(7, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,8 +303,8 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 	client := rpcwire.NewClient(listener.Addr().String(), rpcwire.ClientOptions{DialTimeout: time.Second})
 	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	var read sinfonia.ReadResponse
-	err = client.Call(readCtx, sinfonia.MethodRead, sinfonia.ReadRequest{Addr: 4, Len: 4}, &read)
+	var read sinfonia.ExecCommit1PCResponse
+	err = client.Call(readCtx, sinfonia.MethodExecCommit1PC, sinfonia.ExecCommit1PCRequest{ReadItems: []sinfonia.ReadItem{{Addr: 4, Len: 4}}}, &read)
 	if err == nil || !strings.Contains(err.Error(), memnode.ErrRecoveryPending.Error()) {
 		t.Fatalf("RPC Read while apply is failed = %v, want ErrRecoveryPending", err)
 	}
@@ -324,7 +324,7 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 	if err := n.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := n.Read(ctx, 4, 4)
+	got, err := n.ReadBytesForTest(4, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 	if !errors.Is(err, memnode.ErrReplayUnavailable) || retry.Vote != sinfonia.VoteBadInternal {
 		t.Fatalf("exact-TID retry = (%+v, %v), want replay-unavailable failure", retry, err)
 	}
-	got, err = n.Read(ctx, 4, 4)
+	got, err = n.ReadBytesForTest(4, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 	if err := n.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err = n.Read(ctx, 4, 4)
+	got, err = n.ReadBytesForTest(4, 4)
 	if err != nil {
 		t.Fatal(err)
 	}

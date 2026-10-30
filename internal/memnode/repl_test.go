@@ -144,7 +144,7 @@ func TestExactReplaySurvivesBaselineTransferAndPromotion(t *testing.T) {
 					if err != nil || retry.Vote != sinfonia.VoteOk || retry.RequestID != "retry" || string(retry.ReadData[0]) != "seed" {
 						return fmt.Errorf("replayed prepare = %+v, err=%v", retry, err)
 					}
-					got, err := promoted.Read(ctx, 8, 1)
+					got, err := promoted.ReadBytesForTest(8, 1)
 					if err != nil {
 						return err
 					}
@@ -173,7 +173,7 @@ func TestExactReplaySurvivesBaselineTransferAndPromotion(t *testing.T) {
 					if err != nil || retry.Vote != sinfonia.VoteBadCmp || retry.RequestID != "retry" {
 						return fmt.Errorf("replayed negative prepare = %+v, err=%v", retry, err)
 					}
-					got, err := promoted.Read(ctx, 8, 1)
+					got, err := promoted.ReadBytesForTest(8, 1)
 					if err != nil {
 						return err
 					}
@@ -209,7 +209,7 @@ func TestExactReplaySurvivesBaselineTransferAndPromotion(t *testing.T) {
 					if err != nil || retry.Vote != sinfonia.VoteOk || retry.RequestID != "retry" || string(retry.ReadData[0]) != "seed" {
 						return fmt.Errorf("replayed 1pc = %+v, err=%v", retry, err)
 					}
-					got, err := promoted.Read(ctx, 8, 1)
+					got, err := promoted.ReadBytesForTest(8, 1)
 					if err != nil {
 						return err
 					}
@@ -238,7 +238,7 @@ func TestExactReplaySurvivesBaselineTransferAndPromotion(t *testing.T) {
 					if err != nil || retry.Vote != sinfonia.VoteBadCmp || retry.RequestID != "retry" {
 						return fmt.Errorf("replayed negative 1pc = %+v, err=%v", retry, err)
 					}
-					got, err := promoted.Read(ctx, 8, 1)
+					got, err := promoted.ReadBytesForTest(8, 1)
 					if err != nil {
 						return err
 					}
@@ -324,7 +324,7 @@ func TestExactReplayLiveReplicationSurvivesPromotion(t *testing.T) {
 		if err != nil || retry.Vote != sinfonia.VoteBadCmp || retry.RequestID != "retry" {
 			t.Fatalf("replayed prepare = %+v, err=%v", retry, err)
 		}
-		got, err := replica.Read(ctx, 8, 1)
+		got, err := replica.ReadBytesForTest(8, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -379,7 +379,7 @@ func TestExactReplayLiveReplicationSurvivesPromotion(t *testing.T) {
 		if err != nil || retry.Vote != sinfonia.VoteOk || retry.RequestID != "retry" || string(retry.ReadData[0]) != "seed" {
 			t.Fatalf("replayed 1pc = %+v, err=%v", retry, err)
 		}
-		got, err := replica.Read(ctx, 8, 1)
+		got, err := replica.ReadBytesForTest(8, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -472,7 +472,7 @@ func TestReplayReplicationFailureIsRepairedOnRetry(t *testing.T) {
 	if err != nil || replayed.Vote != sinfonia.VoteBadCmp || replayed.RequestID != req.RequestID {
 		t.Fatalf("promoted retry = %+v, err=%v", replayed, err)
 	}
-	got, err := replica.Read(ctx, 8, 1)
+	got, err := replica.ReadBytesForTest(8, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +513,7 @@ func TestCommitDecisionReplicationAndReplicaRecovery(t *testing.T) {
 	if err := replicaRestarted.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := replicaRestarted.Read(ctx, 9, 1)
+	got, err := replicaRestarted.ReadBytesForTest(9, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

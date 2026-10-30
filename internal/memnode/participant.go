@@ -1,7 +1,6 @@
 package memnode
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -16,8 +15,6 @@ import (
 )
 
 var ErrOutOfBounds = errors.New("out of bounds")
-
-var ErrDirectWriteRequiresMiniTransaction = errors.New("durable direct write requires a minitransaction")
 
 const (
 	defaultGlobalBarrierLeaseTTL = 30 * time.Second
@@ -259,18 +256,9 @@ func (n *Participant) Close() error {
 	return disk.Close()
 }
 
-func (n *Participant) Read(ctx context.Context, addr uint64, length uint32) ([]byte, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if err := n.checkGenerationLocked(generationFromContext(ctx)); err != nil {
-		return nil, err
-	}
-	return n.read(addr, length)
-}
-
 func (n *Participant) read(addr uint64, length uint32) ([]byte, error) {
 	end := addr + uint64(length)
-	if end > uint64(len(n.memory)) {
+	if end < addr || end > uint64(len(n.memory)) {
 		return nil, ErrOutOfBounds
 	}
 	data := make([]byte, length)
@@ -278,21 +266,9 @@ func (n *Participant) read(addr uint64, length uint32) ([]byte, error) {
 	return data, nil
 }
 
-func (n *Participant) Write(ctx context.Context, addr uint64, data []byte) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if err := n.checkGenerationLocked(generationFromContext(ctx)); err != nil {
-		return err
-	}
-	if n.durable {
-		return ErrDirectWriteRequiresMiniTransaction
-	}
-	return n.write(addr, data)
-}
-
 func (n *Participant) write(addr uint64, data []byte) error {
 	end := addr + uint64(len(data))
-	if end > uint64(len(n.memory)) {
+	if end < addr || end > uint64(len(n.memory)) {
 		return ErrOutOfBounds
 	}
 	copy(n.memory[addr:end], data)

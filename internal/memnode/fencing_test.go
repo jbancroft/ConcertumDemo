@@ -172,7 +172,7 @@ func TestFencingPublicationFailurePreservesFencingAcrossRestart(t *testing.T) {
 			expectedGeneration := uint64(0)
 			if fencingCheckpointPublishesGeneration(checkpoint) {
 				expectedGeneration = 42
-				if err := node.Write(ctx, 0, []byte("x")); !errors.Is(err, ErrStaleGeneration) {
+				if _, err := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{WriteItems: []sinfonia.WriteItem{{Addr: 0, Data: []byte("x")}}}); !errors.Is(err, ErrStaleGeneration) {
 					t.Fatalf("unfenced write error = %v, want %v", err, ErrStaleGeneration)
 				}
 			}
@@ -204,7 +204,7 @@ func TestFencingPublicationFailurePreservesFencingAcrossRestart(t *testing.T) {
 				t.Fatalf("restart generation = %d, want %d", status.Generation, expectedGeneration)
 			}
 			if expectedGeneration != 0 {
-				if err := restarted.Write(ctx, 0, []byte("x")); !errors.Is(err, ErrStaleGeneration) {
+				if _, err := restarted.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{WriteItems: []sinfonia.WriteItem{{Addr: 0, Data: []byte("x")}}}); !errors.Is(err, ErrStaleGeneration) {
 					t.Fatalf("restarted unfenced write error = %v, want %v", err, ErrStaleGeneration)
 				}
 				if _, err := restarted.ConfigureReplication(ctx, sinfonia.ConfigureReplicationRequest{Role: sinfonia.ReplicationRoleReplica, PartnerRPC: "127.0.0.1:1", Generation: expectedGeneration - 1}); !errors.Is(err, ErrStaleGeneration) {

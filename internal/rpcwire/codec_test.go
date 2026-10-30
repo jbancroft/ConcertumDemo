@@ -13,10 +13,6 @@ import (
 
 func TestFrameRoundTripForAllRegisteredRPCBodies(t *testing.T) {
 	bodies := []any{
-		sinfonia.ReadRequest{Addr: 1, Len: 2},
-		sinfonia.ReadResponse{Data: []byte("ok")},
-		sinfonia.WriteRequest{Addr: 3, Data: []byte("x")},
-		sinfonia.WriteResponse{Ack: true},
 		sinfonia.ExecPrepareRequest{TID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 3}},
 		sinfonia.ExecPrepareResponse{Vote: sinfonia.VoteOk, ReadData: map[uint32][]byte{0: []byte("r")}, CurrentEpoch: 3},
 		sinfonia.ExecCommit1PCRequest{TID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 4, Epoch: 3}},

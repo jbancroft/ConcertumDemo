@@ -44,7 +44,7 @@ func run(ctx context.Context, executable string, out io.Writer) (err error) {
 }
 
 func demonstrate(ctx context.Context, api *sinfoniaclient.Client, out io.Writer) error {
-	// Direct writes initialize independent balances on nodes 1 and 2.
+	// Write-only minitransactions initialize independent balances on nodes 1 and 2.
 	for id := uint32(1); id <= 2; id++ {
 		if err := api.Write(ctx, id, balanceAddress, number(100)); err != nil {
 			return fmt.Errorf("initialize node %d: %w", id, err)

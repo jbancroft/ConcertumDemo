@@ -15,7 +15,6 @@ import (
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
-	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
 var coordinatorIDFallback atomic.Uint64
@@ -32,8 +31,6 @@ const (
 
 // Participant is the node interface used by the coordinator.
 type Participant interface {
-	Read(ctx context.Context, addr uint64, length uint32) ([]byte, error)
-	Write(ctx context.Context, addr uint64, data []byte) error
 	ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error)
 	ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error)
 	Commit(ctx context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error)
@@ -161,14 +158,6 @@ func (c *Coordinator) SetMaxRetriesForTest(max int) {
 	c.maxRetries = max
 }
 
-func (c *Coordinator) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
-	node, ok := c.nodes[c.resolveHostId(hostId)]
-	if !ok {
-		return nil, ErrUnknownMemNode
-	}
-	return node.Read(sinfonia.WithGeneration(ctx, c.generationFor(c.resolveHostId(hostId))), addr, length)
-}
-
 func (c *Coordinator) GetStats(hostId uint32) (memnode.StatsResponse, error) {
 	physical := c.resolveHostId(hostId)
 	if reader, ok := c.stats[physical]; ok && reader != nil {
@@ -181,14 +170,6 @@ func (c *Coordinator) GetStats(hostId uint32) (memnode.StatsResponse, error) {
 		return memnode.StatsResponse{}, ErrNoAdminEndpoint
 	}
 	return memnode.StatsResponse{}, ErrUnknownMemNode
-}
-
-func (c *Coordinator) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
-	node, ok := c.nodes[c.resolveHostId(hostId)]
-	if !ok {
-		return ErrUnknownMemNode
-	}
-	return node.Write(sinfonia.WithGeneration(ctx, c.generationFor(c.resolveHostId(hostId))), addr, data)
 }
 
 func (c *Coordinator) nextTID() sinfonia.TransactionID {
@@ -502,14 +483,10 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 	for range hostIds {
 		r := <-results
 		if r.err != nil {
-			decideCommit = false
-			status = sinfonia.VoteBadInternal
 			participantVotes[r.hostId] = sinfonia.VoteBadInternal
-			var remoteErr *rpcwire.RemoteError
-			if !errors.As(r.err, &remoteErr) {
-				return ExecResult{Committed: false, UnknownOutcome: true, ReadResults: map[sinfonia.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes, TransportErr: r.err}, false
-			}
-			continue
+			// An error may follow a saved yes vote; only a returned vote
+			// establishes that this participant rejected the transaction.
+			return ExecResult{UnknownOutcome: true, Status: sinfonia.VoteBadInternal, ParticipantVotes: participantVotes, TransportErr: r.err}, false
 		}
 		participantVotes[r.hostId] = r.resp.Vote
 		if r.resp.Vote != sinfonia.VoteOk {
@@ -559,13 +536,8 @@ func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId sinfoni
 		Generation:    c.generationFor(hostId),
 	})
 	if err != nil {
-		var remoteErr *rpcwire.RemoteError
-		res := ExecResult{Committed: false, Status: sinfonia.VoteBadInternal, ReadResults: map[sinfonia.ReadItem][]byte{}, ParticipantVotes: map[uint32]sinfonia.Vote{hostId: sinfonia.VoteBadInternal}}
-		if !errors.As(err, &remoteErr) {
-			res.TransportErr = err
-			res.UnknownOutcome = true
-		}
-		return res
+		// Even a server error can occur after the durable commit decision.
+		return ExecResult{UnknownOutcome: true, Status: sinfonia.VoteBadInternal, ParticipantVotes: map[uint32]sinfonia.Vote{hostId: sinfonia.VoteBadInternal}, TransportErr: err}
 	}
 	c.observeEpoch(resp.CurrentEpoch)
 	if resp.Vote != sinfonia.VoteOk {

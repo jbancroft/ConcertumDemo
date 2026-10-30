@@ -31,6 +31,20 @@ helpers return copies too. An `Executor` connects the builder to the client;
 there's no global list of hosts. Public items use `HostId`, `Address`, and
 `Length`; internal messages use `MemID`, `Addr`, and `Len`.
 
+All application data access uses minitransactions. `Client.Read` and
+`Client.Write` submit one read or write item through the coordinator's
+single-participant path. Both respect prepared transaction locks, fencing, and
+RPC readiness. Writes work on RAM and durable nodes. Raw read/write RPCs and
+public participant access methods are removed; private byte-access helpers are
+used only inside node operations.
+
+These convenience methods return `ErrTransactionAborted` for an explicit
+rejection and `ErrUnknownOutcome` when the outcome cannot be established. Separate
+reads are separate transactions, so callers still need validation or a combined
+minitransaction to obtain a snapshot across several ranges. The current
+single-participant path saves decisions and exact replies for read-only calls
+too, including disk writes on durable nodes.
+
 ## Finding the participant code
 
 The participant remains one type in `internal/memnode`. Its files separate the
@@ -39,7 +53,7 @@ the same state and mutex; the split adds no package or API boundary.
 
 | File | Responsibility |
 | --- | --- |
-| [participant.go](../internal/memnode/participant.go) | Shared state, construction, shutdown, and direct memory access |
+| [participant.go](../internal/memnode/participant.go) | Shared state, construction, shutdown, and private byte-access helpers |
 | [locking.go](../internal/memnode/locking.go) | Range locks and the leased global barrier |
 | [prepare.go](../internal/memnode/prepare.go) | Comparisons, reads, prepared writes, and yes/no votes |
 | [commit.go](../internal/memnode/commit.go) | Applying commit/abort decisions and single-participant execution |
@@ -83,7 +97,9 @@ A transaction that touches just one participant uses a combined execute/commit
 call instead.
 
 If an RPC fails after the request might have arrived, the caller can't assume
-the transaction aborted. The API reports committed, aborted, or unknown.
+the transaction aborted. This includes server errors after a saved vote or
+commit decision; an error is not an abort vote. The API reports committed,
+aborted, or unknown.
 Participants remember replies so duplicate requests can get the same result
 without applying writes twice.
 

@@ -31,8 +31,8 @@ func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var read sinfonia.ReadResponse
-	err = client.Call(ctx, sinfonia.MethodRead, sinfonia.ReadRequest{Addr: 0, Len: 1}, &read)
+	var read sinfonia.ExecCommit1PCResponse
+	err = client.Call(ctx, sinfonia.MethodExecCommit1PC, sinfonia.ExecCommit1PCRequest{TID: sinfonia.TransactionID{CoordinatorID: 17, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}, ReadItems: []sinfonia.ReadItem{{Addr: 0, Len: 1}}}, &read)
 	if err == nil || !strings.Contains(err.Error(), memnode.ErrRecoveryPending.Error()) {
 		t.Fatalf("Read before recovery error = %v, want ErrRecoveryPending", err)
 	}
@@ -45,7 +45,7 @@ func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
 	if err := node.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Call(ctx, sinfonia.MethodRead, sinfonia.ReadRequest{Addr: 0, Len: 1}, &read); err != nil {
+	if err := client.Call(ctx, sinfonia.MethodExecCommit1PC, sinfonia.ExecCommit1PCRequest{TID: sinfonia.TransactionID{CoordinatorID: 17, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}, ReadItems: []sinfonia.ReadItem{{Addr: 0, Len: 1}}}, &read); err != nil {
 		t.Fatalf("Read after recovery failed: %v", err)
 	}
 }

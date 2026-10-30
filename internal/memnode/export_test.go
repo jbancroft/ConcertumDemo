@@ -15,3 +15,11 @@ func (n *Participant) ApplyWriteForTest(addr uint64, data []byte) error {
 	defer n.mu.Unlock()
 	return n.write(addr, data)
 }
+
+// ReadBytesForTest inspects physical memory, including unready nodes and replicas.
+// It exists only in test builds; applications must use minitransactions.
+func (n *Participant) ReadBytesForTest(addr uint64, length uint32) ([]byte, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.read(addr, length)
+}

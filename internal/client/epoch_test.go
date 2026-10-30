@@ -92,7 +92,7 @@ func TestCoordinatorRetriesStaleEpochWithFreshID(t *testing.T) {
 						t.Fatalf("retry did not advance ID and epoch: first=%+v, second=%+v", first, second)
 					}
 					for _, write := range writes {
-						got, err := nodes[write.MemID].Read(ctx, write.Addr, 1)
+						got, err := coord.Read(ctx, write.MemID, write.Addr, 1)
 						if err != nil || string(got) != string(write.Data) {
 							t.Fatalf("node %d: got=%q, err=%v", write.MemID, got, err)
 						}

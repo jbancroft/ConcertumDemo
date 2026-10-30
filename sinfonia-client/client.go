@@ -2,7 +2,6 @@ package sinfoniaclient
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
@@ -22,9 +21,12 @@ const (
 	StatusAborted   = minitxn.StatusAborted
 )
 
-// ErrUnknownOutcome reports an uncertain transaction result from the index or
-// SQL layer. The operation may have committed; callers must not retry blindly.
-var ErrUnknownOutcome = errors.New("sinfonia: transaction outcome unknown; operation may have committed")
+// ErrUnknownOutcome reports an uncertain transaction result. The operation may
+// have committed; callers must not retry writes blindly.
+var ErrUnknownOutcome = client.ErrUnknownOutcome
+
+// ErrTransactionAborted reports a definite rejection of a Read or Write call.
+var ErrTransactionAborted = client.ErrTransactionAborted
 
 type CompareItem = minitxn.CompareItem
 type ReadItem = minitxn.ReadItem
@@ -105,10 +107,13 @@ func NewClient(config map[uint32]NodeConfig) *Client {
 	return &Client{coordinator: coord}
 }
 
+// Read executes a read-only minitransaction. Separate calls are separate snapshots.
 func (c *Client) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
 	return c.coordinator.Read(ctx, hostId, addr, length)
 }
 
+// Write executes a write-only minitransaction on either a RAM or durable node.
+// ErrUnknownOutcome means the write may have committed.
 func (c *Client) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
 	return c.coordinator.Write(ctx, hostId, addr, data)
 }

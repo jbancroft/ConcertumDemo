@@ -149,10 +149,10 @@ func TestFlushPendingCommitsAppliesQueuedDecisions(t *testing.T) {
 	if err := c.FlushPendingCommits(ctx); err != nil {
 		t.Fatalf("flush pending commits: %v", err)
 	}
-	if got, _ := n1.Read(context.Background(), 4, 3); string(got) != "one" {
+	if got, _ := c.Read(context.Background(), 1, 4, 3); string(got) != "one" {
 		t.Fatalf("node 1 write not applied after flush: %q", got)
 	}
-	if got, _ := n2.Read(context.Background(), 8, 3); string(got) != "two" {
+	if got, _ := c.Read(context.Background(), 2, 8, 3); string(got) != "two" {
 		t.Fatalf("node 2 write not applied after flush: %q", got)
 	}
 }

@@ -56,13 +56,6 @@ func (n *Participant) checkGenerationLocked(generation uint64) error {
 	return nil
 }
 
-func generationFromContext(ctx context.Context) uint64 {
-	if generation, ok := sinfonia.GenerationFromContext(ctx); ok {
-		return generation
-	}
-	return 0
-}
-
 func (n *Participant) replicationRoleLocked() sinfonia.ReplicationRole {
 	switch n.mode {
 	case ModeReplPrimary:

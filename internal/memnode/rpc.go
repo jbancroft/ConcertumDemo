@@ -18,20 +18,6 @@ func (n *Participant) requireRecoveryComplete() error {
 
 func (n *Participant) RPCServer() *rpcwire.Server {
 	srv := rpcwire.NewServer(nil, nil)
-	rpcwire.RegisterTyped(srv, sinfonia.MethodRead, func(ctx context.Context, req sinfonia.ReadRequest) (sinfonia.ReadResponse, error) {
-		if err := n.requireRecoveryComplete(); err != nil {
-			return sinfonia.ReadResponse{}, err
-		}
-		data, err := n.Read(sinfonia.WithGeneration(ctx, req.Generation), req.Addr, req.Len)
-		return sinfonia.ReadResponse{Data: data}, err
-	})
-	rpcwire.RegisterTyped(srv, sinfonia.MethodWrite, func(ctx context.Context, req sinfonia.WriteRequest) (sinfonia.WriteResponse, error) {
-		if err := n.requireRecoveryComplete(); err != nil {
-			return sinfonia.WriteResponse{Ack: false}, err
-		}
-		err := n.Write(sinfonia.WithGeneration(ctx, req.Generation), req.Addr, req.Data)
-		return sinfonia.WriteResponse{Ack: err == nil}, err
-	})
 	rpcwire.RegisterTyped(srv, sinfonia.MethodExecPrepare, func(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
 		if err := n.requireRecoveryComplete(); err != nil {
 			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, err

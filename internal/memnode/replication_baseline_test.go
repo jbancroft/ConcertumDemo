@@ -113,7 +113,7 @@ func TestReplicationBaselineInstallCrashBoundariesRecoverOldState(t *testing.T) 
 			if err := restarted.Recover(ctx); err != nil {
 				t.Fatal(err)
 			}
-			got, err := restarted.Read(ctx, 0, 12)
+			got, err := restarted.ReadBytesForTest(0, 12)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -277,7 +277,7 @@ func TestReplicationBaselineReplayInstallCrashBoundaryRecoversOldState(t *testin
 	if err := restarted.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := restarted.Read(ctx, 0, 12)
+	got, err := restarted.ReadBytesForTest(0, 12)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestReplicationBaselineInstallCrashSubprocess(t *testing.T) {
 			if err := restarted.Recover(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			got, err := restarted.Read(context.Background(), 0, 64)
+			got, err := restarted.ReadBytesForTest(0, 64)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -468,7 +468,7 @@ func TestReplicationBaselineChunkChecksumMismatchDoesNotTouchLiveState(t *testin
 	if _, err := node.CommitReplicationBaseline(ctx, sinfonia.CommitReplicationBaselineRequest{BarrierOwner: owner, SessionID: "checksum-session"}); err == nil {
 		t.Fatal("expected whole-image checksum mismatch")
 	}
-	got, err := node.Read(ctx, 0, 64)
+	got, err := node.ReadBytesForTest(0, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +562,7 @@ func TestReplicationBaselineRejectsLiveIngressUntilCommit(t *testing.T) {
 	if err := restarted.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := restarted.Read(ctx, 0, 36)
+	got, err := restarted.ReadBytesForTest(0, 36)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +677,7 @@ func TestReplicationBaselineFailedInstallRejectsIngressUntilRestartRecovery(t *t
 	if err := recoveredRetry.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := recoveredRetry.Read(ctx, 24, 4)
+	got, err := recoveredRetry.ReadBytesForTest(24, 4)
 	if err != nil || string(got) != "live" {
 		t.Fatalf("restarted retried write = %q, err = %v", got, err)
 	}

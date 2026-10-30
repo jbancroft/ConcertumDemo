@@ -54,7 +54,7 @@ func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := a2.Read(ctx, 0, 1)
+	got, err := a2.ReadBytesForTest(0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
 	if err := a.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := a.Read(ctx, 0, 1)
+	got, err := a.ReadBytesForTest(0, 1)
 	if err != nil || len(got) != 1 || got[0] != 0 {
 		t.Fatalf("durable abort decision was ignored: value=%q err=%v", got, err)
 	}
@@ -170,7 +170,7 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 			if status.Outcome == sinfonia.TidOutcomeCommit || status.VotedOK {
 				t.Fatalf("late commit installed commit evidence after %s: %+v", tc.name, status)
 			}
-			if got, _ := node.Read(ctx, 0, 1); got[0] != 0 {
+			if got, _ := node.ReadBytesForTest(0, 1); got[0] != 0 {
 				t.Fatalf("late commit applied after %s: %q", tc.name, got)
 			}
 		})

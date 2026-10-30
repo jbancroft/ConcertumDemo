@@ -172,7 +172,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	if !bytes.Equal(decisionBefore, decisionAfter) {
 		t.Fatalf("opposite phase-two race changed recovery decision: before=%q after=%q", decisionBefore, decisionAfter)
 	}
-	got, err := restarted.Read(ctx, 8, 1)
+	got, err := restarted.ReadBytesForTest(8, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	if !bytes.Equal(decisionBefore, decisionAfter) {
 		t.Fatalf("same-TID retry mutated decided state: before=%q after=%q", decisionBefore, decisionAfter)
 	}
-	got, err = restarted.Read(ctx, 8, 1)
+	got, err = restarted.ReadBytesForTest(8, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 			if !bytes.Equal(decisionBefore, decisionAfter) {
 				t.Fatalf("opposite Commit replaced durable recovery decision: before=%q after=%q", decisionBefore, decisionAfter)
 			}
-			got, err := restarted.Read(ctx, 8, 1)
+			got, err := restarted.ReadBytesForTest(8, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -388,7 +388,7 @@ func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
 	if !replicaStatus.KnownDecision || replicaStatus.Outcome != sinfonia.TidOutcomeCommit {
 		t.Fatalf("replica decision disagrees with primary: %+v", replicaStatus)
 	}
-	got, err := primary.Read(ctx, 8, 1)
+	got, err := primary.ReadBytesForTest(8, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 	if err := restarted.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := restarted.Read(ctx, 9, 1)
+	got, err := restarted.ReadBytesForTest(9, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -84,7 +84,7 @@ type lostOnePCReplyParticipant struct {
 
 func (n *lostOnePCReplyParticipant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
 	resp, err := n.Participant.ExecCommit1PC(ctx, req)
-	if err != nil {
+	if err != nil || len(req.WriteItems) == 0 {
 		return resp, err
 	}
 	return sinfonia.ExecCommit1PCResponse{}, errors.New("lost commit reply")
@@ -159,6 +159,15 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 	n1 := memnode.NewParticipant(16)
 	n2 := memnode.NewParticipant(16)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
+	c := &Client{coordinator: coord}
+
+	if err := c.Write(context.Background(), 1, 0, []byte("ab")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Write(context.Background(), 2, 0, []byte("xy")); err != nil {
+		t.Fatal(err)
+	}
+
 	release := n1.HoldWriteLockForTest(0, 2)
 	released := false
 	coord.SetBackoffForTest(backoffFunc(func(_ context.Context, _ int) {
@@ -169,14 +178,6 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}))
 	coord.SetMaxRetriesForTest(3)
-	c := &Client{coordinator: coord}
-
-	if err := c.Write(context.Background(), 1, 0, []byte("ab")); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Write(context.Background(), 2, 0, []byte("xy")); err != nil {
-		t.Fatal(err)
-	}
 
 	committed, _, status := c.NewMiniTransaction().
 		Compare(1, 0, []byte("ab")).

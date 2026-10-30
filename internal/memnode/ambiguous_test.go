@@ -23,7 +23,7 @@ func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testin
 	if err != nil || resp.Vote != sinfonia.VoteOk || resp.RequestID != "retry" || string(resp.ReadData[0]) != "\x00" {
 		t.Fatalf("retry 1pc should return original outcome, resp=%+v err=%v", resp, err)
 	}
-	got, _ := n.Read(context.Background(), 0, 1)
+	got, _ := n.ReadBytesForTest(0, 1)
 	if string(got) != "A" {
 		t.Fatalf("duplicate 1pc reapplied write: got %q", got)
 	}
@@ -54,7 +54,7 @@ func TestPrepareAndCommitDuplicateTIDReturnOriginalOutcomeAfterResponseLoss(t *t
 	if err != nil || !cresp.Ack || cresp.RequestID != "commit-retry" {
 		t.Fatalf("commit retry resp=%+v err=%v", cresp, err)
 	}
-	got, _ := n.Read(context.Background(), 0, 1)
+	got, _ := n.ReadBytesForTest(0, 1)
 	if string(got) != "A" {
 		t.Fatalf("duplicate commit changed outcome: got %q", got)
 	}

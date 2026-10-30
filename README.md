@@ -41,9 +41,9 @@ For a smaller example focused on the Sinfonia client API:
 make sinfonia-client-demo
 ```
 
-It starts two in-memory memnode processes on loopback TCP, initializes balances with direct
-writes, reads them back, transfers 25 with a compare/write minitransaction, and
-checks that a stale comparison aborts both writes:
+It starts two in-memory memnode processes on loopback TCP, initializes balances
+with transactional writes, reads them back, transfers 25 with a compare/write
+minitransaction, and checks that a stale comparison aborts both writes:
 
 ```text
 Two in-memory memnode processes listening on loopback TCP
@@ -151,28 +151,36 @@ overlapping writes in the same transaction. A conflict with another transaction
 rejects the attempt; overlapping operations within one transaction do not
 conflict with each other.
 
-The B+tree stores pages through this transaction API. SQL uses the tree for two
-columns: `id` and `value`.
+All application reads and writes use this transaction API. `Client.Read` and
+`Client.Write` submit a single read or write item as a minitransaction, with the
+same locking rules on RAM and durable nodes. There are no raw data-access RPCs.
+Separate reads are separate snapshots; the B+tree still validates the pages it
+loads. SQL uses the tree for two columns: `id` and `value`.
+
+The convenience methods return `sinfoniaclient.ErrTransactionAborted` for a
+definite rejection. Read-only calls currently save transaction decisions and
+replay responses too, so reads on durable nodes incur disk writes.
 
 Commit messages normally run in the background; `FlushPendingCommits` waits for
-delivery. A network failure can leave the caller unsure whether a transaction
-committed, so the API also has an explicit unknown result.
-Index and SQL mutations return `sinfoniaclient.ErrUnknownOutcome` in that case
-and stop retrying. The operation may have committed; callers can recognize this
-error with `errors.Is` and must not retry blindly.
+delivery. A network failure or server error can leave the caller unsure whether
+a transaction committed, so the API also has an explicit unknown result.
+The read/write convenience methods, index, and SQL layer return
+`sinfoniaclient.ErrUnknownOutcome` in that case and stop retrying. The operation
+may have committed; callers can recognize this error with `errors.Is` and must
+not retry blindly.
 
 ## Where to read
 
 | Start here | What to look for |
 | --- | --- |
 | [Demo](cmd/demo/main.go) | A complete example with checked results |
-| [Sinfonia client demo](demo/sinfonia-client-demo/main.go) | Direct reads/writes, a two-node transfer, and a comparison abort |
+| [Sinfonia client demo](demo/sinfonia-client-demo/main.go) | Transactional reads/writes, a two-node transfer, and a comparison abort |
 | [SQL REPL](cmd/repl/main.go) | Interactive queries, readable results, and local node cleanup |
 | [Memnode command](cmd/memnode/main.go) | Standalone participant startup, recovery peers, and shutdown |
 | [Sinfonia user library](sinfonia-client/client.go) | Reads, writes, transactions, and node stats from an application |
 | [Transaction builder](minitxn/transaction.go) | The compare/read/write API and grouping work by host |
 | [Coordinator](internal/client/coordinator.go) | Votes, retries, and sending decisions |
-| [Participant](internal/memnode/participant.go) | Shared state, construction, and direct memory access |
+| [Participant](internal/memnode/participant.go) | Shared state, construction, and private byte-access helpers |
 | [Prepare](internal/memnode/prepare.go) | Range locks, comparisons, reads, and durable yes votes |
 | [Commit](internal/memnode/commit.go) | Commit/abort decisions and the single-participant path |
 | [Recovery](internal/memnode/recovery.go) | Saved decisions, epoch floors, and peer evidence |

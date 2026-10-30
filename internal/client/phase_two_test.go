@@ -123,8 +123,8 @@ func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T
 	if got := receivePhaseTwo(t, ctx, n1.delivered); got.TID != first || !got.ActionCommit {
 		t.Fatalf("first delivery=%+v, want commit for %+v", got, first)
 	}
-	if got, err := n2.Read(ctx, 8, 1); err != nil || string(got) != "\x00" {
-		t.Fatalf("blocked participant changed before delivery: %q, err=%v", got, err)
+	if got, err := readParticipant(ctx, n2, 8, 1); !errors.Is(err, ErrTransactionAborted) || got != nil {
+		t.Fatalf("read bypassed prepared write before delivery: %q, err=%v", got, err)
 	}
 	release()
 	if err := coord.FlushPendingCommits(ctx); err != nil {
@@ -133,7 +133,7 @@ func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T
 	if got := receivePhaseTwo(t, ctx, n2.delivered); got.TID != first || !got.ActionCommit {
 		t.Fatalf("second delivery=%+v, want commit for %+v", got, first)
 	}
-	if got, err := n2.Read(ctx, 8, 1); err != nil || string(got) != "B" {
+	if got, err := readParticipant(ctx, n2, 8, 1); err != nil || string(got) != "B" {
 		t.Fatalf("delivered write=%q, err=%v", got, err)
 	}
 
@@ -177,7 +177,7 @@ func TestCoordinatorPhaseTwoDeliversAbortAfterRejectedPrepare(t *testing.T) {
 		if got := receivePhaseTwo(t, ctx, node.delivered); got.TID != txId || got.ActionCommit {
 			t.Fatalf("delivery=%+v, want abort for %+v", got, txId)
 		}
-		if got, err := node.Read(ctx, 8, 1); err != nil || string(got) != "\x00" {
+		if got, err := readParticipant(ctx, node, 8, 1); err != nil || string(got) != "\x00" {
 			t.Fatalf("aborted write was applied: %q, err=%v", got, err)
 		}
 	}
@@ -218,7 +218,7 @@ func TestCoordinatorRecoversAfterPartialCommitDelivery(t *testing.T) {
 					t.Fatalf("recover participant %d: %v", i+1, err)
 				}
 				want := phaseTwoWrites()[i].Data
-				if got, err := node.Read(ctx, 8, 1); err != nil || string(got) != string(want) {
+				if got, err := readParticipant(ctx, node, 8, 1); err != nil || string(got) != string(want) {
 					t.Fatalf("participant %d recovered %q, want %q, err=%v", i+1, got, want, err)
 				}
 			}
@@ -273,10 +273,11 @@ func runPhaseTwoCrashHelper(t *testing.T, dir string) {
 			t.Fatalf("prepare=%+v, delivered=%+v", txId, delivered)
 		}
 	}
-	for i, want := range []string{"A", "\x00"} {
-		if got, err := nodes[i].Read(ctx, 8, 1); err != nil || string(got) != want {
-			t.Fatalf("participant %d before crash: %q, want %q, err=%v", i+1, got, want, err)
-		}
+	if got, err := readParticipant(ctx, nodes[0], 8, 1); err != nil || string(got) != "A" {
+		t.Fatalf("committed participant before crash: %q, err=%v", got, err)
+	}
+	if got, err := readParticipant(ctx, nodes[1], 8, 1); !errors.Is(err, ErrTransactionAborted) || got != nil {
+		t.Fatalf("read bypassed prepared participant before crash: %q, err=%v", got, err)
 	}
 	data, err := json.Marshal(delivered.TID)
 	if err != nil {

@@ -34,7 +34,7 @@ func TestPreparedComparisonProtectsPartiallyWrittenRange(t *testing.T) {
 	if resp, err := n.ExecAndPrepare(ctx, second); err != nil || resp.Vote != sinfonia.VoteBadCmp {
 		t.Fatalf("retry = %+v, %v; want failed comparison after first commit", resp, err)
 	}
-	if data, err := n.Read(ctx, 0, 2); err != nil || !bytes.Equal(data, []byte{1, 0}) {
+	if data, err := n.ReadBytesForTest(0, 2); err != nil || !bytes.Equal(data, []byte{1, 0}) {
 		t.Fatalf("final bytes = %v, %v; want [1 0]", data, err)
 	}
 }
@@ -136,7 +136,7 @@ func TestTransactionOverlappingItemsReleaseLocks(t *testing.T) {
 			if tc.commit {
 				want = []byte{0, 1, 3, 4, 0}
 			}
-			if data, err := n.Read(ctx, 0, 5); err != nil || !bytes.Equal(data, want) {
+			if data, err := n.ReadBytesForTest(0, 5); err != nil || !bytes.Equal(data, want) {
 				t.Fatalf("stored bytes = %v, %v; want %v", data, err, want)
 			}
 			probe := sinfonia.ExecPrepareRequest{

@@ -26,20 +26,6 @@ func NewRPCParticipantWithGeneration(addr string, tlsConfig *tls.Config, timeout
 	}
 }
 
-func (n *RPCParticipant) Read(ctx context.Context, addr uint64, length uint32) ([]byte, error) {
-	var out sinfonia.ReadResponse
-	err := n.rpc.Call(ctx, sinfonia.MethodRead, sinfonia.ReadRequest{Addr: addr, Len: length, Generation: n.generation}, &out)
-	if err != nil {
-		return nil, err
-	}
-	return out.Data, nil
-}
-
-func (n *RPCParticipant) Write(ctx context.Context, addr uint64, data []byte) error {
-	var out sinfonia.WriteResponse
-	return n.rpc.Call(ctx, sinfonia.MethodWrite, sinfonia.WriteRequest{Addr: addr, Data: data, Generation: n.generation}, &out)
-}
-
 func (n *RPCParticipant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
 	var out sinfonia.ExecPrepareResponse
 	if req.Generation == 0 {

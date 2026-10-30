@@ -18,8 +18,8 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 	server.Register("test.fail", func(context.Context, any) (any, error) {
 		return nil, errors.New("request rejected")
 	})
-	RegisterTyped(server, "test.typed", func(context.Context, sinfonia.ReadRequest) (sinfonia.ReadResponse, error) {
-		return sinfonia.ReadResponse{}, nil
+	RegisterTyped(server, "test.typed", func(context.Context, sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
+		return sinfonia.ExecCommit1PCResponse{}, nil
 	})
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -41,19 +41,19 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 		{
 			name:        "handler rejection",
 			method:      "test.fail",
-			request:     sinfonia.ReadRequest{},
+			request:     sinfonia.ExecCommit1PCRequest{},
 			wantMessage: "request rejected",
 		},
 		{
 			name:        "unknown method",
 			method:      "test.missing",
-			request:     sinfonia.ReadRequest{},
+			request:     sinfonia.ExecCommit1PCRequest{},
 			wantMessage: `unknown rpc method "test.missing"`,
 		},
 		{
 			name:      "unexpected request type",
 			method:    "test.typed",
-			request:   sinfonia.WriteRequest{},
+			request:   sinfonia.CommitRequest{},
 			wantParts: []string{"unexpected request type", "test.typed"},
 		},
 	}
@@ -62,7 +62,7 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			out := sinfonia.ReadResponse{Data: []byte("unchanged")}
+			out := sinfonia.ExecCommit1PCResponse{ReadData: map[uint32][]byte{0: []byte("unchanged")}}
 			err := client.Call(ctx, tt.method, tt.request, &out)
 			if err == nil {
 				t.Fatal("Call succeeded, want remote error")
@@ -85,7 +85,7 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 			if got, want := err.Error(), tt.method+": "+remote.Message; got != want {
 				t.Fatalf("error text = %q, want %q", got, want)
 			}
-			if got := string(out.Data); got != "unchanged" {
+			if got := string(out.ReadData[0]); got != "unchanged" {
 				t.Fatalf("response changed on remote error: %q", got)
 			}
 		})
@@ -95,7 +95,7 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 func TestClientRejectsUnexpectedSuccessBody(t *testing.T) {
 	server := NewServer(nil, nil)
 	server.Register("test.wrong_response", func(context.Context, any) (any, error) {
-		return sinfonia.WriteResponse{Ack: true}, nil
+		return sinfonia.CommitResponse{Ack: true}, nil
 	})
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -109,8 +109,8 @@ func TestClientRejectsUnexpectedSuccessBody(t *testing.T) {
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	out := sinfonia.ReadResponse{Data: []byte("unchanged")}
-	err = client.Call(ctx, "test.wrong_response", sinfonia.ReadRequest{}, &out)
+	out := sinfonia.ExecCommit1PCResponse{ReadData: map[uint32][]byte{0: []byte("unchanged")}}
+	err = client.Call(ctx, "test.wrong_response", sinfonia.ExecCommit1PCRequest{}, &out)
 	if err == nil || !strings.Contains(err.Error(), "unexpected response type") {
 		t.Fatalf("Call error = %v, want unexpected response type", err)
 	}
@@ -118,7 +118,7 @@ func TestClientRejectsUnexpectedSuccessBody(t *testing.T) {
 	if errors.As(err, &remote) {
 		t.Fatalf("local response error was normalized as remote: %#v", remote)
 	}
-	if got := string(out.Data); got != "unchanged" {
+	if got := string(out.ReadData[0]); got != "unchanged" {
 		t.Fatalf("response changed on type mismatch: %q", got)
 	}
 }
@@ -145,8 +145,8 @@ func TestClientRetiresConnectionAfterMalformedResponse(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	out := sinfonia.ReadResponse{Data: []byte("unchanged")}
-	err := client.Call(ctx, "test.read", sinfonia.ReadRequest{}, &out)
+	out := sinfonia.ExecCommit1PCResponse{ReadData: map[uint32][]byte{0: []byte("unchanged")}}
+	err := client.Call(ctx, "test.read", sinfonia.ExecCommit1PCRequest{}, &out)
 	if err == nil {
 		t.Fatal("Call accepted malformed response")
 	}
@@ -154,7 +154,7 @@ func TestClientRetiresConnectionAfterMalformedResponse(t *testing.T) {
 	if errors.As(err, &remote) {
 		t.Fatalf("malformed response was normalized as remote: %#v", remote)
 	}
-	if got := string(out.Data); got != "unchanged" {
+	if got := string(out.ReadData[0]); got != "unchanged" {
 		t.Fatalf("response changed after malformed frame: %q", got)
 	}
 	if len(client.idle) != 0 {
@@ -170,7 +170,7 @@ func TestServerDoesNotDispatchMalformedRequest(t *testing.T) {
 	var called atomic.Bool
 	server.Register("test.read", func(context.Context, any) (any, error) {
 		called.Store(true)
-		return sinfonia.ReadResponse{}, nil
+		return sinfonia.ExecCommit1PCResponse{}, nil
 	})
 
 	clientConn, serverConn := net.Pipe()
