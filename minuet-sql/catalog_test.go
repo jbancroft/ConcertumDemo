@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"testing"
 
 	minuetindex "github.com/jbancroft/ConcertumDemo/minuet-index"
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
+
+// Catalog capacity, table region allocation, and stored catalog validation.
 
 const smallTableRegionSize = 64 + 3*512 // Superblock, two leaves, and a root; 12 ascending rows fit.
 
@@ -182,4 +185,92 @@ func TestCatalogRejectsInvalidStoredRegions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEngineRejectsTableBeyondCatalogCapacity(t *testing.T) {
+	ctx := context.Background()
+	base := newMemTxnClient()
+	client := &conflictInjectingClient{base: base}
+	engine := newTestEngineWithClient(t, client)
+	staleEngine := newTestEngineWithClient(t, client)
+	names := []string{"one", "two", "three", "four", "five", "six"}
+	for _, name := range names {
+		if _, err := engine.Exec(ctx, "CREATE TABLE "+name); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	before, err := base.Read(ctx, 1, catalogAddr, catalogSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := atomic.LoadInt32(&client.calls)
+	// Both a current engine and one with an empty cached catalog must consult
+	// the stored catalog and reject creation before attempting a transaction.
+	for _, candidate := range []*Engine{engine, staleEngine} {
+		if _, err := candidate.Exec(ctx, "CREATE TABLE seven"); !errors.Is(err, ErrCatalogFull) {
+			t.Errorf("seventh create error = %v, want ErrCatalogFull", err)
+		}
+		if _, err := candidate.Exec(ctx, "SELECT id, value FROM seven"); !errors.Is(err, ErrTableNotFound) {
+			t.Errorf("rejected table is queryable: %v", err)
+		}
+		if _, err := candidate.Exec(ctx, "CREATE TABLE six"); !errors.Is(err, ErrTableExists) {
+			t.Errorf("duplicate create in full catalog = %v, want ErrTableExists", err)
+		}
+	}
+	if got := atomic.LoadInt32(&client.calls); got != attempts {
+		t.Errorf("rejected creation attempted %d transactions", got-attempts)
+	}
+	after, err := base.Read(ctx, 1, catalogAddr, catalogSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("rejected creation changed the stored catalog")
+	}
+	reopened := newTestEngineWithClient(t, base)
+	for _, name := range names {
+		if _, err := reopened.Exec(ctx, "SELECT id, value FROM "+name); err != nil {
+			t.Errorf("reopen %s: %v", name, err)
+		}
+	}
+	if _, err := reopened.Exec(ctx, "SELECT id, value FROM seven"); !errors.Is(err, ErrTableNotFound) {
+		t.Errorf("rejected table survived reopening: %v", err)
+	}
+}
+
+func FuzzDecodeCatalogNeverPanics(f *testing.F) {
+	valid := encodeCatalog(catalogState{
+		nextTableID:  2,
+		nextBaseAddr: defaultCatalogNextBase + defaultTableRegionSize,
+		tables: []catalogTableRecord{{
+			tableID:       1,
+			name:          "accounts",
+			indexBaseAddr: defaultCatalogNextBase,
+			regionSize:    defaultTableRegionSize,
+		}},
+	})
+	oversizedCount := append([]byte(nil), valid...)
+	binary.BigEndian.PutUint32(oversizedCount[catalogTableCountOffset:], ^uint32(0))
+	f.Add([]byte{}, uint64(0))
+	f.Add(valid, uint64(testMemorySize))
+	f.Add(oversizedCount, ^uint64(0))
+	f.Fuzz(func(t *testing.T, raw []byte, memorySize uint64) {
+		catalog, err := decodeCatalog(raw, memorySize)
+		if err != nil {
+			return
+		}
+		if len(catalog.tables) > catalogMaxRecords {
+			t.Fatalf("decoded %d tables from a catalog with capacity %d", len(catalog.tables), catalogMaxRecords)
+		}
+		end := uint64(defaultCatalogNextBase)
+		for _, rec := range catalog.tables {
+			if rec.indexBaseAddr < end || rec.indexBaseAddr > memorySize || rec.regionSize > memorySize-rec.indexBaseAddr {
+				t.Fatalf("accepted overlapping or out-of-bounds region: %+v", rec)
+			}
+			end = rec.indexBaseAddr + rec.regionSize
+		}
+		if catalog.nextBaseAddr != end || end > memorySize {
+			t.Fatal("next table allocation is outside available memory")
+		}
+	})
 }

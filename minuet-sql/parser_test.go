@@ -1,14 +1,15 @@
 package minuetsql
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestParserConformanceDocumentedSubset(t *testing.T) {
+// Parsing and planning for the supported SQL subset.
+
+func TestParseSupportedStatements(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
@@ -56,7 +57,7 @@ func TestParserConformanceDocumentedSubset(t *testing.T) {
 	}
 }
 
-func TestParserConformanceRejectsDocumentedUnsupportedSyntax(t *testing.T) {
+func TestParseRejectsUnsupportedSyntax(t *testing.T) {
 	t.Parallel()
 	unsupported := []string{
 		"CREATE TABLE accounts (id INTEGER, value INTEGER)",
@@ -85,7 +86,7 @@ func TestParserConformanceRejectsDocumentedUnsupportedSyntax(t *testing.T) {
 	}
 }
 
-func TestParserConformanceUint64LiteralBounds(t *testing.T) {
+func TestParseUint64LiteralBounds(t *testing.T) {
 	t.Parallel()
 	const maxUint64 = uint64(18446744073709551615)
 	const overflow = "18446744073709551616"
@@ -129,7 +130,7 @@ func TestParserConformanceUint64LiteralBounds(t *testing.T) {
 	}
 }
 
-func TestParserConformanceIdentifierLength(t *testing.T) {
+func TestParseIdentifierLength(t *testing.T) {
 	valid := strings.Repeat("a", catalogMaxNameLen)
 	if _, err := Parse("CREATE TABLE " + valid); err != nil {
 		t.Fatalf("maximum-length identifier rejected: %v", err)
@@ -148,7 +149,7 @@ func FuzzParseNeverPanics(f *testing.F) {
 	})
 }
 
-func TestPlannerConformanceNormalizesTwoTableHistorySequence(t *testing.T) {
+func TestPlanSupportedStatements(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		sql      string
@@ -198,94 +199,5 @@ func TestPlannerConformanceNormalizesTwoTableHistorySequence(t *testing.T) {
 		if !errors.Is(err, tc.wantErr) {
 			t.Fatalf("Parse/Plan(%q) err=%v, want %v", tc.sql, err, tc.wantErr)
 		}
-	}
-}
-
-func TestSemanticConformanceRejectedTransactionBoundariesDoNotGroupStatements(t *testing.T) {
-	ctx := context.Background()
-	e := newTestEngine(t)
-	for _, sql := range []string{
-		"CREATE TABLE generated_parents",
-		"CREATE TABLE generated_children",
-		"INSERT INTO generated_parents VALUES (7, 70)",
-		"INSERT INTO generated_children VALUES (1, 7)",
-	} {
-		if _, err := e.Exec(ctx, sql); err != nil {
-			t.Fatalf("Exec(%q): %v", sql, err)
-		}
-	}
-
-	for _, sql := range []string{
-		"SELECT id, value FROM generated_parents JOIN generated_children ON generated_parents.id = generated_children.value",
-		"UPDATE generated_parents SET value = 71 WHERE id = 7",
-		"BEGIN",
-	} {
-		if _, err := e.Exec(ctx, sql); !errors.Is(err, ErrUnsupportedSQL) {
-			t.Fatalf("Exec(%q) err=%v, want ErrUnsupportedSQL", sql, err)
-		}
-	}
-	if _, err := e.Exec(ctx, "DELETE FROM generated_children WHERE id = 1"); err != nil {
-		t.Fatalf("delete child: %v", err)
-	}
-	for _, boundary := range []string{"ROLLBACK", "COMMIT"} {
-		if _, err := e.Exec(ctx, boundary); !errors.Is(err, ErrUnsupportedSQL) {
-			t.Fatalf("Exec(%q) err=%v, want ErrUnsupportedSQL", boundary, err)
-		}
-	}
-
-	parents, err := e.Exec(ctx, "SELECT id, value FROM generated_parents")
-	if err != nil || !reflect.DeepEqual(parents.Rows, []Row{{ID: 7, Value: 70}}) {
-		t.Fatalf("parent rows=%#v err=%v", parents.Rows, err)
-	}
-	children, err := e.Exec(ctx, "SELECT id, value FROM generated_children")
-	if err != nil || len(children.Rows) != 0 {
-		t.Fatalf("child rows=%#v err=%v", children.Rows, err)
-	}
-}
-
-func TestSemanticConformanceDocumentedSubset(t *testing.T) {
-	ctx := context.Background()
-	e := newTestEngine(t)
-
-	statements := []string{
-		"CREATE TABLE accounts",
-		"insert into accounts values (1, 100)",
-		"INSERT INTO accounts VALUES (2, 250)",
-	}
-	for _, sql := range statements {
-		if _, err := e.Exec(ctx, sql); err != nil {
-			t.Fatalf("Exec(%q): %v", sql, err)
-		}
-	}
-
-	all, err := e.Exec(ctx, "SELECT id, value FROM accounts")
-	if err != nil {
-		t.Fatalf("select all: %v", err)
-	}
-	if !reflect.DeepEqual(all.Rows, []Row{{ID: 1, Value: 100}, {ID: 2, Value: 250}}) {
-		t.Fatalf("select all rows=%#v", all.Rows)
-	}
-
-	one, err := e.Exec(ctx, "SELECT id, value FROM accounts WHERE id = 2")
-	if err != nil {
-		t.Fatalf("select by id: %v", err)
-	}
-	if !reflect.DeepEqual(one.Rows, []Row{{ID: 2, Value: 250}}) {
-		t.Fatalf("select by id rows=%#v", one.Rows)
-	}
-
-	missing, err := e.Exec(ctx, "SELECT id, value FROM accounts WHERE id = 99")
-	if err != nil {
-		t.Fatalf("select missing id: %v", err)
-	}
-	if len(missing.Rows) != 0 {
-		t.Fatalf("select missing rows=%#v, want empty", missing.Rows)
-	}
-
-	if _, err := e.Exec(ctx, "DELETE FROM accounts WHERE id = 1"); err != nil {
-		t.Fatalf("delete existing row: %v", err)
-	}
-	if _, err := e.Exec(ctx, "DELETE FROM accounts WHERE id = 99"); !errors.Is(err, ErrRowNotFound) {
-		t.Fatalf("delete missing err=%v, want ErrRowNotFound", err)
 	}
 }

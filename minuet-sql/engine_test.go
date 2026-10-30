@@ -1,9 +1,9 @@
 package minuetsql
 
 import (
-	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +11,8 @@ import (
 
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
+
+// Statement execution, concurrent access, retries, and uncertain transaction outcomes.
 
 type memTxnClient struct {
 	mu  sync.Mutex
@@ -96,45 +98,79 @@ func newTestEngine(t *testing.T) *Engine {
 	return newTestEngineWithClient(t, newMemTxnClient())
 }
 
-func TestEngineCreateInsertSelectDeleteEndToEnd(t *testing.T) {
+// Only the first transaction is uncertain; an accidental retry would succeed.
+type unknownOutcomeClient struct {
+	sinfoniaclient.TxnClient
+	applyWrites bool
+	attempts    int
+	handle      sinfoniaclient.RecoveryHandle
+}
+
+func (c *unknownOutcomeClient) ExecuteAndCommit(ctx context.Context, class string, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
+	c.attempts++
+	if c.attempts > 1 {
+		return c.TxnClient.ExecuteAndCommit(ctx, class, compares, reads, writes)
+	}
+	if c.applyWrites {
+		result := c.TxnClient.ExecuteAndCommit(ctx, class, compares, reads, writes)
+		if result.Status != sinfoniaclient.StatusCommitted {
+			return result
+		}
+	}
+	return sinfoniaclient.ExecResult{Status: sinfoniaclient.StatusUnknown, UnknownOutcome: true, Recovery: &c.handle}
+}
+
+func TestEngineCreateInsertSelectDelete(t *testing.T) {
 	ctx := context.Background()
 	e := newTestEngine(t)
 
-	if _, err := e.Exec(ctx, "CREATE TABLE accounts"); err != nil {
-		t.Fatalf("create table: %v", err)
+	statements := []string{
+		"CREATE TABLE accounts",
+		"insert into accounts values (1, 100)",
+		"INSERT INTO accounts VALUES (2, 250)",
 	}
-	if _, err := e.Exec(ctx, "INSERT INTO accounts VALUES (1, 100)"); err != nil {
-		t.Fatalf("insert 1: %v", err)
-	}
-	if _, err := e.Exec(ctx, "INSERT INTO accounts VALUES (2, 250)"); err != nil {
-		t.Fatalf("insert 2: %v", err)
+	for _, sql := range statements {
+		if _, err := e.Exec(ctx, sql); err != nil {
+			t.Fatalf("Exec(%q): %v", sql, err)
+		}
 	}
 
 	all, err := e.Exec(ctx, "SELECT id, value FROM accounts")
 	if err != nil {
 		t.Fatalf("select all: %v", err)
 	}
-	if len(all.Rows) != 2 || all.Rows[0].ID != 1 || all.Rows[1].ID != 2 {
-		t.Fatalf("unexpected select all rows: %#v", all.Rows)
+	if !reflect.DeepEqual(all.Rows, []Row{{ID: 1, Value: 100}, {ID: 2, Value: 250}}) {
+		t.Fatalf("select all rows=%#v", all.Rows)
 	}
 
 	one, err := e.Exec(ctx, "SELECT id, value FROM accounts WHERE id = 2")
 	if err != nil {
 		t.Fatalf("select by id: %v", err)
 	}
-	if len(one.Rows) != 1 || one.Rows[0].Value != 250 {
-		t.Fatalf("unexpected select by id rows: %#v", one.Rows)
+	if !reflect.DeepEqual(one.Rows, []Row{{ID: 2, Value: 250}}) {
+		t.Fatalf("select by id rows=%#v", one.Rows)
+	}
+
+	missing, err := e.Exec(ctx, "SELECT id, value FROM accounts WHERE id = 99")
+	if err != nil {
+		t.Fatalf("select missing id: %v", err)
+	}
+	if len(missing.Rows) != 0 {
+		t.Fatalf("select missing rows=%#v, want empty", missing.Rows)
 	}
 
 	if _, err := e.Exec(ctx, "DELETE FROM accounts WHERE id = 1"); err != nil {
-		t.Fatalf("delete: %v", err)
+		t.Fatalf("delete existing row: %v", err)
 	}
 	afterDelete, err := e.Exec(ctx, "SELECT id, value FROM accounts")
 	if err != nil {
 		t.Fatalf("select after delete: %v", err)
 	}
-	if len(afterDelete.Rows) != 1 || afterDelete.Rows[0].ID != 2 {
+	if !reflect.DeepEqual(afterDelete.Rows, []Row{{ID: 2, Value: 250}}) {
 		t.Fatalf("unexpected rows after delete: %#v", afterDelete.Rows)
+	}
+	if _, err := e.Exec(ctx, "DELETE FROM accounts WHERE id = 99"); !errors.Is(err, ErrRowNotFound) {
+		t.Fatalf("delete missing err=%v, want ErrRowNotFound", err)
 	}
 }
 
@@ -149,54 +185,45 @@ func TestEngineRejectsDuplicatePrimaryKey(t *testing.T) {
 	}
 }
 
-func TestEngineRejectsTableBeyondCatalogCapacity(t *testing.T) {
+func TestEngineRejectsTransactionBoundariesWithoutGroupingStatements(t *testing.T) {
 	ctx := context.Background()
-	base := newMemTxnClient()
-	client := &conflictInjectingClient{base: base}
-	engine := newTestEngineWithClient(t, client)
-	staleEngine := newTestEngineWithClient(t, client)
-	names := []string{"one", "two", "three", "four", "five", "six"}
-	for _, name := range names {
-		if _, err := engine.Exec(ctx, "CREATE TABLE "+name); err != nil {
-			t.Fatalf("create %s: %v", name, err)
+	e := newTestEngine(t)
+	for _, sql := range []string{
+		"CREATE TABLE generated_parents",
+		"CREATE TABLE generated_children",
+		"INSERT INTO generated_parents VALUES (7, 70)",
+		"INSERT INTO generated_children VALUES (1, 7)",
+	} {
+		if _, err := e.Exec(ctx, sql); err != nil {
+			t.Fatalf("Exec(%q): %v", sql, err)
 		}
 	}
-	before, err := base.Read(ctx, 1, catalogAddr, catalogSize)
-	if err != nil {
-		t.Fatal(err)
-	}
-	attempts := atomic.LoadInt32(&client.calls)
-	// Both a current engine and one with an empty cached catalog must consult
-	// the stored catalog and reject creation before attempting a transaction.
-	for _, candidate := range []*Engine{engine, staleEngine} {
-		if _, err := candidate.Exec(ctx, "CREATE TABLE seven"); !errors.Is(err, ErrCatalogFull) {
-			t.Errorf("seventh create error = %v, want ErrCatalogFull", err)
-		}
-		if _, err := candidate.Exec(ctx, "SELECT id, value FROM seven"); !errors.Is(err, ErrTableNotFound) {
-			t.Errorf("rejected table is queryable: %v", err)
-		}
-		if _, err := candidate.Exec(ctx, "CREATE TABLE six"); !errors.Is(err, ErrTableExists) {
-			t.Errorf("duplicate create in full catalog = %v, want ErrTableExists", err)
+
+	for _, sql := range []string{
+		"SELECT id, value FROM generated_parents JOIN generated_children ON generated_parents.id = generated_children.value",
+		"UPDATE generated_parents SET value = 71 WHERE id = 7",
+		"BEGIN",
+	} {
+		if _, err := e.Exec(ctx, sql); !errors.Is(err, ErrUnsupportedSQL) {
+			t.Fatalf("Exec(%q) err=%v, want ErrUnsupportedSQL", sql, err)
 		}
 	}
-	if got := atomic.LoadInt32(&client.calls); got != attempts {
-		t.Errorf("rejected creation attempted %d transactions", got-attempts)
+	if _, err := e.Exec(ctx, "DELETE FROM generated_children WHERE id = 1"); err != nil {
+		t.Fatalf("delete child: %v", err)
 	}
-	after, err := base.Read(ctx, 1, catalogAddr, catalogSize)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Error("rejected creation changed the stored catalog")
-	}
-	reopened := newTestEngineWithClient(t, base)
-	for _, name := range names {
-		if _, err := reopened.Exec(ctx, "SELECT id, value FROM "+name); err != nil {
-			t.Errorf("reopen %s: %v", name, err)
+	for _, boundary := range []string{"ROLLBACK", "COMMIT"} {
+		if _, err := e.Exec(ctx, boundary); !errors.Is(err, ErrUnsupportedSQL) {
+			t.Fatalf("Exec(%q) err=%v, want ErrUnsupportedSQL", boundary, err)
 		}
 	}
-	if _, err := reopened.Exec(ctx, "SELECT id, value FROM seven"); !errors.Is(err, ErrTableNotFound) {
-		t.Errorf("rejected table survived reopening: %v", err)
+
+	parents, err := e.Exec(ctx, "SELECT id, value FROM generated_parents")
+	if err != nil || !reflect.DeepEqual(parents.Rows, []Row{{ID: 7, Value: 70}}) {
+		t.Fatalf("parent rows=%#v err=%v", parents.Rows, err)
+	}
+	children, err := e.Exec(ctx, "SELECT id, value FROM generated_children")
+	if err != nil || len(children.Rows) != 0 {
+		t.Fatalf("child rows=%#v err=%v", children.Rows, err)
 	}
 }
 
@@ -315,5 +342,115 @@ func TestEngineConflictRetryBudgetMapsToErrBusy(t *testing.T) {
 	_, err = e.Exec(ctx, "INSERT INTO t VALUES (12, 120)")
 	if !errors.Is(err, ErrBusy) {
 		t.Fatalf("insert err=%v want=%v", err, ErrBusy)
+	}
+}
+
+func TestCreateTableRetriesConfirmedAbort(t *testing.T) {
+	ctx := context.Background()
+	base := newMemTxnClient()
+	client := &conflictInjectingClient{base: base, rejectFirstN: 2}
+	engine := newTestEngineWithClient(t, client)
+	if _, err := engine.Exec(ctx, "CREATE TABLE scores"); err != nil {
+		t.Fatal(err)
+	}
+	if attempts := atomic.LoadInt32(&client.calls); attempts != 3 {
+		t.Fatalf("commit attempts = %d, want 3", attempts)
+	}
+	reopened := newTestEngineWithClient(t, base)
+	if _, err := reopened.Exec(ctx, "SELECT id, value FROM scores"); err != nil {
+		t.Fatalf("created table was not persisted: %v", err)
+	}
+}
+
+func TestCreateTableUnknownOutcomeIsNotRetried(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		applyWrites bool
+	}{
+		{name: "without commit"},
+		{name: "lost commit reply", applyWrites: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			base := newMemTxnClient()
+			client := &unknownOutcomeClient{TxnClient: base, applyWrites: test.applyWrites}
+			engine := newTestEngineWithClient(t, client)
+			_, err := engine.Exec(ctx, "CREATE TABLE scores")
+			if !errors.Is(err, sinfoniaclient.ErrUnknownOutcome) {
+				t.Errorf("create error = %v, want ErrUnknownOutcome", err)
+			}
+			var uncertain *sinfoniaclient.UnknownOutcomeError
+			if !errors.As(err, &uncertain) || uncertain.Handle != &client.handle {
+				t.Fatalf("lost recovery handle: %v", err)
+			}
+			if client.attempts != 1 {
+				t.Errorf("commit attempts = %d, want 1", client.attempts)
+			}
+			// An uncertain creation must not publish a table in this engine's cache.
+			if _, err := engine.Exec(ctx, "SELECT id, value FROM scores"); !errors.Is(err, ErrTableNotFound) {
+				t.Errorf("select in original engine = %v, want ErrTableNotFound", err)
+			}
+			// Inspect the actual stored catalog with a new engine: either outcome
+			// is possible even though the original caller received the same error.
+			reopened := newTestEngineWithClient(t, base)
+			result, err := reopened.Exec(ctx, "SELECT id, value FROM scores")
+			if test.applyWrites {
+				if err != nil || len(result.Rows) != 0 {
+					t.Fatalf("reopened table: rows = %v, error = %v", result.Rows, err)
+				}
+			} else if !errors.Is(err, ErrTableNotFound) {
+				t.Fatalf("reopened table error = %v, want ErrTableNotFound", err)
+			}
+		})
+	}
+}
+
+func TestRowMutationPropagatesUnknownOutcome(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		delete      bool
+		applyWrites bool
+	}{
+		{name: "insert without commit"},
+		{name: "insert with lost commit reply", applyWrites: true},
+		{name: "delete without commit", delete: true},
+		{name: "delete with lost commit reply", delete: true, applyWrites: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			base := newMemTxnClient()
+			seed := newTestEngineWithClient(t, base)
+			if _, err := seed.Exec(ctx, "CREATE TABLE scores"); err != nil {
+				t.Fatal(err)
+			}
+			if test.delete {
+				if _, err := seed.Exec(ctx, "INSERT INTO scores VALUES (7, 70)"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			client := &unknownOutcomeClient{TxnClient: base, applyWrites: test.applyWrites}
+			engine := newTestEngineWithClient(t, client)
+			statement := "INSERT INTO scores VALUES (7, 70)"
+			if test.delete {
+				statement = "DELETE FROM scores WHERE id = 7"
+			}
+			if _, err := engine.Exec(ctx, statement); !errors.Is(err, sinfoniaclient.ErrUnknownOutcome) {
+				t.Errorf("mutation error = %v, want ErrUnknownOutcome", err)
+			}
+			if client.attempts != 1 {
+				t.Errorf("commit attempts = %d, want 1", client.attempts)
+			}
+			wantRows := 0
+			if test.applyWrites != test.delete {
+				wantRows = 1
+			}
+			result, err := seed.Exec(ctx, "SELECT id, value FROM scores")
+			if err != nil || len(result.Rows) != wantRows {
+				t.Fatalf("rows = %v, error = %v; want %d rows", result.Rows, err, wantRows)
+			}
+			if wantRows == 1 && result.Rows[0] != (Row{ID: 7, Value: 70}) {
+				t.Fatalf("unexpected row: %v", result.Rows[0])
+			}
+		})
 	}
 }
