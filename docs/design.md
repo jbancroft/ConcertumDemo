@@ -121,6 +121,11 @@ peers for evidence about unfinished transactions. Missing evidence can keep it
 from finishing recovery or serving requests. A coordinator disappearing doesn't
 give a prepared participant permission to abort on its own.
 
+Redo entries use newline-delimited JSON; Go encodes byte payloads as base64.
+This is a simple demo storage format with encoding and space overhead. The redo
+reader accepts variable-size records, including large binary writes, and rejects
+malformed JSON or byte encodings rather than skipping them during recovery.
+
 The shared [recovery coordinator](../internal/recovery/resolve.go) asks participants
 for their existing votes. A node that has not voted records a forced abort and
 rejects a late request for that transaction ID, including on RAM nodes. A saved

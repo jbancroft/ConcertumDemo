@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -248,24 +249,28 @@ func OpenRedoLog(dir string) (*RedoLog, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		line := s.Bytes()
-		if len(strings.TrimSpace(string(line))) == 0 {
-			continue
+	defer f.Close()
+	// Redo records contain arbitrary write payloads and can exceed Scanner's
+	// token limit. Read one whole JSON line without imposing that size ceiling.
+	reader := bufio.NewReader(f)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, readErr
 		}
-		var e RedoLogItem
-		if err := json.Unmarshal(line, &e); err != nil {
-			f.Close()
-			return nil, err
+		if len(bytes.TrimSpace(line)) != 0 {
+			var e RedoLogItem
+			if err := json.Unmarshal(line, &e); err != nil {
+				return nil, err
+			}
+			entries = append(entries, e)
 		}
-		entries = append(entries, e)
+		// ReadBytes can return a final record together with EOF; decode it above
+		// so an unterminated record is neither skipped nor exempt from validation.
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
 	}
-	if err := s.Err(); err != nil {
-		f.Close()
-		return nil, err
-	}
-	f.Close()
 	r := &RedoLog{path: p, entries: entries, batchWindow: defaultRedoBatchWindow, batchMax: defaultRedoBatchSize, fsyncFn: func(f *os.File) error { return f.Sync() }}
 	r.appendReqCh = make(chan appendReq, redoAppendQueueSize)
 	go r.runAppender()

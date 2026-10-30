@@ -228,6 +228,8 @@ directly.
   node memory cannot fit another region. Regions do not grow or reclaim pages.
 - Replication helpers are included, but automatic failover and the services to
   manage a cluster aren't. Real power-loss safety hasn't been tested here.
+- Durable logs use JSON with base64 byte payloads. Encoding cost and space
+  overhead are accepted demo limitations; large redo records are supported.
 
 When constructing a SQL engine, set `MemorySize` to the node's usable memory
 limit and optionally set `TableRegionSize` for new tables. SQL owns table storage
