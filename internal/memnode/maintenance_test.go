@@ -3,8 +3,6 @@ package memnode_test
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -337,11 +335,7 @@ func TestRedoLogGCCheckpointFailurePreservesLog(t *testing.T) {
 	if node.RedoEntryCountForTest() != 1 || !node.HasDecidedForTest(tid) {
 		t.Error("failed GC discarded recovery evidence")
 	}
-	ready := httptest.NewRecorder()
-	node.HTTPHandler(false).ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
-	if ready.Code != http.StatusServiceUnavailable {
-		t.Errorf("readiness after failed GC = %d, want 503", ready.Code)
-	}
+	assertParticipantReady(t, node, false)
 	if err := os.Remove(filepath.Join(dir, "processed.ptr")); err != nil {
 		t.Fatal(err)
 	}

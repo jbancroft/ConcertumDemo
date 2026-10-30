@@ -40,10 +40,6 @@ type Participant interface {
 	CommitBatch(ctx context.Context, req sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error)
 }
 
-type StatsReader interface {
-	GetStats() (memnode.StatsResponse, error)
-}
-
 type BackoffStrategy interface {
 	Wait(ctx context.Context, attempt int)
 }
@@ -92,7 +88,6 @@ type Coordinator struct {
 	maxRetries  int
 	workersMu   sync.Mutex
 	workers     map[uint32]*rpcWorker
-	stats       map[uint32]StatsReader
 }
 
 func NewCoordinator(nodes map[uint32]Participant) *Coordinator {
@@ -100,7 +95,7 @@ func NewCoordinator(nodes map[uint32]Participant) *Coordinator {
 	for id, node := range nodes {
 		cpy[id] = node
 	}
-	c := &Coordinator{nodes: cpy, primaryFor: map[uint32]uint32{}, generations: map[uint32]uint64{}, coordID: newCoordinatorID(), epoch: sinfonia.EpochAt(time.Now()), backoff: RandomBackoff{}, maxRetries: defaultMaxRetries, workers: map[uint32]*rpcWorker{}, stats: map[uint32]StatsReader{}}
+	c := &Coordinator{nodes: cpy, primaryFor: map[uint32]uint32{}, generations: map[uint32]uint64{}, coordID: newCoordinatorID(), epoch: sinfonia.EpochAt(time.Now()), backoff: RandomBackoff{}, maxRetries: defaultMaxRetries, workers: map[uint32]*rpcWorker{}}
 	for id, node := range cpy {
 		c.workers[id] = newRPCWorker(id, node)
 	}
@@ -135,13 +130,6 @@ func (c *Coordinator) SetGenerations(generations map[uint32]uint64) {
 	}
 }
 
-func (c *Coordinator) SetStatsReaders(readers map[uint32]StatsReader) {
-	c.stats = map[uint32]StatsReader{}
-	for hostId, reader := range readers {
-		c.stats[hostId] = reader
-	}
-}
-
 func (c *Coordinator) resolveHostId(hostId uint32) uint32 {
 	if primary, ok := c.primaryFor[hostId]; ok {
 		return primary
@@ -159,20 +147,6 @@ func (c *Coordinator) SetBackoffForTest(backoff BackoffStrategy) {
 
 func (c *Coordinator) SetMaxRetriesForTest(max int) {
 	c.maxRetries = max
-}
-
-func (c *Coordinator) GetStats(hostId uint32) (memnode.StatsResponse, error) {
-	physical := c.resolveHostId(hostId)
-	if reader, ok := c.stats[physical]; ok && reader != nil {
-		return reader.GetStats()
-	}
-	if node, ok := c.nodes[physical]; ok {
-		if statsNode, ok := node.(interface{ StatsSnapshot() memnode.StatsResponse }); ok {
-			return statsNode.StatsSnapshot(), nil
-		}
-		return memnode.StatsResponse{}, ErrNoAdminEndpoint
-	}
-	return memnode.StatsResponse{}, ErrUnknownMemNode
 }
 
 func (c *Coordinator) nextTID() sinfonia.TransactionID {

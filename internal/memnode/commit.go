@@ -100,11 +100,6 @@ func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, re
 		}
 	}
 	class := n.classForTIDLocked(req.TID)
-	correlationID := req.CorrelationID
-	if correlationID == "" {
-		correlationID = n.correlationForTIDLocked(req.TID)
-	}
-	n.recordTimelineLocked(req.TID, correlationID, "commit_decision_received", "")
 	resp, err := n.commitLocked(req)
 	if err == nil && resp.Ack {
 		n.commitOutcomes[req.TID] = commitOutcome{resp: resp, actionCommit: req.ActionCommit}
@@ -119,11 +114,6 @@ func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, re
 	}
 	n.metrics.ObserveClassDecision(class, req.ActionCommit, n.nowFn())
 	n.log(slog.LevelInfo, "Commit applied", "tid", req.TID, "epoch", req.TID.Epoch, "actionCommit", req.ActionCommit)
-	if req.ActionCommit {
-		n.recordTimelineLocked(req.TID, correlationID, "commit_applied", "2pc")
-	} else {
-		n.recordTimelineLocked(req.TID, correlationID, "abort_applied", "2pc")
-	}
 	if err == nil && requestedAction && !req.ActionCommit {
 		resp.Ack = false
 	}
@@ -259,7 +249,6 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	if correlationID == "" {
 		correlationID = req.TID.CorrelationID()
 	}
-	n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_received", "")
 	if (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
 		return n.rememberOnePCOutcomeLocked(ctx, req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
 	}
@@ -275,7 +264,6 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	}
 	acquired, conflict := n.tryTransactionLocksLocked(req.CmpItems, req.ReadItems, req.WriteItems)
 	if conflict != nil {
-		n.recordTimelineLocked(req.TID, correlationID, "commit_1pc_bad_lock", conflict.Reason)
 		return n.rememberOnePCOutcomeLocked(ctx, req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 	}
 
@@ -393,7 +381,6 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	n.metrics.minitransactionsTotal.Inc()
 	n.metrics.minitransactionsCommitted.Inc()
 	n.metrics.ObserveClassDecision(req.Class, true, n.nowFn())
-	n.recordTimelineLocked(req.TID, correlationID, "commit_applied", "1pc")
 	return resp, nil
 }
 

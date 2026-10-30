@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,17 +84,7 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), memnode.ErrRecoveryPending.Error()) {
 		t.Fatalf("RPC Read while apply is failed = %v, want ErrRecoveryPending", err)
 	}
-	readyServer := httptest.NewServer(n.HTTPHandler(true))
-	t.Cleanup(readyServer.Close)
-	readyResp, err := http.Get(readyServer.URL + "/ready")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if readyResp.StatusCode != http.StatusServiceUnavailable {
-		readyResp.Body.Close()
-		t.Fatalf("ready status while apply is failed = %d, want %d", readyResp.StatusCode, http.StatusServiceUnavailable)
-	}
-	readyResp.Body.Close()
+	assertParticipantReady(t, n, false)
 
 	n.SetWriteApplyFaultForTest(nil)
 	if err := n.Recover(ctx); err != nil {
@@ -124,15 +112,7 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 	if string(got) != "redo" {
 		t.Fatalf("exact-TID retry changed value = %q, want redo", got)
 	}
-	readyResp, err = http.Get(readyServer.URL + "/ready")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if readyResp.StatusCode != http.StatusOK {
-		readyResp.Body.Close()
-		t.Fatalf("ready status after recovery = %d, want %d", readyResp.StatusCode, http.StatusOK)
-	}
-	readyResp.Body.Close()
+	assertParticipantReady(t, n, true)
 	if got := n.RedoEntryCountForTest(); got != 1 {
 		t.Fatalf("redo entry count after recovery = %d, want 1", got)
 	}
@@ -280,11 +260,7 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 	if node.RedoEntryCountForTest() != 1 {
 		t.Fatal("failure occurred before the redo entry was saved")
 	}
-	ready := httptest.NewRecorder()
-	node.HTTPHandler(true).ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
-	if ready.Code != http.StatusServiceUnavailable {
-		t.Errorf("readiness after storage failure = %d, want 503", ready.Code)
-	}
+	assertParticipantReady(t, node, false)
 	if err := os.Remove(decisionPath); err != nil {
 		t.Fatal(err)
 	}
@@ -333,11 +309,7 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 	if err != nil || string(got) != "A" {
 		t.Fatalf("recovered write did not survive restart: %q, %v", got, err)
 	}
-	ready = httptest.NewRecorder()
-	node.HTTPHandler(true).ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
-	if ready.Code != http.StatusOK {
-		t.Fatalf("readiness after restart recovery = %d, want 200", ready.Code)
-	}
+	assertParticipantReady(t, node, true)
 }
 
 // Apply the operation before losing its acknowledgement. A negative Ack is
@@ -618,11 +590,7 @@ func newRecoveredFailureTestNode(t *testing.T, id uint32, dir string) *memnode.P
 func assertParticipantFaulted(t *testing.T, node *memnode.Participant, tid sinfonia.TransactionID) {
 	t.Helper()
 	ctx := context.Background()
-	ready := httptest.NewRecorder()
-	node.HTTPHandler(false).ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
-	if ready.Code != http.StatusServiceUnavailable {
-		t.Errorf("faulted readiness = %d, want 503", ready.Code)
-	}
+	assertParticipantReady(t, node, false)
 	pending, err := node.QueryInDoubt(ctx, sinfonia.QueryInDoubtRequest{})
 	if err != nil || len(pending.Entries) != 1 || pending.Entries[0].TID != tid {
 		t.Fatalf("fault discarded pending transaction: %+v, %v", pending, err)

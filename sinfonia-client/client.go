@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
-	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
@@ -40,42 +39,6 @@ var ErrReadResultsUnavailable = minitxn.ErrReadResultsUnavailable
 
 type MiniTransaction = minitxn.MiniTransaction
 
-type RateWindows struct {
-	Short  float64 `json:"short"`
-	Medium float64 `json:"medium"`
-	Long   float64 `json:"long"`
-}
-
-type TxnRateGroup struct {
-	ExecutedPerSec RateWindows `json:"executed_per_sec"`
-	RetriedPerSec  RateWindows `json:"retried_per_sec"`
-	AbortedPerSec  RateWindows `json:"aborted_per_sec"`
-}
-
-type TxnClassStats struct {
-	Total     uint64       `json:"total"`
-	Committed uint64       `json:"committed"`
-	Aborted   uint64       `json:"aborted"`
-	Retried   uint64       `json:"retried"`
-	Rates     TxnRateGroup `json:"rates"`
-}
-
-type Stats struct {
-	NodeID uint32 `json:"node_id"`
-	Role   string `json:"role"`
-	Txns   struct {
-		Total     uint64 `json:"total"`
-		Committed uint64 `json:"committed"`
-		Aborted   uint64 `json:"aborted"`
-		Retried   uint64 `json:"retried"`
-	} `json:"txns"`
-	Rates struct {
-		Txns               TxnRateGroup `json:"txns"`
-		BytesWrittenPerSec RateWindows  `json:"bytes_written_per_sec"`
-	} `json:"rates"`
-	ByClass map[string]TxnClassStats `json:"by_class,omitempty"`
-}
-
 // TxnClient is the read/write and minitransaction interface used by the index
 // and SQL layers.
 type TxnClient interface {
@@ -91,25 +54,19 @@ type Client struct {
 
 type NodeConfig struct {
 	RPCAddress string
-	StatsURL   string // Optional HTTP base URL for node statistics.
 	Generation uint64 // Fencing generation expected by the node.
 }
 
 // NewClient configures the coordinator from explicit memory node addresses.
 func NewClient(config map[uint32]NodeConfig) *Client {
 	nodes := make(map[uint32]client.Participant, len(config))
-	stats := make(map[uint32]client.StatsReader)
 	generations := make(map[uint32]uint64, len(config))
 	for id, node := range config {
 		nodes[id] = client.NewRPCParticipantWithGeneration(node.RPCAddress, nil, defaultNodeTimeout, node.Generation)
 		generations[id] = node.Generation
-		if node.StatsURL != "" {
-			stats[id] = client.NewAdminHTTPClient(node.StatsURL, defaultNodeTimeout)
-		}
 	}
 	coord := client.NewCoordinator(nodes)
 	coord.SetGenerations(generations)
-	coord.SetStatsReaders(stats)
 	return &Client{coordinator: coord}
 }
 
@@ -129,14 +86,6 @@ func (c *Client) Resolve(ctx context.Context, handle RecoveryHandle) ExecResult 
 	return publicResult(c.coordinator.Resolve(ctx, handle))
 }
 
-func (c *Client) GetStats(hostId uint32) (Stats, error) {
-	stats, err := c.coordinator.GetStats(hostId)
-	if err != nil {
-		return Stats{}, err
-	}
-	return statsFromInternal(stats), nil
-}
-
 func (c *Client) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff time.Duration) error {
 	return c.coordinator.SetRetryPolicy(maxRetries, baseBackoff, maxBackoff)
 }
@@ -146,31 +95,6 @@ func (c *Client) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff time.Dur
 // messages finish. Flush when you need to wait for delivery and check its errors.
 func (c *Client) FlushPendingCommits(ctx context.Context) error {
 	return c.coordinator.FlushPendingCommits(ctx)
-}
-
-func txnRateGroupFromInternal(in memnode.TxnRateGroup) TxnRateGroup {
-	return TxnRateGroup{
-		ExecutedPerSec: RateWindows(in.ExecutedPerSec),
-		RetriedPerSec:  RateWindows(in.RetriedPerSec),
-		AbortedPerSec:  RateWindows(in.AbortedPerSec),
-	}
-}
-
-func statsFromInternal(stats memnode.StatsResponse) Stats {
-	out := Stats{NodeID: stats.NodeID, Role: stats.Role, ByClass: map[string]TxnClassStats{}}
-	out.Txns.Total = stats.Txns.Total
-	out.Txns.Committed = stats.Txns.Committed
-	out.Txns.Aborted = stats.Txns.Aborted
-	out.Txns.Retried = stats.Txns.Retried
-	out.Rates.Txns = txnRateGroupFromInternal(stats.Rates.Txns)
-	out.Rates.BytesWrittenPerSec = RateWindows(stats.Rates.BytesWrittenPerSec)
-	for class, classStats := range stats.ByClass {
-		out.ByClass[class] = TxnClassStats{Total: classStats.Total, Committed: classStats.Committed, Aborted: classStats.Aborted, Retried: classStats.Retried, Rates: txnRateGroupFromInternal(classStats.Rates)}
-	}
-	if len(out.ByClass) == 0 {
-		out.ByClass = nil
-	}
-	return out
 }
 
 // ExecuteAndCommit submits the operations as one minitransaction.

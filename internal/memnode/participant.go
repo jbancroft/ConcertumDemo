@@ -46,7 +46,6 @@ type Participant struct {
 	appliedRemote   map[sinfonia.TransactionID]map[uint32]bool
 	pendingNotify   map[uint32]map[sinfonia.TransactionID]struct{}
 	logParticipants map[sinfonia.TransactionID][]uint32
-	timelines       map[sinfonia.TransactionID][]sinfonia.TxnTimelineEvent
 	prepareOutcomes map[sinfonia.TransactionID]prepareOutcome
 	onePCOutcomes   map[sinfonia.TransactionID]onePCOutcome
 	commitOutcomes  map[sinfonia.TransactionID]commitOutcome
@@ -63,7 +62,6 @@ type Participant struct {
 	primaryID                uint32
 	heartbeat                time.Time
 	partnerRPC               string
-	partnerHTTP              string
 	lastReplicationError     string
 	generation               uint64
 	peerTLS                  *tls.Config
@@ -90,8 +88,6 @@ type Participant struct {
 	prepareLimiter              *ratelimit.KeyedLimiter
 	commitLimiter               *ratelimit.KeyedLimiter
 	recoveryLimiter             *ratelimit.KeyedLimiter
-	debugLimiter                *ratelimit.KeyedLimiter
-	enableDebugEndpoints        bool
 	recoverBoundaryHook         func(phase string, txId sinfonia.TransactionID) error
 	outcomeReplayBoundaryHook   func(phase string, txId sinfonia.TransactionID) error
 	baselineInstallBoundaryHook func(phase string) error
@@ -111,7 +107,7 @@ func (n *Participant) initSafetyDefaults() {
 }
 
 func NewParticipant(size int) *Participant {
-	n := &Participant{memory: make([]byte, size), inDoubt: make(map[sinfonia.TransactionID]*preparedTxn), allLogTxIds: map[sinfonia.TransactionID]struct{}{}, nowFn: time.Now, participants: map[uint32]RecoveryPeer{}, appliedLocal: map[sinfonia.TransactionID]bool{}, appliedRemote: map[sinfonia.TransactionID]map[uint32]bool{}, pendingNotify: map[uint32]map[sinfonia.TransactionID]struct{}{}, logParticipants: map[sinfonia.TransactionID][]uint32{}, timelines: map[sinfonia.TransactionID][]sinfonia.TxnTimelineEvent{}, prepareOutcomes: map[sinfonia.TransactionID]prepareOutcome{}, onePCOutcomes: map[sinfonia.TransactionID]onePCOutcome{}, commitOutcomes: map[sinfonia.TransactionID]commitOutcome{}, prepareFlights: map[sinfonia.TransactionID]*prepareFlight{}, onePCFlights: map[sinfonia.TransactionID]*onePCFlight{}}
+	n := &Participant{memory: make([]byte, size), inDoubt: make(map[sinfonia.TransactionID]*preparedTxn), allLogTxIds: map[sinfonia.TransactionID]struct{}{}, nowFn: time.Now, participants: map[uint32]RecoveryPeer{}, appliedLocal: map[sinfonia.TransactionID]bool{}, appliedRemote: map[sinfonia.TransactionID]map[uint32]bool{}, pendingNotify: map[uint32]map[sinfonia.TransactionID]struct{}{}, logParticipants: map[sinfonia.TransactionID][]uint32{}, prepareOutcomes: map[sinfonia.TransactionID]prepareOutcome{}, onePCOutcomes: map[sinfonia.TransactionID]onePCOutcome{}, commitOutcomes: map[sinfonia.TransactionID]commitOutcome{}, prepareFlights: map[sinfonia.TransactionID]*prepareFlight{}, onePCFlights: map[sinfonia.TransactionID]*onePCFlight{}}
 	n.mode = ModeSingle
 	n.metrics = newNodeMetrics()
 	n.recoveryComplete = true
@@ -189,7 +185,6 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 		appliedRemote:    map[sinfonia.TransactionID]map[uint32]bool{},
 		pendingNotify:    map[uint32]map[sinfonia.TransactionID]struct{}{},
 		logParticipants:  map[sinfonia.TransactionID][]uint32{},
-		timelines:        map[sinfonia.TransactionID][]sinfonia.TxnTimelineEvent{},
 		prepareOutcomes:  map[sinfonia.TransactionID]prepareOutcome{},
 		onePCOutcomes:    map[sinfonia.TransactionID]onePCOutcome{},
 		commitOutcomes:   map[sinfonia.TransactionID]commitOutcome{},

@@ -25,9 +25,7 @@ type SafetyConfig struct {
 	PrepareRate  float64
 	CommitRate   float64
 	RecoveryRate float64
-	DebugRate    float64
 	Burst        int
-	EnableDebug  bool
 }
 
 func (n *Participant) ConfigureSafety(cfg SafetyConfig) {
@@ -61,8 +59,6 @@ func (n *Participant) ConfigureSafety(cfg SafetyConfig) {
 	n.prepareLimiter = ratelimit.NewKeyedLimiter(cfg.PrepareRate, cfg.Burst)
 	n.commitLimiter = ratelimit.NewKeyedLimiter(cfg.CommitRate, cfg.Burst)
 	n.recoveryLimiter = ratelimit.NewKeyedLimiter(cfg.RecoveryRate, cfg.Burst)
-	n.debugLimiter = ratelimit.NewKeyedLimiter(cfg.DebugRate, cfg.Burst)
-	n.enableDebugEndpoints = cfg.EnableDebug
 }
 
 func (n *Participant) allowRate(l *ratelimit.KeyedLimiter, key string) bool {

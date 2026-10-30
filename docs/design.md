@@ -17,13 +17,14 @@ flowchart TD
 ```
 
 The Sinfonia user library and coordinator run in the application process. The
-library provides reads, writes, transactions, and node stats. Index and SQL code
+library provides reads, writes, and transactions. Index and SQL code
 use the same client and transaction result types; the coordinator and RPC details
 are internal implementation packages.
 
 `sinfonia-client.NewClient` takes a map from memory node IDs to `NodeConfig`
 values and creates the coordinator for those nodes. Each configuration supplies
-an RPC address, with optional statistics URL and fencing generation.
+an RPC address and optional fencing generation. Nodes serve TCP RPC; no HTTP
+administration or metrics endpoints are exposed.
 
 `MiniTransaction` holds comparisons, reads, and writes. It copies the supplied
 bytes so changing the caller's buffer won't change the transaction. Its host
@@ -63,7 +64,7 @@ the same state and mutex; the split adds no package or API boundary.
 | [replication_sync.go](../internal/memnode/replication_sync.go) | Synchronizing a replica from a primary's saved state |
 | [replication_baseline.go](../internal/memnode/replication_baseline.go) | Transferring and installing that state in chunks |
 | [maintenance.go](../internal/memnode/maintenance.go) | Applied notifications, log cleanup, and backup phases |
-| [observability.go](../internal/memnode/observability.go) | Metrics, status, and transaction timelines |
+| [observability.go](../internal/memnode/observability.go) | Internal metrics, logging, and node status |
 
 For the main walkthrough, follow `ExecAndPrepare` in `prepare.go` and then
 `Commit` in `commit.go`. `ExecCommit1PC` handles the single-participant shortcut.

@@ -2,12 +2,24 @@ package memnode_test
 
 import (
 	"context"
+	"testing"
 
+	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
-// Replica gate shared by the replay and persistence tests.
+func assertParticipantReady(t *testing.T, node *memnode.Participant, want bool) {
+	t.Helper()
+	status, err := node.ReplicationStatus(context.Background(), sinfonia.ReplicationStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Ready != want {
+		t.Fatalf("participant readiness = %t, want %t", status.Ready, want)
+	}
+}
 
+// Replica gate shared by the replay and persistence tests.
 type blockingReplica struct {
 	redoStarted chan struct{}
 	releaseRedo chan struct{}

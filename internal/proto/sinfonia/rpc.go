@@ -130,11 +130,10 @@ const (
 )
 
 type ConfigureReplicationRequest struct {
-	Role        ReplicationRole
-	PartnerRPC  string
-	PartnerHTTP string
-	MarkSynced  bool
-	Generation  uint64
+	Role       ReplicationRole
+	PartnerRPC string
+	MarkSynced bool
+	Generation uint64
 }
 
 type ConfigureReplicationResponse struct {
@@ -150,7 +149,6 @@ type ReplicationStatusResponse struct {
 	Ready         bool
 	ReplicaSynced bool
 	PartnerRPC    string
-	PartnerHTTP   string
 	LastError     string
 	Generation    uint64
 }
@@ -305,14 +303,6 @@ type InDoubtEntry struct {
 	PreparedAt    int64
 	CorrelationID string
 	Participants  []uint32
-}
-
-type TxnTimelineEvent struct {
-	AtNanos       int64  `json:"at_nanos"`
-	Component     string `json:"component"`
-	Event         string `json:"event"`
-	CorrelationID string `json:"correlation_id"`
-	Details       string `json:"details,omitempty"`
 }
 
 type QueryInDoubtResponse struct {

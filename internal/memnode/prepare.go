@@ -131,11 +131,9 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	}
 	n.inDoubt[req.TID] = &preparedTxn{preparedAt: n.nowFn(), participants: append([]uint32(nil), req.Participants...), class: req.Class, correlationID: correlationID}
 	txn := n.inDoubt[req.TID]
-	n.recordTimelineLocked(req.TID, correlationID, "prepare_received", "")
 	acquired, conflict := n.tryTransactionLocksLocked(req.CmpItems, req.ReadItems, req.WriteItems)
 	if conflict != nil {
 		delete(n.inDoubt, req.TID)
-		n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_bad_lock", conflict.Reason)
 		return n.rememberPrepareOutcomeLocked(ctx, req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 	}
 
@@ -205,7 +203,6 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
 	n.log(slog.LevelInfo, "ExecAndPrepare received", "tid", req.TID, "epoch", req.TID.Epoch)
 	n.log(slog.LevelInfo, "Vote decision", "tid", req.TID, "epoch", req.TID.Epoch, "vote", sinfonia.VoteOk)
-	n.recordTimelineLocked(req.TID, correlationID, "prepare_vote_ok", "")
 	resp = clonePrepareResponse(original)
 	if err := n.callOutcomeReplayBoundaryHookLocked("prepare-before-response", req.TID); err != nil {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err

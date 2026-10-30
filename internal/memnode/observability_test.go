@@ -2,71 +2,13 @@ package memnode
 
 import (
 	"context"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
-
-func TestPublicObservabilityEndpointsRequireGET(t *testing.T) {
-	n := NewParticipant(32)
-	handler := n.HTTPHandler(true)
-	for _, path := range []string{"/health", "/ready", "/stats", "/metrics"} {
-		t.Run(path, func(t *testing.T) {
-			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
-			if recorder.Code != http.StatusMethodNotAllowed {
-				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
-			}
-			if got := recorder.Header().Get("Allow"); got != http.MethodGet {
-				t.Fatalf("Allow = %q, want %q", got, http.MethodGet)
-			}
-		})
-	}
-
-	recorder := httptest.NewRecorder()
-	n.HTTPHandler(false).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("disabled metrics status = %d, want %d", recorder.Code, http.StatusNotFound)
-	}
-}
-
-func TestDebugEndpointAvailability(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		enable bool
-		status int
-	}{
-		{name: "disabled", status: http.StatusNotFound},
-		{name: "enabled", enable: true, status: http.StatusOK},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			n := NewParticipant(32)
-			n.ConfigureSafety(SafetyConfig{EnableDebug: tc.enable})
-			handler := n.HTTPHandler(false)
-			for _, path := range []string{
-				"/debug/in_doubt",
-				"/debug/redo_log_head",
-				"/debug/redo_log_inspect",
-				"/debug/txn_timeline?coord=1&counter=1&epoch=1",
-				"/debug/forced_abort",
-				"/debug/locks",
-			} {
-				recorder := httptest.NewRecorder()
-				handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
-				if recorder.Code != tc.status {
-					t.Errorf("%s status = %d, want %d", path, recorder.Code, tc.status)
-				}
-			}
-		})
-	}
-}
 
 func TestMetricsCommitAbortAndRetry(t *testing.T) {
 	n := NewParticipant(32)
@@ -183,46 +125,6 @@ func TestBadLockIncludesConflictContext(t *testing.T) {
 	}
 }
 
-func TestDebugTimelineAndRedoInspectEndpoints(t *testing.T) {
-	root := t.TempDir()
-	n, err := NewDurableParticipant(1, 64, filepath.Join(root, "n1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer n.Close()
-	n.enableDebugEndpoints = true
-	txId := sinfonia.TransactionID{CoordinatorID: 9, Counter: 5, Epoch: sinfonia.EpochAt(time.Now())}
-	if resp, err := n.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{
-		TID: txId, CorrelationID: txId.CorrelationID(), Participants: []uint32{1},
-		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("q")}},
-	}); err != nil || resp.Vote != sinfonia.VoteOk {
-		t.Fatalf("prepare vote=%v err=%v", resp.Vote, err)
-	}
-	if _, err := n.Commit(context.Background(), sinfonia.CommitRequest{TID: txId, CorrelationID: txId.CorrelationID(), ActionCommit: true}); err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer(n.HTTPHandler(false))
-	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/debug/txn_timeline?coord=9&counter=5&epoch=" + strconv.FormatUint(txId.Epoch, 10))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "correlation_id") || !strings.Contains(string(body), "commit_applied") {
-		t.Fatalf("timeline response missing expected fields: %s", string(body))
-	}
-	resp2, err := http.Get(srv.URL + "/debug/redo_log_inspect")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp2.Body.Close()
-	body2, _ := io.ReadAll(resp2.Body)
-	if !strings.Contains(string(body2), "processed_ptr") || !strings.Contains(string(body2), "entries") {
-		t.Fatalf("redo inspect response missing expected fields: %s", string(body2))
-	}
-}
-
 func TestClassAttributionFallbackAndCardinalityCap(t *testing.T) {
 	n := NewParticipant(16)
 	for i := 0; i < maxTxnClasses+10; i++ {
@@ -278,36 +180,5 @@ func TestFsyncHistogramAndReplicationLag(t *testing.T) {
 	}
 	if replica.metrics.replicaLagEntries.Value() != 0 {
 		t.Fatalf("expected replica lag gauge to clear after sync")
-	}
-}
-
-func TestHealthAndReadyEndpoints(t *testing.T) {
-	n := NewParticipant(16)
-	srv := httptest.NewServer(n.HTTPHandler(true))
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/health")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("health status=%d", resp.StatusCode)
-	}
-
-	resp, err = http.Get(srv.URL + "/ready")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("ready status=%d", resp.StatusCode)
-	}
-
-	resp, err = http.Get(srv.URL + "/metrics")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(b), "concertum_minitransactions_total") {
-		t.Fatalf("expected prometheus output")
 	}
 }

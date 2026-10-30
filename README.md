@@ -206,7 +206,7 @@ for deadlines, evidence retention, and missing read results.
 | [Sinfonia client demo](demo/sinfonia-client-demo/main.go) | Transactional reads/writes, a two-node transfer, and a comparison abort |
 | [SQL REPL](cmd/repl/main.go) | Interactive queries, readable results, and local node cleanup |
 | [Memnode command](cmd/memnode/main.go) | Standalone participant startup, recovery peers, and shutdown |
-| [Sinfonia user library](sinfonia-client/client.go) | Reads, writes, transactions, and node stats from an application |
+| [Sinfonia user library](sinfonia-client/client.go) | Reads, writes, and transactions from an application |
 | [Transaction builder](minitxn/transaction.go) | The compare/read/write API and grouping work by host |
 | [Coordinator](internal/client/coordinator.go) | Votes, retries, and sending decisions |
 | [Participant](internal/memnode/participant.go) | Shared state, construction, and private byte-access helpers |
@@ -224,7 +224,8 @@ directly.
 ## Keep the limits in mind
 
 - This is experimental code for small examples. It isn't ready for production.
-- Operations and HTTP endpoints have no authentication or authorization.
+- Node RPCs have no authentication or authorization. The standalone node serves
+  TCP RPC only; there is no HTTP administration or metrics server.
 - A tree lives on one node, reads the whole reachable tree for updates, and never
   reuses deleted pages. Reads retry if a writer changes the tree during loading
   and return `ErrBusy` if the retry budget runs out.

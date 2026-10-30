@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -520,9 +518,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = restarted.Close() })
-	server := httptest.NewServer(restarted.HTTPHandler(false))
-	t.Cleanup(server.Close)
-	assertReadyStatus(t, server.URL, http.StatusServiceUnavailable)
+	assertParticipantReady(t, restarted, false)
 
 	err = restarted.Recover(ctx)
 	if !errors.Is(err, memnode.ErrRecoveryPending) {
@@ -538,7 +534,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	if processed != 0 {
 		t.Fatalf("processed pointer = %d, want 0 while recovery is pending", processed)
 	}
-	assertReadyStatus(t, server.URL, http.StatusServiceUnavailable)
+	assertParticipantReady(t, restarted, false)
 
 	restarted.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	applyBlocked := make(chan struct{})
@@ -623,7 +619,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	if string(got) != "Z" {
 		t.Fatalf("same-TID retry reapplied old write: got %q want Z", got)
 	}
-	assertReadyStatus(t, server.URL, http.StatusOK)
+	assertParticipantReady(t, restarted, true)
 }
 
 func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
@@ -866,18 +862,6 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 	}
 	if string(got) != "R" {
 		t.Fatalf("recovered value = %q, want R", got)
-	}
-}
-
-func assertReadyStatus(t *testing.T, baseURL string, want int) {
-	t.Helper()
-	resp, err := http.Get(baseURL + "/ready")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != want {
-		t.Fatalf("ready status = %d, want %d", resp.StatusCode, want)
 	}
 }
 

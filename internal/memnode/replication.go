@@ -184,17 +184,14 @@ func (n *Participant) ConfigureReplication(ctx context.Context, req sinfonia.Con
 		n.replicaID = 0
 		n.primaryID = 0
 		n.partnerRPC = ""
-		n.partnerHTTP = ""
 		n.replicaSynced = true
 		n.metrics.replicaLagEntries.Set(0)
 	case sinfonia.ReplicationRolePrimary:
 		n.configureAsPrimaryLocked(0, n.newRPCPeerLocked(req.PartnerRPC))
 		n.partnerRPC = req.PartnerRPC
-		n.partnerHTTP = req.PartnerHTTP
 	case sinfonia.ReplicationRoleReplica:
 		n.configureAsReplicaLocked(0)
 		n.partnerRPC = req.PartnerRPC
-		n.partnerHTTP = req.PartnerHTTP
 		n.replicaSynced = req.MarkSynced
 		if req.MarkSynced {
 			n.metrics.replicaLagEntries.Set(0)
@@ -212,7 +209,6 @@ func (n *Participant) ReplicationStatus(ctx context.Context, _ sinfonia.Replicat
 		Ready:         n.isReadyLocked(),
 		ReplicaSynced: n.replicaSynced,
 		PartnerRPC:    n.partnerRPC,
-		PartnerHTTP:   n.partnerHTTP,
 		LastError:     n.lastReplicationError,
 		Generation:    n.generation,
 	}, nil
@@ -285,7 +281,6 @@ func (n *Participant) ReplicateRedoEntry(ctx context.Context, req sinfonia.Repli
 	n.allLogTxIds[req.Entry.TID] = struct{}{}
 	n.logParticipants[req.Entry.TID] = append([]uint32(nil), req.Entry.Participants...)
 	txn.redoLoggedTid = true
-	n.recordTimelineLocked(req.Entry.TID, correlationID, "replicated_prepare", "")
 	return sinfonia.ReplicateRedoEntryResponse{Ack: true}, nil
 }
 

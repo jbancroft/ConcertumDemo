@@ -2,8 +2,6 @@ package memnode
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -20,19 +18,5 @@ func TestRateLimitRejectsGracefully(t *testing.T) {
 	}
 	if err2 == nil {
 		t.Fatalf("second request should be limited")
-	}
-}
-
-func TestHTTPServerTLS(t *testing.T) {
-	n := NewParticipantWithId(1, 256)
-	s := httptest.NewTLSServer(n.HTTPHandler(false))
-	defer s.Close()
-	resp, err := s.Client().Get(s.URL + "/health")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }

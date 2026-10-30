@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -199,7 +198,7 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 	awaitValue(t, c, 2, 0, []byte("zw"))
 }
 
-func TestMTxWithClassExposesClassStats(t *testing.T) {
+func TestMTxPreservesTransactionClass(t *testing.T) {
 	n1 := memnode.NewParticipant(32)
 	defer n1.Close()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -208,20 +207,15 @@ func TestMTxWithClassExposesClassStats(t *testing.T) {
 	}
 	defer listener.Close()
 	go n1.RPCServer().Serve(listener)
-	statsServer := httptest.NewServer(n1.HTTPHandler(false))
-	defer statsServer.Close()
 	c := NewClient(map[uint32]NodeConfig{
-		1: {RPCAddress: listener.Addr().String(), StatsURL: statsServer.URL},
+		1: {RPCAddress: listener.Addr().String()},
 	})
 	execution := c.NewMiniTransaction().WithClass("inventory").Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
 	committed, status := execution.Committed, execution.Status
 	if !committed || status != StatusCommitted {
 		t.Fatalf("expected committed inventory transaction")
 	}
-	stats, err := c.GetStats(1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	stats := n1.StatsSnapshot()
 	inv, ok := stats.ByClass["inventory"]
 	if !ok {
 		t.Fatalf("expected inventory class stats, got %#v", stats.ByClass)
@@ -240,10 +234,7 @@ func TestMTxWithoutClassFallsBackToUnclassified(t *testing.T) {
 	if !committed || status != StatusCommitted {
 		t.Fatalf("expected committed unclassified transaction")
 	}
-	stats, err := c.GetStats(1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	stats := n1.StatsSnapshot()
 	unclassified, ok := stats.ByClass["__unclassified__"]
 	if !ok {
 		t.Fatalf("expected __unclassified__ class stats, got %#v", stats.ByClass)

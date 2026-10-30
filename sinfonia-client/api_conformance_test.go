@@ -12,15 +12,11 @@ func TestPublicAPISignaturesDoNotExposeInternalPackages(t *testing.T) {
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.NewClient))
 	checkNoInternalType(t, reflect.TypeOf(&sinfoniaclient.Client{}))
 	checkNoInternalType(t, reflect.TypeOf(&sinfoniaclient.MiniTransaction{}))
-	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.Stats{}))
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.ExecResult{}))
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.ReadKey{}))
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.CompareItem{}))
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.ReadItem{}))
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.WriteItem{}))
-	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.RateWindows{}))
-	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.TxnRateGroup{}))
-	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.TxnClassStats{}))
 	checkNoInternalType(t, reflect.TypeOf((*sinfoniaclient.TxnClient)(nil)).Elem())
 }
 

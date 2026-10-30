@@ -480,7 +480,6 @@ func (n *Participant) resetBaselineMemoryStateLocked() {
 	n.prepareOutcomes = map[sinfonia.TransactionID]prepareOutcome{}
 	n.onePCOutcomes = map[sinfonia.TransactionID]onePCOutcome{}
 	n.commitOutcomes = map[sinfonia.TransactionID]commitOutcome{}
-	n.timelines = map[sinfonia.TransactionID][]sinfonia.TxnTimelineEvent{}
 	n.backupMode = false
 	n.pendingDiskWrites = nil
 	n.lastBackupBoundary = sinfonia.TransactionID{}

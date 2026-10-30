@@ -2,14 +2,10 @@ package memnode
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
-	"github.com/jbancroft/ConcertumDemo/internal/storage"
 	"log/slog"
 	"math"
-	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -359,22 +355,6 @@ func (n *Participant) StatsSnapshot() StatsResponse {
 	return resp
 }
 
-func (n *Participant) storageAccessible() bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.diskImage == nil {
-		return true
-	}
-	_, err := n.diskImage.Bytes()
-	return err == nil
-}
-
-func (n *Participant) isReady() bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.isReadyLocked()
-}
-
 func (n *Participant) isReadyLocked() bool {
 	if n.restartRequired != nil || !n.recoveryComplete || n.backupMode {
 		return false
@@ -385,214 +365,11 @@ func (n *Participant) isReadyLocked() bool {
 	return true
 }
 
-func (n *Participant) HTTPHandler(enablePrometheus bool) http.Handler {
-	mux := http.NewServeMux()
-	getOnly := func(h http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet {
-				w.Header().Set("Allow", http.MethodGet)
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			h(w, r)
-		}
-	}
-	debugWrap := func(h http.HandlerFunc) http.HandlerFunc {
-		if !n.enableDebugEndpoints {
-			return func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }
-		}
-		return func(w http.ResponseWriter, r *http.Request) {
-			if !n.allowRate(n.debugLimiter, "debug") {
-				w.WriteHeader(http.StatusTooManyRequests)
-				_, _ = w.Write([]byte(`{"error":"RESOURCE_EXHAUSTED"}`))
-				return
-			}
-			h(w, r)
-		}
-	}
-	mux.HandleFunc("/stats", getOnly(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(n.StatsSnapshot())
-	}))
-	mux.HandleFunc("/health", getOnly(func(w http.ResponseWriter, _ *http.Request) {
-		healthy := n.storageAccessible()
-		if !healthy {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": healthy, "node_id": n.hostId})
-	}))
-	mux.HandleFunc("/ready", getOnly(func(w http.ResponseWriter, _ *http.Request) {
-		ready := n.isReady()
-		if !ready {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ready": ready, "node_id": n.hostId})
-	}))
-	mux.HandleFunc("/debug/in_doubt", debugWrap(func(w http.ResponseWriter, _ *http.Request) {
-		r, _ := n.QueryInDoubt(context.Background(), sinfonia.QueryInDoubtRequest{})
-		_ = json.NewEncoder(w).Encode(r)
-	}))
-	mux.HandleFunc("/debug/redo_log_head", debugWrap(func(w http.ResponseWriter, _ *http.Request) {
-		n.mu.Lock()
-		defer n.mu.Unlock()
-		var entry any
-		if n.redoLog != nil {
-			entries := n.redoLog.Entries()
-			if len(entries) > 0 {
-				entry = entries[0]
-			}
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"entry": entry})
-	}))
-	mux.HandleFunc("/debug/redo_log_inspect", debugWrap(func(w http.ResponseWriter, _ *http.Request) {
-		n.mu.Lock()
-		defer n.mu.Unlock()
-		entries := []any{}
-		head := any(nil)
-		tail := any(nil)
-		if n.redoLog != nil {
-			raw := n.redoLog.Entries()
-			if len(raw) > 0 {
-				head = raw[0]
-				tail = raw[len(raw)-1]
-			}
-			entries = make([]any, 0, len(raw))
-			for _, e := range raw {
-				decidedCommit, known := false, false
-				if n.decided != nil {
-					decidedCommit, known = n.decided.Get(e.TransactionId)
-				}
-				entries = append(entries, map[string]any{
-					"tid":            e.TransactionId,
-					"correlation_id": e.TransactionId.CorrelationID(),
-					"participants":   e.HostIds,
-					"write_count":    len(e.WriteItems),
-					"known_decision": known,
-					"decided_commit": decidedCommit,
-				})
-			}
-		}
-		processedPtr := 0
-		if n.storageDir != "" {
-			if p, err := storage.LoadProcessedPointer(n.storageDir); err == nil {
-				processedPtr = p
-			}
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"head": head, "tail": tail, "entries": entries, "processed_ptr": processedPtr})
-	}))
-	mux.HandleFunc("/debug/txn_timeline", debugWrap(func(w http.ResponseWriter, r *http.Request) {
-		txId, err := parseTIDQuery(r)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"tid": txId, "correlation_id": txId.CorrelationID(), "events": n.TimelineForTID(txId)})
-	}))
-	mux.HandleFunc("/debug/forced_abort", debugWrap(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"forced_abort_current": n.metrics.forcedAbortCountCurrent.Value()})
-	}))
-	mux.HandleFunc("/debug/locks", debugWrap(func(w http.ResponseWriter, _ *http.Request) {
-		n.mu.Lock()
-		defer n.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"active": len(n.locks.locks), "global_write": n.locks.globalWriteLock})
-	}))
-	if enablePrometheus {
-		mux.HandleFunc("/metrics", getOnly(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-			_, _ = w.Write([]byte(n.prometheusMetrics()))
-		}))
-	}
-	return mux
-}
-
-func parseTIDQuery(r *http.Request) (sinfonia.TransactionID, error) {
-	parse := func(k string) (uint64, error) {
-		v := strings.TrimSpace(r.URL.Query().Get(k))
-		if v == "" {
-			return 0, fmt.Errorf("missing query parameter %q", k)
-		}
-		n, err := strconv.ParseUint(v, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("invalid %q: %w", k, err)
-		}
-		return n, nil
-	}
-	coord, err := parse("coord")
-	if err != nil {
-		return sinfonia.TransactionID{}, err
-	}
-	counter, err := parse("counter")
-	if err != nil {
-		return sinfonia.TransactionID{}, err
-	}
-	epoch, err := parse("epoch")
-	if err != nil {
-		return sinfonia.TransactionID{}, err
-	}
-	return sinfonia.TransactionID{CoordinatorID: coord, Counter: counter, Epoch: epoch}, nil
-}
-
-func (n *Participant) prometheusMetrics() string {
-	lines := []string{
-		"# TYPE concertum_minitransactions_total counter",
-		"concertum_minitransactions_total " + strconv.FormatUint(n.metrics.minitransactionsTotal.Value(), 10),
-		"# TYPE concertum_minitransactions_committed counter",
-		"concertum_minitransactions_committed " + strconv.FormatUint(n.metrics.minitransactionsCommitted.Value(), 10),
-		"# TYPE concertum_minitransactions_aborted counter",
-		"concertum_minitransactions_aborted " + strconv.FormatUint(n.metrics.minitransactionsAborted.Value(), 10),
-		"concertum_replication_entries_sent " + strconv.FormatUint(n.metrics.replicationEntriesSent.Value(), 10),
-		"concertum_replication_failures " + strconv.FormatUint(n.metrics.replicationFailures.Value(), 10),
-		"concertum_log_gc_runs " + strconv.FormatUint(n.metrics.logGCRuns.Value(), 10),
-		"concertum_backup_runs " + strconv.FormatUint(n.metrics.backupRuns.Value(), 10),
-		"concertum_rejected_requests_total " + strconv.FormatUint(n.metrics.rejectedRequestsTotal.Value(), 10),
-		"concertum_rate_limited_total " + strconv.FormatUint(n.metrics.rateLimitedTotal.Value(), 10),
-		"concertum_request_size_rejected_total " + strconv.FormatUint(n.metrics.requestSizeRejectedTotal.Value(), 10),
-	}
-	appendHist := func(name string, h *histogram) {
-		cum := uint64(0)
-		for i, b := range h.buckets {
-			cum += h.counts[i].Load()
-			lines = append(lines, fmt.Sprintf("%s_bucket{le=\"%.6f\"} %d", name, b.Seconds(), cum))
-		}
-		cum += h.counts[len(h.buckets)].Load()
-		lines = append(lines, fmt.Sprintf("%s_bucket{le=\"+Inf\"} %d", name, cum))
-		lines = append(lines, fmt.Sprintf("%s_sum %.9f", name, float64(h.sumNanos.Load())/float64(time.Second)))
-		lines = append(lines, fmt.Sprintf("%s_count %d", name, h.total.Load()))
-	}
-	appendHist("concertum_prepare_latency_seconds", n.metrics.prepareLatency)
-	appendHist("concertum_commit_latency_seconds", n.metrics.commitLatency)
-	appendHist("concertum_end_to_end_txn_latency_seconds", n.metrics.endToEndTxnLatency)
-	appendHist("concertum_redo_fsync_latency_seconds", n.metrics.fsyncLatency)
-	appendHist("concertum_replication_roundtrip_latency_seconds", n.metrics.replicationRoundtripLatency)
-	return strings.Join(lines, "\n") + "\n"
-}
-
 func (n *Participant) classForTIDLocked(txId sinfonia.TransactionID) string {
 	if txn, ok := n.inDoubt[txId]; ok {
 		return txn.class
 	}
 	return ""
-}
-
-func (n *Participant) correlationForTIDLocked(txId sinfonia.TransactionID) string {
-	if txn, ok := n.inDoubt[txId]; ok && txn.correlationID != "" {
-		return txn.correlationID
-	}
-	return txId.CorrelationID()
-}
-
-func (n *Participant) recordTimelineLocked(txId sinfonia.TransactionID, correlationID, event, details string) {
-	if correlationID == "" {
-		correlationID = txId.CorrelationID()
-	}
-	n.timelines[txId] = append(n.timelines[txId], sinfonia.TxnTimelineEvent{
-		AtNanos:       n.nowFn().UnixNano(),
-		Component:     "memnode",
-		Event:         event,
-		CorrelationID: correlationID,
-		Details:       details,
-	})
 }
 
 func (n *Participant) QueryInDoubt(ctx context.Context, _ sinfonia.QueryInDoubtRequest) (sinfonia.QueryInDoubtResponse, error) {
@@ -612,13 +389,4 @@ func (n *Participant) QueryInDoubt(ctx context.Context, _ sinfonia.QueryInDoubtR
 		})
 	}
 	return resp, nil
-}
-
-func (n *Participant) TimelineForTID(txId sinfonia.TransactionID) []sinfonia.TxnTimelineEvent {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	src := n.timelines[txId]
-	out := make([]sinfonia.TxnTimelineEvent, len(src))
-	copy(out, src)
-	return out
 }
