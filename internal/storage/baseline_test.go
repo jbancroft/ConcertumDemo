@@ -9,7 +9,35 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
-// Replication baseline replacement and recovery from interrupted installation.
+// Disk images, replication baseline replacement, and interrupted installation.
+
+func TestDiskImageRejectsSizeMismatchWithoutChangingFile(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		contents string
+		size     int
+	}{
+		{name: "larger", contents: "savedata", size: 16},
+		{name: "empty existing image", contents: "", size: 8},
+		{name: "zero size", contents: "savedata", size: 0},
+		{name: "negative size", contents: "savedata", size: -1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "image.bin")
+			if err := os.WriteFile(path, []byte(tt.contents), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if image, _, err := storage.OpenDiskImage(dir, tt.size); err == nil {
+				_ = image.Close()
+				t.Error("expected opening with a mismatched size to fail")
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != tt.contents {
+				t.Fatalf("image after failed open = %q, %v; want %q", got, err, tt.contents)
+			}
+		})
+	}
+}
 
 func TestReplicationBaselineStoragePrimitivesResetDurableState(t *testing.T) {
 	dir := t.TempDir()

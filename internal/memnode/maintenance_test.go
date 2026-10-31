@@ -144,6 +144,11 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 	}
 
 	_ = a.Close()
+	// Reject a smaller image without losing the committed byte at address 7.
+	if smaller, err := memnode.NewDurableParticipant(1, 4, aDir); err == nil {
+		_ = smaller.Close()
+		t.Error("expected reopening with a smaller size to fail")
+	}
 	a2, err := memnode.NewDurableParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)

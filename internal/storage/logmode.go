@@ -40,25 +40,44 @@ type DiskImage struct {
 	size int
 }
 
+// OpenDiskImage initializes a new image or opens an existing image of exactly
+// the requested size. Existing images are never resized.
 func OpenDiskImage(dir string, size int) (*DiskImage, []byte, error) {
+	if size <= 0 {
+		return nil, nil, fmt.Errorf("disk image size must be positive, got %d", size)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, nil, err
 	}
 	path := filepath.Join(dir, "image.bin")
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+	created := err == nil
+	if errors.Is(err, os.ErrExist) {
+		f, err = os.OpenFile(path, os.O_RDWR, 0)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := f.Truncate(int64(size)); err != nil {
-		f.Close()
-		return nil, nil, err
-	}
-	buf := make([]byte, size)
-	if _, err := f.ReadAt(buf, 0); err != nil && !errors.Is(err, os.ErrNotExist) {
-		if !errors.Is(err, io.EOF) {
+	if created {
+		if err := f.Truncate(int64(size)); err != nil {
 			f.Close()
 			return nil, nil, err
 		}
+	} else {
+		info, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return nil, nil, err
+		}
+		if info.Size() != int64(size) {
+			f.Close()
+			return nil, nil, fmt.Errorf("disk image %s has size %d bytes, configured size is %d bytes", path, info.Size(), size)
+		}
+	}
+	buf := make([]byte, size)
+	if _, err := f.ReadAt(buf, 0); err != nil {
+		f.Close()
+		return nil, nil, err
 	}
 	return &DiskImage{file: f, size: size}, buf, nil
 }

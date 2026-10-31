@@ -34,6 +34,9 @@ go run ./cmd/memnode -id 1 -listen 127.0.0.1:7001
 
 Add `-data-dir tmp/node-1` for persistence and `-peer ID=ADDRESS` for recovery peers.
 Use a separate ID and data directory for each node. Ctrl-C stops the node.
+The image size defaults to 2 MiB; use `-size BYTES` to choose another size when
+creating a node. Reopen durable nodes with the same size: a mismatch fails startup
+without resizing the image. Resizing existing images is not supported.
 
 Malformed decision-log records block startup with an error identifying the file
 and line. The log is preserved for manual repair; automatic repair is not implemented.

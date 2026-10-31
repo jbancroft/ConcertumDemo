@@ -122,6 +122,10 @@ peers for evidence about unfinished transactions. Missing evidence can keep it
 from finishing recovery or serving requests. A coordinator disappearing doesn't
 give a prepared participant permission to abort on its own.
 
+The configured memory size must match the existing image file exactly. Only a
+newly created image is initialized to that size; mismatches fail startup without
+resizing the image. Resizing existing images is not supported.
+
 Redo entries use newline-delimited JSON; Go encodes byte payloads as base64.
 This is a simple demo storage format with encoding and space overhead. The redo
 reader accepts variable-size records, including large binary writes, and rejects
