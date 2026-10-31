@@ -23,3 +23,9 @@ func (n *Participant) ReadBytesForTest(addr uint64, length uint32) ([]byte, erro
 	defer n.mu.Unlock()
 	return n.read(addr, length)
 }
+
+func (n *Participant) ActiveLockCountForTest() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.locks.locks)
+}

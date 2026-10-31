@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
@@ -30,8 +28,6 @@ func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, re
 	if !n.allowRate(n.commitLimiter, "commit") {
 		return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, ErrResourceExhausted
 	}
-
-	start := time.Now()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.restartRequired != nil {
@@ -82,7 +78,6 @@ func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, re
 		replResp, replErr := peer.ReplicateCommitDecision(replicationCtx, sinfonia.ReplicateCommitDecisionRequest{TID: req.TID, ActionCommit: req.ActionCommit})
 		n.mu.Lock()
 		if replErr != nil || !replResp.Ack {
-			n.metrics.replicationFailures.Inc()
 			if replErr == nil {
 				replErr = errors.New("replication commit decision not acknowledged")
 			}
@@ -99,21 +94,10 @@ func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, re
 			return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
 		}
 	}
-	class := n.classForTIDLocked(req.TID)
 	resp, err := n.commitLocked(req)
 	if err == nil && resp.Ack {
 		n.commitOutcomes[req.TID] = commitOutcome{resp: resp, actionCommit: req.ActionCommit}
 	}
-	n.metrics.commitLatency.Observe(time.Since(start))
-	n.metrics.endToEndTxnLatency.Observe(time.Since(start))
-	n.metrics.minitransactionsTotal.Inc()
-	if req.ActionCommit {
-		n.metrics.minitransactionsCommitted.Inc()
-	} else {
-		n.metrics.minitransactionsAborted.Inc()
-	}
-	n.metrics.ObserveClassDecision(class, req.ActionCommit, n.nowFn())
-	n.log(slog.LevelInfo, "Commit applied", "tid", req.TID, "epoch", req.TID.Epoch, "actionCommit", req.ActionCommit)
 	if err == nil && requestedAction && !req.ActionCommit {
 		resp.Ack = false
 	}
@@ -172,7 +156,6 @@ func (n *Participant) commitLocked(req sinfonia.CommitRequest) (sinfonia.CommitR
 
 	n.releaseLocks(txn.heldLocks)
 	delete(n.inDoubt, req.TID)
-	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
 	if flushNotify {
 		go n.FlushAppliedNotifications(context.Background())
 	}
@@ -205,7 +188,6 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 		resp.CurrentEpoch = currentEpoch
 		return resp, nil
 	}
-	correlationID := req.CorrelationID
 	if n.replay != nil {
 		if original, ok := n.replay.GetOnePC(req.TID); ok {
 			n.onePCOutcomes[req.TID] = onePCOutcome{resp: clone1PCResponse(original)}
@@ -245,9 +227,6 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 
 	if out, decided := n.commitOutcomes[req.TID]; n.hasDurableTransactionLocked(req.TID) || n.inDoubt[req.TID] != nil || (decided && out.actionCommit) {
 		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: one-phase transaction %v", ErrReplayUnavailable, req.TID)
-	}
-	if correlationID == "" {
-		correlationID = req.TID.CorrelationID()
 	}
 	if (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
 		return n.rememberOnePCOutcomeLocked(ctx, req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
@@ -291,10 +270,9 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	txn := &preparedTxn{
 		writes: cloneWrites(req.WriteItems), readData: cloneReadData(readData), heldLocks: acquired,
 		preparedAt: n.nowFn(), participants: []uint32{n.hostId},
-		class: req.Class, correlationID: correlationID, onePCResponse: &original,
+		onePCResponse: &original,
 	}
 	n.inDoubt[req.TID] = txn
-	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
 	if n.redoLog != nil && len(req.WriteItems) > 0 {
 		writes := cloneWrites(req.WriteItems)
 		entry := storage.RedoLogItem{TransactionId: req.TID, HostIds: []uint32{n.hostId}, WriteItems: writes}
@@ -307,15 +285,11 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 		if n.mode == ModeReplPrimary && n.replica != nil {
 			peer := n.replica
 			n.mu.Unlock()
-			replStart := time.Now()
 			replResp, replErr := peer.ReplicateRedoEntry(ctx, sinfonia.ReplicateRedoEntryRequest{
 				Entry: sinfonia.RedoEntryPayload{TID: req.TID, Participants: append([]uint32(nil), entry.HostIds...), WriteItems: writes},
 			})
-			n.metrics.replicationRoundtripLatency.Observe(time.Since(replStart))
-			n.metrics.replicationEntriesSent.Inc()
 			n.mu.Lock()
 			if replErr != nil || !replResp.Ack {
-				n.metrics.replicationFailures.Inc()
 				if replErr == nil {
 					replErr = errors.New("replication redo entry not acknowledged")
 				}
@@ -330,7 +304,6 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 			replCommitResp, replCommitErr := peer.ReplicateCommitDecision(ctx, sinfonia.ReplicateCommitDecisionRequest{TID: req.TID, ActionCommit: true})
 			n.mu.Lock()
 			if replCommitErr != nil || !replCommitResp.Ack {
-				n.metrics.replicationFailures.Inc()
 				if replCommitErr == nil {
 					replCommitErr = errors.New("replication commit decision not acknowledged")
 				}
@@ -372,15 +345,11 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 		n.releaseLocks(txn.heldLocks)
 		delete(n.inDoubt, req.TID)
 	}
-	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
 	n.commitOutcomes[req.TID] = commitOutcome{resp: sinfonia.CommitResponse{RequestID: req.RequestID, Ack: true}, actionCommit: true}
 	if _, ok := n.allLogTxIds[req.TID]; ok {
 		n.appliedLocal[req.TID] = true
 		n.enqueueAppliedNotificationsLocked(req.TID, []uint32{n.hostId})
 	}
-	n.metrics.minitransactionsTotal.Inc()
-	n.metrics.minitransactionsCommitted.Inc()
-	n.metrics.ObserveClassDecision(req.Class, true, n.nowFn())
 	return resp, nil
 }
 

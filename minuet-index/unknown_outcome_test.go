@@ -17,13 +17,13 @@ type unknownOutcomeClient struct {
 	handle      sinfoniaclient.RecoveryHandle
 }
 
-func (c *unknownOutcomeClient) ExecuteAndCommit(ctx context.Context, class string, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
+func (c *unknownOutcomeClient) ExecuteAndCommit(ctx context.Context, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
 	c.attempts++
 	if c.attempts > 1 {
-		return c.TxnClient.ExecuteAndCommit(ctx, class, compares, reads, writes)
+		return c.TxnClient.ExecuteAndCommit(ctx, compares, reads, writes)
 	}
 	if c.applyWrites {
-		result := c.TxnClient.ExecuteAndCommit(ctx, class, compares, reads, writes)
+		result := c.TxnClient.ExecuteAndCommit(ctx, compares, reads, writes)
 		if result.Status != sinfoniaclient.StatusCommitted {
 			return result
 		}

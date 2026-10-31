@@ -150,7 +150,7 @@ func (idx *BTree) Search(ctx context.Context, key uint64) (uint64, bool, error) 
 }
 
 func (idx *BTree) Insert(ctx context.Context, key, value uint64) error {
-	return idx.mutate(ctx, "insert", func(s *snapshot) error {
+	return idx.mutate(ctx, func(s *snapshot) error {
 		if s.super.RootPage == 0 {
 			root, err := idx.allocNode(s, true)
 			if err != nil {
@@ -179,7 +179,7 @@ func (idx *BTree) Insert(ctx context.Context, key, value uint64) error {
 }
 
 func (idx *BTree) Delete(ctx context.Context, key uint64) error {
-	return idx.mutate(ctx, "delete", func(s *snapshot) error {
+	return idx.mutate(ctx, func(s *snapshot) error {
 		if s.super.RootPage == 0 {
 			return nil
 		}
@@ -238,7 +238,7 @@ func (idx *BTree) RangeScan(ctx context.Context, start, end uint64) (*Iterator, 
 }
 
 // mutate retries confirmed aborts with a fresh working copy of the tree.
-func (idx *BTree) mutate(ctx context.Context, class string, fn func(*snapshot) error) error {
+func (idx *BTree) mutate(ctx context.Context, fn func(*snapshot) error) error {
 	for attempt := 0; attempt < idx.cfg.MaxRetries; attempt++ {
 		s, err := idx.loadSnapshot(ctx)
 		if err != nil {
@@ -247,7 +247,7 @@ func (idx *BTree) mutate(ctx context.Context, class string, fn func(*snapshot) e
 		if err := fn(s); err != nil {
 			return err
 		}
-		status, err := idx.commitSnapshot(ctx, class, s)
+		status, err := idx.commitSnapshot(ctx, s)
 		if err != nil {
 			return err
 		}
@@ -371,7 +371,7 @@ func (idx *BTree) readNodeRecursive(ctx context.Context, s *snapshot, pageID uin
 }
 
 // commitSnapshot checks the original bytes and writes the changed pages together.
-func (idx *BTree) commitSnapshot(ctx context.Context, class string, s *snapshot) (sinfoniaclient.Status, error) {
+func (idx *BTree) commitSnapshot(ctx context.Context, s *snapshot) (sinfoniaclient.Status, error) {
 	compares := []sinfoniaclient.CompareItem{{HostId: idx.cfg.HostId, Address: idx.cfg.BaseAddress, Data: s.rawSB}}
 	writes := []sinfoniaclient.WriteItem{{HostId: idx.cfg.HostId, Address: idx.cfg.BaseAddress, Data: encodeSuperblock(s.super)}}
 	for id, n := range s.nodes {
@@ -386,7 +386,7 @@ func (idx *BTree) commitSnapshot(ctx context.Context, class string, s *snapshot)
 		compares = append(compares, sinfoniaclient.CompareItem{HostId: idx.cfg.HostId, Address: addr, Data: old})
 		writes = append(writes, sinfoniaclient.WriteItem{HostId: idx.cfg.HostId, Address: addr, Data: encodeNode(n)})
 	}
-	res := idx.client.ExecuteAndCommit(ctx, "minuet-index:"+class, compares, nil, writes)
+	res := idx.client.ExecuteAndCommit(ctx, compares, nil, writes)
 	return res.Status, res.OutcomeError()
 }
 

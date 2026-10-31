@@ -19,7 +19,7 @@ import (
 func TestCoordinatorResolves1PCResponseLostAfterApply(t *testing.T) {
 	n := &lost1PCNode{Participant: memnode.NewParticipant(16)}
 	coord := NewCoordinator(map[uint32]Participant{1: n})
-	res := coord.ExecuteAndCommit(context.Background(), "", nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
+	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
 	if res.UnknownOutcome || res.TransportErr != nil || !res.Committed {
 		t.Fatalf("expected recovered commit, got %+v", res)
 	}
@@ -42,7 +42,7 @@ func TestCoordinatorResolvesPrepareReplyFailsAfterVote(t *testing.T) {
 			n2 := memnode.NewParticipant(16)
 			coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 			coord.coordID = 1
-			res := coord.ExecuteAndCommit(context.Background(), "", nil, []sinfonia.ReadItem{{MemID: 1, Len: 1}, {MemID: 2, Len: 1}}, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
+			res := coord.ExecuteAndCommit(context.Background(), nil, []sinfonia.ReadItem{{MemID: 1, Len: 1}, {MemID: 2, Len: 1}}, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
 			if res.UnknownOutcome || res.TransportErr != nil || !res.Committed {
 				t.Fatalf("expected recovered commit, got %+v", res)
 			}
@@ -113,7 +113,7 @@ func TestCoordinatorRetriesStaleEpochWithFreshID(t *testing.T) {
 				})
 				// Even a long-idle coordinator refreshes its epoch before sending.
 				coord.epoch = 1
-				result := coord.ExecuteAndCommit(ctx, "", nil, nil, writes)
+				result := coord.ExecuteAndCommit(ctx, nil, nil, writes)
 				if result.UnknownOutcome || result.Committed != (retries == 1) {
 					t.Fatalf("result=%+v", result)
 				}
@@ -165,7 +165,7 @@ func TestCoordinatorRetriesSingleParticipantLockConflict(t *testing.T) {
 					node.UnlockAll()
 				}
 			})
-			result := coord.ExecuteAndCommit(ctx, "", nil, nil, []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}})
+			result := coord.ExecuteAndCommit(ctx, nil, nil, []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}})
 			want := sinfonia.VoteBadLock
 			if release {
 				want = sinfonia.VoteOk
@@ -197,7 +197,6 @@ func TestCoordinatorLogsReadOnlyProjectionWhenTransactionHasWrites(t *testing.T)
 	ctx := context.Background()
 	result := coord.ExecuteAndCommit(
 		ctx,
-		"",
 		nil,
 		[]sinfonia.ReadItem{{MemID: 2, Addr: 0, Len: 1}},
 		[]sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},

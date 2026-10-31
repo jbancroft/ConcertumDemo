@@ -5,17 +5,15 @@ type RequestID string
 
 // ExecPrepareRequest asks a participant to check and prepare its part of a transaction.
 type ExecPrepareRequest struct {
-	TID           TransactionID
-	RequestID     RequestID
-	CorrelationID string
-	Participants  []uint32
-	HasWrites     bool
-	CmpItems      []CmpItem
-	ReadItems     []ReadItem
-	WriteItems    []WriteItem
-	Epoch         uint64
-	Class         string
-	Generation    uint64
+	TID          TransactionID
+	RequestID    RequestID
+	Participants []uint32
+	HasWrites    bool
+	CmpItems     []CmpItem
+	ReadItems    []ReadItem
+	WriteItems   []WriteItem
+	Epoch        uint64
+	Generation   uint64
 }
 
 // ExecPrepareResponse returns the participant's vote and any bytes it read.
@@ -29,11 +27,10 @@ type ExecPrepareResponse struct {
 
 // CommitRequest tells a participant to commit or abort its prepared work.
 type CommitRequest struct {
-	TID           TransactionID
-	RequestID     RequestID
-	CorrelationID string
-	ActionCommit  bool
-	Generation    uint64
+	TID          TransactionID
+	RequestID    RequestID
+	ActionCommit bool
+	Generation   uint64
 }
 
 // CommitResponse acknowledges a commit or abort request.
@@ -44,15 +41,13 @@ type CommitResponse struct {
 
 // ExecCommit1PCRequest combines execution and commit for a single participant.
 type ExecCommit1PCRequest struct {
-	TID           TransactionID
-	RequestID     RequestID
-	CorrelationID string
-	CmpItems      []CmpItem
-	ReadItems     []ReadItem
-	WriteItems    []WriteItem
-	Epoch         uint64
-	Class         string
-	Generation    uint64
+	TID        TransactionID
+	RequestID  RequestID
+	CmpItems   []CmpItem
+	ReadItems  []ReadItem
+	WriteItems []WriteItem
+	Epoch      uint64
+	Generation uint64
 }
 
 type ExecCommit1PCResponse struct {
@@ -268,9 +263,8 @@ type AbortReplicationBaselineResponse struct {
 
 // RecoverForceAbortRequest asks a node to record an abort unless it already voted yes.
 type RecoverForceAbortRequest struct {
-	TID           TransactionID
-	Epoch         uint64
-	CorrelationID string
+	TID   TransactionID
+	Epoch uint64
 }
 
 // RecoverForceAbortResponse returns the participant's vote after that check.
@@ -285,10 +279,9 @@ type RecoverForceAbortResponse struct {
 
 // RecoverDecideRequest asks the node to apply a recovery decision.
 type RecoverDecideRequest struct {
-	Generation    uint64
-	TID           TransactionID
-	ActionCommit  bool
-	CorrelationID string
+	Generation   uint64
+	TID          TransactionID
+	ActionCommit bool
 }
 
 // RecoverDecideResponse acknowledges that recovery decision.
@@ -299,10 +292,9 @@ type RecoverDecideResponse struct {
 type QueryInDoubtRequest struct{}
 
 type InDoubtEntry struct {
-	TID           TransactionID
-	PreparedAt    int64
-	CorrelationID string
-	Participants  []uint32
+	TID          TransactionID
+	PreparedAt   int64
+	Participants []uint32
 }
 
 type QueryInDoubtResponse struct {

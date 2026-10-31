@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
@@ -170,8 +169,6 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 		n.commitOutcomes[tid] = commitOutcome{actionCommit: false}
 	}
 	out.Vote = sinfonia.VoteBadForced
-	n.metrics.forcedAbortCount.Inc()
-	n.metrics.forcedAbortCountCurrent.Set(n.metrics.forcedAbortCountCurrent.Value() + 1)
 	return out, nil
 }
 
@@ -179,7 +176,7 @@ func (n *Participant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDe
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
 		return sinfonia.RecoverDecideResponse{Ack: false}, ErrResourceExhausted
 	}
-	resp, err := n.commit(ctx, sinfonia.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit, CorrelationID: req.CorrelationID, Generation: req.Generation}, true)
+	resp, err := n.commit(ctx, sinfonia.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit, Generation: req.Generation}, true)
 	if err != nil {
 		return sinfonia.RecoverDecideResponse{Ack: false}, err
 	}
@@ -189,14 +186,12 @@ func (n *Participant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDe
 // Recover resolves logged transactions using saved decisions and peer evidence.
 // The node stays unavailable if it can't safely finish recovery.
 func (n *Participant) Recover(ctx context.Context) error {
-	n.metrics.recoveryRuns.Inc()
 	n.mu.Lock()
 	if n.restartRequired != nil {
 		err := n.restartRequired
 		n.mu.Unlock()
 		return err
 	}
-	n.log(slog.LevelInfo, "Recovery initiated", "epoch", n.epoch)
 	n.recoveryComplete = false
 	entries := []storage.RedoLogItem{}
 	if n.redoLog != nil {
@@ -298,7 +293,6 @@ func (n *Participant) Recover(ctx context.Context) error {
 			actionCommit: outcomeCommit,
 		}
 		delete(n.inDoubt, entry.TransactionId)
-		n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
 		n.mu.Unlock()
 		if flushNotify {
 			go n.FlushAppliedNotifications(context.Background())
@@ -453,4 +447,18 @@ func (n *Participant) ForceAbortForTest(txId sinfonia.TransactionID) error {
 		return errors.New("forced-abort store unavailable")
 	}
 	return n.forcedAborts.AddItem(txId)
+}
+
+func (n *Participant) QueryInDoubt(ctx context.Context, _ sinfonia.QueryInDoubtRequest) (sinfonia.QueryInDoubtResponse, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	resp := sinfonia.QueryInDoubtResponse{Entries: make([]sinfonia.InDoubtEntry, 0, len(n.inDoubt))}
+	for txId, tx := range n.inDoubt {
+		resp.Entries = append(resp.Entries, sinfonia.InDoubtEntry{
+			TID:          txId,
+			PreparedAt:   tx.preparedAt.UnixNano(),
+			Participants: append([]uint32(nil), tx.participants...),
+		})
+	}
+	return resp, nil
 }

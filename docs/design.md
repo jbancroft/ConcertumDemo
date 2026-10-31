@@ -54,7 +54,7 @@ the same state and mutex; the split adds no package or API boundary.
 
 | File | Responsibility |
 | --- | --- |
-| [participant.go](../internal/memnode/participant.go) | Shared state, construction, shutdown, and private byte-access helpers |
+| [participant.go](../internal/memnode/participant.go) | Shared state, construction, readiness, shutdown, and private byte-access helpers |
 | [locking.go](../internal/memnode/locking.go) | Range locks and the leased global barrier |
 | [prepare.go](../internal/memnode/prepare.go) | Comparisons, reads, prepared writes, and yes/no votes |
 | [commit.go](../internal/memnode/commit.go) | Applying commit/abort decisions and single-participant execution |
@@ -64,7 +64,6 @@ the same state and mutex; the split adds no package or API boundary.
 | [replication_sync.go](../internal/memnode/replication_sync.go) | Synchronizing a replica from a primary's saved state |
 | [replication_baseline.go](../internal/memnode/replication_baseline.go) | Transferring and installing that state in chunks |
 | [maintenance.go](../internal/memnode/maintenance.go) | Applied notifications, log cleanup, and backup phases |
-| [observability.go](../internal/memnode/observability.go) | Internal metrics, logging, and node status |
 
 For the main walkthrough, follow `ExecAndPrepare` in `prepare.go` and then
 `Commit` in `commit.go`. `ExecCommit1PC` handles the single-participant shortcut.
@@ -328,5 +327,5 @@ restarting the durable memnode processes.
 
 This sample keeps the Go transaction and index core. It leaves out the larger
 project's Rust code, filesystem adapters, other storage services, operator
-daemons, deployment tools, and hosted workflows. The [README](../README.md)
+daemons, deployment tools, and hosted workflows. The [crash course](crash-course.md)
 links the papers that inspired it.

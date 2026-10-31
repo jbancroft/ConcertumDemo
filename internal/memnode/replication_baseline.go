@@ -484,9 +484,6 @@ func (n *Participant) resetBaselineMemoryStateLocked() {
 	n.pendingDiskWrites = nil
 	n.lastBackupBoundary = sinfonia.TransactionID{}
 	n.replicaSynced = false
-	n.metrics.inDoubtCount.Set(0)
-	n.metrics.redoLogSizeBytes.Set(0)
-	n.metrics.replicaLagEntries.Set(1)
 	n.setReplicationErrorLocked(nil)
 }
 

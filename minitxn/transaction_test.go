@@ -8,20 +8,19 @@ import (
 )
 
 type recordingExecutor struct {
-	class    string
 	compares []CompareItem
 	reads    []ReadItem
 	writes   []WriteItem
 }
 
-func (e *recordingExecutor) ExecuteAndCommit(_ context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult {
-	e.class, e.compares, e.reads, e.writes = class, compares, reads, writes
+func (e *recordingExecutor) ExecuteAndCommit(_ context.Context, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult {
+	e.compares, e.reads, e.writes = compares, reads, writes
 	return ExecResult{Committed: true, Status: StatusCommitted}
 }
 
 func TestMiniTransactionRetainsOperationsAndOwnsData(t *testing.T) {
 	executor := &recordingExecutor{}
-	tx := NewMiniTransaction(executor).WithClass("gofonia")
+	tx := NewMiniTransaction(executor)
 	compareData, writeData := []byte("compare"), []byte("write")
 	// Separate calls catch gofonia's old value-receiver bug: operations must
 	// stay in the builder even when the caller ignores the return value.
@@ -66,8 +65,8 @@ func TestMiniTransactionRetainsOperationsAndOwnsData(t *testing.T) {
 	execution := tx.ExecuteAndCommit(context.Background())
 
 	committed, status := execution.Committed, execution.Status
-	if !committed || status != StatusCommitted || executor.class != "gofonia" {
-		t.Fatalf("commit=%t status=%d class=%q", committed, status, executor.class)
+	if !committed || status != StatusCommitted {
+		t.Fatalf("commit=%t status=%d", committed, status)
 	}
 	if len(executor.compares) != 2 || len(executor.reads) != 2 || len(executor.writes) != 2 {
 		t.Fatalf("executor lost operations: %+v", executor)

@@ -378,7 +378,7 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 					writes = append(writes, sinfonia.WriteItem{MemID: 2, Addr: 0, Data: []byte("B")})
 				}
 				coord := client.NewCoordinator(nodes)
-				result := coord.ExecuteAndCommit(ctx, "", nil, nil, writes)
+				result := coord.ExecuteAndCommit(ctx, nil, nil, writes)
 				if !result.UnknownOutcome || result.Committed || result.Recovery == nil || result.TransportErr == nil {
 					t.Fatalf("ambiguous persistence must survive automatic resolution as unknown: %+v", result)
 				}
@@ -446,7 +446,7 @@ func TestRedoFailureBeforeWriteResolvesAbortAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: node})
-	result := coord.ExecuteAndCommit(ctx, "", nil, nil, []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}})
+	result := coord.ExecuteAndCommit(ctx, nil, nil, []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}})
 	if !result.UnknownOutcome || result.Recovery == nil {
 		t.Fatalf("expected conservative uncertainty: %+v", result)
 	}
@@ -564,7 +564,7 @@ func TestInFlightReplicationStopsWhenAnotherTransactionFaults(t *testing.T) {
 				t.Fatalf("in-flight request ignored concurrent fault: %v", err)
 			}
 			pending, err := node.QueryInDoubt(ctx, sinfonia.QueryInDoubtRequest{})
-			if err != nil || len(pending.Entries) != 2 || node.StatsSnapshot().Locks.Active != 2 {
+			if err != nil || len(pending.Entries) != 2 || node.ActiveLockCountForTest() != 2 {
 				t.Fatalf("concurrent fault discarded pending writes or locks: %+v, %v", pending, err)
 			}
 			if got, err := node.ReadBytesForTest(0, 1); err != nil || string(got) != "\x00" {
@@ -595,9 +595,8 @@ func assertParticipantFaulted(t *testing.T, node *memnode.Participant, tid sinfo
 	if err != nil || len(pending.Entries) != 1 || pending.Entries[0].TID != tid {
 		t.Fatalf("fault discarded pending transaction: %+v, %v", pending, err)
 	}
-	stats := node.StatsSnapshot()
-	if stats.Locks.Active == 0 {
-		t.Fatalf("fault released transaction locks: %+v", stats.Locks)
+	if node.ActiveLockCountForTest() == 0 {
+		t.Fatal("fault released transaction locks")
 	}
 	unknown := sinfonia.TransactionID{CoordinatorID: 42, Epoch: sinfonia.EpochAt(time.Now())}
 	for _, probe := range []sinfonia.TransactionID{tid, unknown} {

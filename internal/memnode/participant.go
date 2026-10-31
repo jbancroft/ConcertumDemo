@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -71,8 +70,6 @@ type Participant struct {
 	baselineTransfer         *baselineTransfer
 	baselineRecoveryRequired bool
 
-	logger           *slog.Logger
-	metrics          *nodeMetrics
 	recoveryComplete bool
 	restartRequired  error
 	replicaSynced    bool
@@ -109,7 +106,6 @@ func (n *Participant) initSafetyDefaults() {
 func NewParticipant(size int) *Participant {
 	n := &Participant{memory: make([]byte, size), inDoubt: make(map[sinfonia.TransactionID]*preparedTxn), allLogTxIds: map[sinfonia.TransactionID]struct{}{}, nowFn: time.Now, participants: map[uint32]RecoveryPeer{}, appliedLocal: map[sinfonia.TransactionID]bool{}, appliedRemote: map[sinfonia.TransactionID]map[uint32]bool{}, pendingNotify: map[uint32]map[sinfonia.TransactionID]struct{}{}, logParticipants: map[sinfonia.TransactionID][]uint32{}, prepareOutcomes: map[sinfonia.TransactionID]prepareOutcome{}, onePCOutcomes: map[sinfonia.TransactionID]onePCOutcome{}, commitOutcomes: map[sinfonia.TransactionID]commitOutcome{}, prepareFlights: map[sinfonia.TransactionID]*prepareFlight{}, onePCFlights: map[sinfonia.TransactionID]*onePCFlight{}}
 	n.mode = ModeSingle
-	n.metrics = newNodeMetrics()
 	n.recoveryComplete = true
 	n.replicaSynced = true
 	n.peerTimeout = defaultPeerTimeout
@@ -192,7 +188,6 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 		onePCFlights:     map[sinfonia.TransactionID]*onePCFlight{},
 		generation:       generation,
 		mode:             ModeSingle,
-		metrics:          newNodeMetrics(),
 		recoveryComplete: false,
 		replicaSynced:    true,
 		peerTimeout:      defaultPeerTimeout,
@@ -201,15 +196,6 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 	n.cond = sync.NewCond(&n.mu)
 	n.localBarrierOwner = fmt.Sprintf("node/%p", n)
 	n.globalBarrierLeaseTTL = defaultGlobalBarrierLeaseTTL
-	redoLog.SetObservers(func(entryBytes int) {
-		n.metrics.redoEntriesWritten.Inc()
-		n.metrics.redoLogSizeBytes.Set(int64(len(redoLog.Entries())))
-		n.metrics.bytesEvents.Add(time.Now(), float64(entryBytes))
-	}, func(latency time.Duration) {
-		n.metrics.redoFsyncs.Inc()
-		n.metrics.fsyncLatency.Observe(latency)
-	})
-	n.metrics.diskImageSizeBytes.Set(int64(size))
 	for _, e := range redoLog.Entries() {
 		n.allLogTxIds[e.TransactionId] = struct{}{}
 		n.logParticipants[e.TransactionId] = append([]uint32(nil), e.HostIds...)
@@ -225,11 +211,9 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 				participants:  append([]uint32(nil), e.HostIds...),
 				redoLoggedTid: true,
 				preparedAt:    now,
-				correlationID: e.TransactionId.CorrelationID(),
 			}
 		}
 	}
-	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
 	return n, nil
 }
 
@@ -291,4 +275,14 @@ func (n *Participant) SetWriteApplyFaultForTest(fn func(addr uint64, data []byte
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.writeApplyFaultHook = fn
+}
+
+func (n *Participant) isReadyLocked() bool {
+	if n.restartRequired != nil || !n.recoveryComplete || n.backupMode {
+		return false
+	}
+	if n.mode == ModeReplReplica && !n.replicaSynced {
+		return false
+	}
+	return true
 }

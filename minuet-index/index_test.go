@@ -70,7 +70,7 @@ func (m *memTxnClient) Write(_ context.Context, _ uint32, addr uint64, data []by
 	return nil
 }
 
-func (m *memTxnClient) ExecuteAndCommit(_ context.Context, _ string, compares []sinfoniaclient.CompareItem, _ []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
+func (m *memTxnClient) ExecuteAndCommit(_ context.Context, compares []sinfoniaclient.CompareItem, _ []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, c := range compares {
@@ -254,14 +254,13 @@ func (c *conflictInjectingClient) Write(ctx context.Context, hostId uint32, addr
 	return c.base.Write(ctx, hostId, addr, data)
 }
 
-func (c *conflictInjectingClient) ExecuteAndCommit(ctx context.Context, class string, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
-	_ = class
+func (c *conflictInjectingClient) ExecuteAndCommit(ctx context.Context, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
 	_ = reads
 	call := atomic.AddInt32(&c.calls, 1)
 	if call <= atomic.LoadInt32(&c.rejectFirstN) {
 		return sinfoniaclient.ExecResult{Committed: false, Status: sinfoniaclient.StatusAborted, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 	}
-	return c.base.ExecuteAndCommit(ctx, class, compares, reads, writes)
+	return c.base.ExecuteAndCommit(ctx, compares, reads, writes)
 }
 
 func TestInsertRetriesConflictAndEventuallyCommits(t *testing.T) {

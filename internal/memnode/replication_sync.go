@@ -195,7 +195,6 @@ func (n *Participant) SyncFromPrimary(ctx context.Context, primary PrimarySyncPe
 	committed = true
 	n.mu.Lock()
 	n.replicaSynced = true
-	n.metrics.replicaLagEntries.Set(0)
 	n.mu.Unlock()
 	return nil
 }

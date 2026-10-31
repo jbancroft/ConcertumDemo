@@ -61,11 +61,12 @@ the data and the tree's structure from concurrent updates.
 
 Each tree here occupies a bounded region on one node. It has no multiversion
 snapshots or writable clones. The tiny SQL layer is an optional way to interact
-with the index through `make repl`.
+with the index through the [SQL console](../README.md#sql).
 
 ## Follow the code
 
-Start with `make sinfonia-client-demo` and its [transfer example](../demo/sinfonia-client-demo/main.go).
+Build and run the [Sinfonia demo](../README.md#sinfonia),
+then read its [transfer example](../demo/sinfonia-client-demo/main.go).
 Then follow the [coordinator](../internal/client/coordinator.go) into participant
 [prepare](../internal/memnode/prepare.go) and [commit](../internal/memnode/commit.go).
 If time permits, continue to the [B+tree](../minuet-index/btree.go).

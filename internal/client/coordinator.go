@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/recovery"
 	"github.com/jbancroft/ConcertumDemo/minitxn"
@@ -195,7 +194,7 @@ func (c *Coordinator) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff tim
 	return nil
 }
 
-func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ExecResult {
+func (c *Coordinator) ExecuteAndCommit(ctx context.Context, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ExecResult {
 	ctx, cancel := context.WithTimeout(ctx, defaultExecuteTimeout)
 	defer cancel()
 	seen := make(map[uint32]struct{})
@@ -217,7 +216,7 @@ func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compar
 	attempt := 0
 	for {
 		txId := c.nextTID()
-		res, retry := c.execAttempt(ctx, txId, hostIds, class, compares, reads, writes)
+		res, retry := c.execAttempt(ctx, txId, hostIds, compares, reads, writes)
 		if res.UnknownOutcome {
 			handle := &minitxn.RecoveryHandle{TID: txId, Participants: append([]uint32(nil), hostIds...)}
 			for _, item := range reads {
@@ -236,13 +235,6 @@ func (c *Coordinator) ExecuteAndCommit(ctx context.Context, class string, compar
 			return res
 		}
 		c.backoff.Wait(ctx, attempt)
-		for _, hostId := range hostIds {
-			if node, ok := c.nodes[hostId]; ok {
-				if mn, ok2 := node.(*memnode.Participant); ok2 {
-					mn.RecordRetryForClass(class)
-				}
-			}
-		}
 		attempt++
 	}
 }
@@ -255,13 +247,12 @@ type prepareResult struct {
 }
 
 type commitDispatch struct {
-	tid           sinfonia.TransactionID
-	requestID     sinfonia.RequestID
-	correlationID string
-	actionCommit  bool
-	generation    uint64
-	barrier       bool
-	respC         chan error
+	tid          sinfonia.TransactionID
+	requestID    sinfonia.RequestID
+	actionCommit bool
+	generation   uint64
+	barrier      bool
+	respC        chan error
 }
 
 type rpcWorker struct {
@@ -354,13 +345,13 @@ func (w *rpcWorker) runCommitBatcher() {
 		stopTimer()
 		decisions := make([]sinfonia.CommitRequest, 0, len(batch))
 		for _, d := range batch {
-			decisions = append(decisions, sinfonia.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation})
+			decisions = append(decisions, sinfonia.CommitRequest{TID: d.tid, RequestID: d.requestID, ActionCommit: d.actionCommit, Generation: d.generation})
 		}
 		resp, err := w.node.CommitBatch(context.Background(), sinfonia.CommitBatchRequest{Decisions: decisions})
 		var firstErr error
 		if err != nil {
 			for _, d := range batch {
-				commitResp, err2 := w.node.Commit(context.Background(), sinfonia.CommitRequest{TID: d.tid, RequestID: d.requestID, CorrelationID: d.correlationID, ActionCommit: d.actionCommit, Generation: d.generation})
+				commitResp, err2 := w.node.Commit(context.Background(), sinfonia.CommitRequest{TID: d.tid, RequestID: d.requestID, ActionCommit: d.actionCommit, Generation: d.generation})
 				if err2 != nil {
 					log.Printf("commit rpc failed for memnode %d tid=%+v: %v", w.hostId, d.tid, err2)
 					if firstErr == nil {
@@ -433,9 +424,9 @@ func (w *rpcWorker) flushPending(ctx context.Context) error {
 	}
 }
 
-func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.TransactionID, hostIds []uint32, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) (ExecResult, bool) {
+func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.TransactionID, hostIds []uint32, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) (ExecResult, bool) {
 	if len(hostIds) == 1 {
-		res := c.execSingleParticipant1PC(ctx, txId, hostIds[0], class, compares, reads, writes)
+		res := c.execSingleParticipant1PC(ctx, txId, hostIds[0], compares, reads, writes)
 		return res, res.Status == sinfonia.VoteBadLock || res.Status == sinfonia.VoteBadStaleEpoch
 	}
 
@@ -451,17 +442,15 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 			}
 			reqReads := readItemsForHost(hostId, reads, c.resolveHostId)
 			call := prepareCall{ctx: ctx, req: sinfonia.ExecPrepareRequest{
-				TID:           txId,
-				RequestID:     sinfonia.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
-				CorrelationID: txId.CorrelationID(),
-				Participants:  append([]uint32(nil), hostIds...),
-				HasWrites:     len(writes) > 0,
-				CmpItems:      compareItemsForHost(hostId, compares, c.resolveHostId),
-				ReadItems:     reqReads,
-				WriteItems:    writeItemsForHost(hostId, writes, c.resolveHostId),
-				Epoch:         txId.Epoch,
-				Class:         class,
-				Generation:    c.generationFor(hostId),
+				TID:          txId,
+				RequestID:    sinfonia.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
+				Participants: append([]uint32(nil), hostIds...),
+				HasWrites:    len(writes) > 0,
+				CmpItems:     compareItemsForHost(hostId, compares, c.resolveHostId),
+				ReadItems:    reqReads,
+				WriteItems:   writeItemsForHost(hostId, writes, c.resolveHostId),
+				Epoch:        txId.Epoch,
+				Generation:   c.generationFor(hostId),
 			}, respC: results}
 			select {
 			case worker.prepareCh <- call:
@@ -514,7 +503,7 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 		worker := c.workers[hostId]
 		c.workersMu.Unlock()
 		if worker != nil {
-			decision := commitDispatch{tid: txId, requestID: sinfonia.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(hostId), 10)), correlationID: txId.CorrelationID(), actionCommit: decideCommit, generation: c.generationFor(hostId)}
+			decision := commitDispatch{tid: txId, requestID: sinfonia.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(hostId), 10)), actionCommit: decideCommit, generation: c.generationFor(hostId)}
 			select {
 			case worker.commitCh <- decision:
 			case <-ctx.Done():
@@ -531,22 +520,20 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 	return ExecResult{Committed: true, ReadResults: aggregatedReads, Status: sinfonia.VoteOk, ParticipantVotes: participantVotes}, false
 }
 
-func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId sinfonia.TransactionID, hostId uint32, class string, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ExecResult {
+func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId sinfonia.TransactionID, hostId uint32, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ExecResult {
 	node, ok := c.nodes[hostId]
 	if !ok {
 		return ExecResult{Committed: false, Status: sinfonia.VoteBadInternal, ReadResults: map[sinfonia.ReadItem][]byte{}, ParticipantVotes: map[uint32]sinfonia.Vote{hostId: sinfonia.VoteBadInternal}}
 	}
 	reqReads := readItemsForHost(hostId, reads, c.resolveHostId)
 	resp, err := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{
-		TID:           txId,
-		RequestID:     sinfonia.RequestID(txId.CorrelationID() + ":1pc:" + strconv.FormatUint(uint64(hostId), 10)),
-		CorrelationID: txId.CorrelationID(),
-		CmpItems:      compareItemsForHost(hostId, compares, c.resolveHostId),
-		ReadItems:     reqReads,
-		WriteItems:    writeItemsForHost(hostId, writes, c.resolveHostId),
-		Epoch:         txId.Epoch,
-		Class:         class,
-		Generation:    c.generationFor(hostId),
+		TID:        txId,
+		RequestID:  sinfonia.RequestID(txId.CorrelationID() + ":1pc:" + strconv.FormatUint(uint64(hostId), 10)),
+		CmpItems:   compareItemsForHost(hostId, compares, c.resolveHostId),
+		ReadItems:  reqReads,
+		WriteItems: writeItemsForHost(hostId, writes, c.resolveHostId),
+		Epoch:      txId.Epoch,
+		Generation: c.generationFor(hostId),
 	})
 	if err != nil {
 		// Even a server error can occur after the durable commit decision.

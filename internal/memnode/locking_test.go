@@ -244,3 +244,29 @@ func runLockTestRequest(t *testing.T, n *Participant, onePhase bool, req sinfoni
 	}
 	return resp.Vote, resp.ReadData
 }
+
+func TestBadLockIncludesConflictContext(t *testing.T) {
+	n := NewParticipant(64)
+	ctx := context.Background()
+	tid1 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+	tid2 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: sinfonia.EpochAt(time.Now())}
+	if resp, err := n.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
+		TID: tid1, Participants: []uint32{1},
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("abc")}},
+	}); err != nil || resp.Vote != sinfonia.VoteOk {
+		t.Fatalf("first prepare vote=%v err=%v", resp.Vote, err)
+	}
+	resp, err := n.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
+		TID: tid2, Participants: []uint32{1},
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("z")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Vote != sinfonia.VoteBadLock || resp.LockConflict == nil {
+		t.Fatalf("expected bad lock with conflict details: %+v", resp)
+	}
+	if resp.LockConflict.HeldStart != 8 {
+		t.Fatalf("unexpected held range %+v", resp.LockConflict)
+	}
+}

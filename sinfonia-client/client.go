@@ -42,7 +42,7 @@ type MiniTransaction = minitxn.MiniTransaction
 // TxnClient is the read/write and minitransaction interface used by the index
 // and SQL layers.
 type TxnClient interface {
-	ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult
+	ExecuteAndCommit(ctx context.Context, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult
 	Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error)
 	Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error
 }
@@ -98,7 +98,7 @@ func (c *Client) FlushPendingCommits(ctx context.Context) error {
 }
 
 // ExecuteAndCommit submits the operations as one minitransaction.
-func (c *Client) ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult {
+func (c *Client) ExecuteAndCommit(ctx context.Context, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult {
 	internalCmp := make([]sinfonia.CmpItem, 0, len(compares))
 	for _, item := range compares {
 		internalCmp = append(internalCmp, sinfonia.CmpItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
@@ -111,7 +111,7 @@ func (c *Client) ExecuteAndCommit(ctx context.Context, class string, compares []
 	for _, item := range writes {
 		internalWrites = append(internalWrites, sinfonia.WriteItem{MemID: item.HostId, Addr: item.Address, Data: append([]byte(nil), item.Data...)})
 	}
-	res := c.coordinator.ExecuteAndCommit(ctx, class, internalCmp, internalReads, internalWrites)
+	res := c.coordinator.ExecuteAndCommit(ctx, internalCmp, internalReads, internalWrites)
 	return publicResult(res)
 }
 

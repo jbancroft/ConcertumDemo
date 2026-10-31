@@ -20,7 +20,7 @@ func (n *Participant) requireRecoveryComplete() error {
 }
 
 func (n *Participant) RPCServer() *rpcwire.Server {
-	srv := rpcwire.NewServer(nil, nil)
+	srv := rpcwire.NewServer(nil)
 	rpcwire.RegisterTyped(srv, sinfonia.MethodExecPrepare, func(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
 		if err := n.requireRecoveryComplete(); err != nil {
 			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, err

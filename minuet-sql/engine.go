@@ -279,7 +279,7 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 			{HostId: e.cfg.HostId, Address: catalogAddr, Data: encodeCatalog(next)},
 			{HostId: e.cfg.HostId, Address: rec.indexBaseAddr, Data: make([]byte, minuetIndexSuperblockSize)},
 		}
-		result := e.cfg.TxnClient.ExecuteAndCommit(ctx, "minuet-sql:create-table", compares, nil, writes)
+		result := e.cfg.TxnClient.ExecuteAndCommit(ctx, compares, nil, writes)
 		switch result.Status {
 		case sinfoniaclient.StatusCommitted:
 			// Publish the table below only after a confirmed commit.

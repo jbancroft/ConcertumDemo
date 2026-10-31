@@ -3,7 +3,6 @@ package sinfoniaclient
 import (
 	"context"
 	"errors"
-	"net"
 	"testing"
 	"time"
 
@@ -39,8 +38,7 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			result := c.ExecuteAndCommit(ctx, "direct",
-				[]CompareItem{{HostId: 1, Address: 0, Data: []byte(tc.compare)}},
+			result := c.ExecuteAndCommit(ctx, []CompareItem{{HostId: 1, Address: 0, Data: []byte(tc.compare)}},
 				[]ReadItem{{HostId: 1, Address: 0, Length: 1}, {HostId: 2, Address: 0, Length: 1}},
 				[]WriteItem{{HostId: 1, Address: 0, Data: []byte("x")}, {HostId: 2, Address: 0, Data: []byte("y")}},
 			)
@@ -93,7 +91,7 @@ func TestExecuteAndCommitResolvesLostReply(t *testing.T) {
 	ctx := context.Background()
 	n := &lostOnePCReplyParticipant{Participant: memnode.NewParticipant(16)}
 	c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: n})}
-	result := c.ExecuteAndCommit(ctx, "", nil, nil, []WriteItem{{HostId: 1, Address: 0, Data: []byte("x")}})
+	result := c.ExecuteAndCommit(ctx, nil, nil, []WriteItem{{HostId: 1, Address: 0, Data: []byte("x")}})
 	if !result.Committed || result.UnknownOutcome || result.Status != StatusCommitted {
 		t.Fatalf("lost reply should resolve to committed: %+v", result)
 	}
@@ -196,52 +194,6 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 	}
 	awaitValue(t, c, 1, 0, []byte("cd"))
 	awaitValue(t, c, 2, 0, []byte("zw"))
-}
-
-func TestMTxPreservesTransactionClass(t *testing.T) {
-	n1 := memnode.NewParticipant(32)
-	defer n1.Close()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	go n1.RPCServer().Serve(listener)
-	c := NewClient(map[uint32]NodeConfig{
-		1: {RPCAddress: listener.Addr().String()},
-	})
-	execution := c.NewMiniTransaction().WithClass("inventory").Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
-	committed, status := execution.Committed, execution.Status
-	if !committed || status != StatusCommitted {
-		t.Fatalf("expected committed inventory transaction")
-	}
-	stats := n1.StatsSnapshot()
-	inv, ok := stats.ByClass["inventory"]
-	if !ok {
-		t.Fatalf("expected inventory class stats, got %#v", stats.ByClass)
-	}
-	if inv.Committed != 1 || inv.Total != 1 {
-		t.Fatalf("unexpected inventory stats: %+v", inv)
-	}
-}
-
-func TestMTxWithoutClassFallsBackToUnclassified(t *testing.T) {
-	n1 := memnode.NewParticipant(32)
-	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
-	c := &Client{coordinator: coord}
-	execution := c.NewMiniTransaction().Write(1, 0, []byte("z")).ExecuteAndCommit(context.Background())
-	committed, status := execution.Committed, execution.Status
-	if !committed || status != StatusCommitted {
-		t.Fatalf("expected committed unclassified transaction")
-	}
-	stats := n1.StatsSnapshot()
-	unclassified, ok := stats.ByClass["__unclassified__"]
-	if !ok {
-		t.Fatalf("expected __unclassified__ class stats, got %#v", stats.ByClass)
-	}
-	if unclassified.Total != 1 || unclassified.Committed != 1 {
-		t.Fatalf("unexpected __unclassified__ stats: %+v", unclassified)
-	}
 }
 
 func awaitValue(t *testing.T, c *Client, hostId uint32, addr uint64, expected []byte) {

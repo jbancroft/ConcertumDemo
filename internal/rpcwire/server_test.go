@@ -37,7 +37,7 @@ func testServeShutdown(t *testing.T, connContext func(net.Conn) context.Context,
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	server := NewServer(nil, connContext)
+	server := NewServer(connContext)
 	entered := make(chan struct{})
 	canceled := make(chan error, 1)
 	release := make(chan struct{})

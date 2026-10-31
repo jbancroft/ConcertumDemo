@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
@@ -225,13 +224,10 @@ type RedoLog struct {
 	path    string
 	entries []RedoLogItem
 
-	batchWindow    time.Duration
-	batchMax       int
-	appendReqCh    chan appendReq
-	fsyncFn        func(*os.File) error
-	fsyncCallCount atomic.Uint64
-	onAppend       func(entryBytes int)
-	onFsync        func(latency time.Duration)
+	batchWindow time.Duration
+	batchMax    int
+	appendReqCh chan appendReq
+	fsyncFn     func(*os.File) error
 }
 
 type appendReq struct {
@@ -310,17 +306,6 @@ func (r *RedoLog) SetFsyncHookForTest(fn func(*os.File) error) {
 	r.fsyncFn = fn
 }
 
-func (r *RedoLog) FsyncCallCount() uint64 {
-	return r.fsyncCallCount.Load()
-}
-
-func (r *RedoLog) SetObservers(onAppend func(entryBytes int), onFsync func(time.Duration)) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.onAppend = onAppend
-	r.onFsync = onFsync
-}
-
 func (r *RedoLog) AddItem(entry RedoLogItem) error {
 	ack := make(chan error, 1)
 	r.appendReqCh <- appendReq{entry: entry, ack: ack}
@@ -394,7 +379,6 @@ func (r *RedoLog) flushBatch(batch []appendReq) error {
 	defer f.Close()
 
 	entries := make([]RedoLogItem, 0, len(batch))
-	bytesWritten := 0
 	for _, req := range batch {
 		b, err := json.Marshal(req.entry)
 		if err != nil {
@@ -404,7 +388,6 @@ func (r *RedoLog) flushBatch(batch []appendReq) error {
 			return err
 		}
 		entries = append(entries, req.entry)
-		bytesWritten += len(b) + 1
 	}
 	r.mu.Lock()
 	fsyncFn := r.fsyncFn
@@ -412,24 +395,13 @@ func (r *RedoLog) flushBatch(batch []appendReq) error {
 	if fsyncFn == nil {
 		fsyncFn = func(f *os.File) error { return f.Sync() }
 	}
-	start := time.Now()
 	if err := fsyncFn(f); err != nil {
 		return err
 	}
-	lat := time.Since(start)
-	r.fsyncCallCount.Add(1)
 
 	r.mu.Lock()
 	r.entries = append(r.entries, entries...)
-	onAppend := r.onAppend
-	onFsync := r.onFsync
 	r.mu.Unlock()
-	if onAppend != nil {
-		onAppend(bytesWritten)
-	}
-	if onFsync != nil {
-		onFsync(lat)
-	}
 	return nil
 }
 func (r *RedoLog) LastTID() sinfonia.TransactionID {

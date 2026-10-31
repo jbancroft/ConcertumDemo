@@ -65,10 +65,5 @@ func (n *Participant) allowRate(l *ratelimit.KeyedLimiter, key string) bool {
 	if l == nil {
 		return true
 	}
-	ok := l.AllowN(key, 1)
-	if !ok {
-		n.metrics.rateLimitedTotal.Inc()
-		n.metrics.rejectedRequestsTotal.Inc()
-	}
-	return ok
+	return l.AllowN(key, 1)
 }

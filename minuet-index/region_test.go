@@ -33,7 +33,7 @@ func (c *boundedTestClient) Read(ctx context.Context, host uint32, addr uint64, 
 	return c.TxnClient.Read(ctx, host, addr, length)
 }
 
-func (c *boundedTestClient) ExecuteAndCommit(ctx context.Context, class string, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
+func (c *boundedTestClient) ExecuteAndCommit(ctx context.Context, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
 	for _, item := range compares {
 		c.check(item.Address, len(item.Data))
 	}
@@ -44,7 +44,7 @@ func (c *boundedTestClient) ExecuteAndCommit(ctx context.Context, class string, 
 		c.check(item.Address, len(item.Data))
 	}
 	c.commits++
-	return c.TxnClient.ExecuteAndCommit(ctx, class, compares, reads, writes)
+	return c.TxnClient.ExecuteAndCommit(ctx, compares, reads, writes)
 }
 
 func TestNewBTreeRejectsInvalidRegions(t *testing.T) {

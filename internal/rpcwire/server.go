@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"net"
 	"sync"
 )
@@ -14,16 +12,14 @@ import (
 type Handler func(context.Context, any) (any, error)
 
 type Server struct {
-	logger      *slog.Logger
 	connContext func(net.Conn) context.Context
 
 	mu      sync.RWMutex
 	methods map[string]Handler
 }
 
-func NewServer(logger *slog.Logger, connContext func(net.Conn) context.Context) *Server {
+func NewServer(connContext func(net.Conn) context.Context) *Server {
 	return &Server{
-		logger:      logger,
 		connContext: connContext,
 		methods:     map[string]Handler{},
 	}
@@ -98,9 +94,6 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 	for {
 		var req Request
 		if err := readFrame(conn, &req); err != nil {
-			if err != io.EOF && !errors.Is(err, net.ErrClosed) && s.logger != nil {
-				s.logger.Debug("rpc connection closed", "err", err)
-			}
 			return
 		}
 		resp := Response{}
@@ -116,9 +109,6 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 			}
 		}
 		if err := writeFrame(conn, resp); err != nil {
-			if s.logger != nil {
-				s.logger.Debug("rpc write failed", "err", err)
-			}
 			return
 		}
 	}

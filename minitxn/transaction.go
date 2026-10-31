@@ -8,14 +8,13 @@ import (
 // Executor runs a completed transaction. The coordinator gives each attempt,
 // including retries, a fresh transaction ID.
 type Executor interface {
-	ExecuteAndCommit(ctx context.Context, class string, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult
+	ExecuteAndCommit(ctx context.Context, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult
 }
 
 // MiniTransaction collects operations until ExecuteAndCommit is called.
 // It copies input bytes so callers can safely reuse their buffers.
 type MiniTransaction struct {
 	executor Executor
-	class    string
 	compares []CompareItem
 	reads    []ReadItem
 	writes   []WriteItem
@@ -37,11 +36,6 @@ func (t *MiniTransaction) Read(hostId uint32, address uint64, length uint32) *Mi
 
 func (t *MiniTransaction) Write(hostId uint32, address uint64, data []byte) *MiniTransaction {
 	t.writes = append(t.writes, WriteItem{HostId: hostId, Address: address, Data: append([]byte(nil), data...)})
-	return t
-}
-
-func (t *MiniTransaction) WithClass(class string) *MiniTransaction {
-	t.class = class
 	return t
 }
 
@@ -123,5 +117,5 @@ func (t *MiniTransaction) UniqueHostIds() []uint32 {
 // ExecuteAndCommit returns the complete result, including a recovery handle
 // when a deadline or outage prevents the client from establishing the outcome.
 func (t *MiniTransaction) ExecuteAndCommit(ctx context.Context) ExecResult {
-	return t.executor.ExecuteAndCommit(ctx, t.class, t.Compares(), t.Reads(), t.Writes())
+	return t.executor.ExecuteAndCommit(ctx, t.Compares(), t.Reads(), t.Writes())
 }

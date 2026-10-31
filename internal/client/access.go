@@ -13,7 +13,7 @@ import (
 // Separate calls do not form a shared snapshot.
 func (c *Coordinator) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
 	item := sinfonia.ReadItem{MemID: hostId, Addr: addr, Len: length}
-	res := c.ExecuteAndCommit(ctx, "", nil, []sinfonia.ReadItem{item}, nil)
+	res := c.ExecuteAndCommit(ctx, nil, []sinfonia.ReadItem{item}, nil)
 	if err := accessError(res); err != nil {
 		return nil, err
 	}
@@ -27,7 +27,7 @@ func (c *Coordinator) Read(ctx context.Context, hostId uint32, addr uint64, leng
 // Write executes a single write item, including locking and durable logging.
 func (c *Coordinator) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
 	item := sinfonia.WriteItem{MemID: hostId, Addr: addr, Data: append([]byte(nil), data...)}
-	return accessError(c.ExecuteAndCommit(ctx, "", nil, nil, []sinfonia.WriteItem{item}))
+	return accessError(c.ExecuteAndCommit(ctx, nil, nil, []sinfonia.WriteItem{item}))
 }
 
 func accessError(res ExecResult) error {

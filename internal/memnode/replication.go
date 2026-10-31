@@ -85,7 +85,6 @@ func (n *Participant) configureAsPrimaryLocked(replicaID uint32, replica Replica
 	n.replica = replica
 	n.primaryID = 0
 	n.replicaSynced = true
-	n.metrics.replicaLagEntries.Set(0)
 }
 
 func (n *Participant) ConfigureAsPrimary(replicaID uint32, replica ReplicaPeer) {
@@ -100,7 +99,6 @@ func (n *Participant) configureAsReplicaLocked(primaryID uint32) {
 	n.replica = nil
 	n.replicaID = 0
 	n.replicaSynced = false
-	n.metrics.replicaLagEntries.Set(1)
 }
 
 func (n *Participant) ConfigureAsReplica(primaryID uint32) {
@@ -185,7 +183,6 @@ func (n *Participant) ConfigureReplication(ctx context.Context, req sinfonia.Con
 		n.primaryID = 0
 		n.partnerRPC = ""
 		n.replicaSynced = true
-		n.metrics.replicaLagEntries.Set(0)
 	case sinfonia.ReplicationRolePrimary:
 		n.configureAsPrimaryLocked(0, n.newRPCPeerLocked(req.PartnerRPC))
 		n.partnerRPC = req.PartnerRPC
@@ -193,9 +190,6 @@ func (n *Participant) ConfigureReplication(ctx context.Context, req sinfonia.Con
 		n.configureAsReplicaLocked(0)
 		n.partnerRPC = req.PartnerRPC
 		n.replicaSynced = req.MarkSynced
-		if req.MarkSynced {
-			n.metrics.replicaLagEntries.Set(0)
-		}
 	}
 	n.setReplicationErrorLocked(nil)
 	return sinfonia.ConfigureReplicationResponse{Ack: true, Generation: n.generation}, nil
@@ -235,15 +229,12 @@ func (n *Participant) replicateReplayRecordLocked(ctx context.Context, txId sinf
 	}
 	peer := n.replica
 	n.mu.Unlock()
-	start := time.Now()
 	replResp, replErr := peer.ReplicateReplayRecord(ctx, req)
-	n.metrics.replicationRoundtripLatency.Observe(time.Since(start))
 	n.mu.Lock()
 	if n.restartRequired != nil {
 		return n.restartRequired
 	}
 	if replErr != nil || !replResp.Ack {
-		n.metrics.replicationFailures.Inc()
 		if replErr != nil {
 			n.setReplicationErrorLocked(replErr)
 			return replErr
@@ -271,10 +262,8 @@ func (n *Participant) ReplicateRedoEntry(ctx context.Context, req sinfonia.Repli
 	if n.redoLog == nil {
 		return sinfonia.ReplicateRedoEntryResponse{Ack: false}, errors.New("redo log unavailable")
 	}
-	correlationID := req.Entry.TID.CorrelationID()
-	txn := &preparedTxn{writes: cloneWrites(req.Entry.WriteItems), participants: append([]uint32(nil), req.Entry.Participants...), preparedAt: n.nowFn(), correlationID: correlationID}
+	txn := &preparedTxn{writes: cloneWrites(req.Entry.WriteItems), participants: append([]uint32(nil), req.Entry.Participants...), preparedAt: n.nowFn()}
 	n.inDoubt[req.Entry.TID] = txn
-	n.metrics.inDoubtCount.Set(int64(len(n.inDoubt)))
 	if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.Entry.TID, HostIds: txn.participants, WriteItems: txn.writes}); err != nil {
 		return sinfonia.ReplicateRedoEntryResponse{}, n.failUncertainLocked("append replicated redo", err)
 	}

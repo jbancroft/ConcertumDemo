@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"log/slog"
 	"os"
 	"time"
 
@@ -81,11 +80,9 @@ func (n *Participant) FlushAppliedNotifications(ctx context.Context) {
 }
 
 func (n *Participant) RunRedoLogGC(ctx context.Context) error {
-	n.metrics.logGCRuns.Inc()
 	n.FlushAppliedNotifications(ctx)
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.log(slog.LevelInfo, "GC truncation", "epoch", n.epoch)
 	if n.redoLog == nil {
 		return nil
 	}
@@ -168,7 +165,6 @@ func (n *Participant) RunForcedAbortGC() error {
 		return nil
 	}
 	current := n.currentEpochLocked()
-	n.log(slog.LevelInfo, "GC truncation", "epoch", current)
 	if err := n.persistEpochFloorLocked(current); err != nil {
 		return err
 	}
@@ -182,8 +178,6 @@ func (n *Participant) RunForcedAbortGCRPC(ctx context.Context, _ sinfonia.RunFor
 }
 
 func (n *Participant) BeginBackupPhase(ctx context.Context, req sinfonia.BeginBackupPhaseRequest) (sinfonia.BeginBackupPhaseResponse, error) {
-	n.metrics.backupRuns.Inc()
-	n.log(slog.LevelInfo, "Backup phase transitions", "phase", "begin", "tid", req.BackupID)
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.diskImage == nil {
@@ -202,7 +196,6 @@ func (n *Participant) BeginBackupPhase(ctx context.Context, req sinfonia.BeginBa
 }
 
 func (n *Participant) CompleteBackupPhase(ctx context.Context, req sinfonia.CompleteBackupPhaseRequest) (sinfonia.CompleteBackupPhaseResponse, error) {
-	n.log(slog.LevelInfo, "Backup phase transitions", "phase", "complete", "tid", req.BackupID)
 	n.mu.Lock()
 	if n.diskImage == nil {
 		n.backupMode = false
@@ -266,15 +259,6 @@ func (n *Participant) SetRedoFsyncHookForTest(fn func(*os.File) error) {
 	if n.redoLog != nil {
 		n.redoLog.SetFsyncHookForTest(fn)
 	}
-}
-
-func (n *Participant) RedoFsyncCountForTest() uint64 {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.redoLog == nil {
-		return 0
-	}
-	return n.redoLog.FsyncCallCount()
 }
 
 func (n *Participant) RedoEntryCountForTest() int {
