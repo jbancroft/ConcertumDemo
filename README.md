@@ -46,14 +46,31 @@ go run ./cmd/demo
 
 ## SQL
 
+Make sure a memnode with ID 1 and the default 2 MiB size is running:
+
+```sh
+go run ./cmd/memnode -id 1 -listen 127.0.0.1:7001
+
+# Or save and reopen tables between memnode restarts:
+go run ./cmd/memnode -id 1 -listen 127.0.0.1:7001 -data-dir tmp/repl
+```
+
+Then connect from another terminal:
+
 ```sh
 go run ./cmd/repl
 
-# Or save and reopen tables between sessions:
-go run ./cmd/repl -data-dir tmp/repl
+# Optional host and port (these are the defaults):
+go run ./cmd/repl -host 127.0.0.1 -port 7001
 ```
 
-Enter `.help` for SQL examples or `.quit` to exit. Use one session per data directory.
+Enter `.help` for SQL examples or `.quit` to exit. Exiting the REPL leaves the
+memnode running; data lasts until that node stops unless it uses `-data-dir`.
+Use one memnode per data directory and one SQL session per node.
+
+For a temporary local session, `make repl` builds both executables, starts one
+in-memory memnode on `127.0.0.1:7001`, and connects the console. It stops that node
+and discards its data when the console exits. The port must be free.
 
 - [Engine](minuet-sql/engine.go)
 - [Catalog](minuet-sql/catalog.go)

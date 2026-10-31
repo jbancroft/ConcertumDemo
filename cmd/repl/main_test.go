@@ -6,12 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	minuetsql "github.com/jbancroft/ConcertumDemo/minuet-sql"
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
@@ -47,7 +48,8 @@ func TestREPLCommandsAndUnknownOutcome(t *testing.T) {
 func TestREPLOverTCPAndDurableReopen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	args := []string{"-memnode-bin", os.Getenv("MEMNODE_BIN"), "-data-dir", t.TempDir()}
+	dir := t.TempDir()
+	args, stop := startREPLNode(t, ctx, dir)
 	var output bytes.Buffer
 	input := strings.Join([]string{
 		"CREATE TABLE scores;",
@@ -70,12 +72,80 @@ func TestREPLOverTCPAndDurableReopen(t *testing.T) {
 		}
 	}
 	output.Reset()
-	// EOF (without a final newline) exits normally and releases the processes.
+	// Quitting the REPL must leave the external node and its data available.
+	// EOF without a final newline also exits normally.
 	if err := run(ctx, args, io.NopCloser(strings.NewReader("SELECT id, value FROM scores;")), &output, &output); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "id  value\n2   250\n(1 row)") {
+		t.Fatalf("rows were not available to a second session:\n%s", output.String())
+	}
+	stop()
+	args, _ = startREPLNode(t, ctx, dir)
+	output.Reset()
+	if err := run(ctx, args, io.NopCloser(strings.NewReader("SELECT id, value FROM scores;\n.quit\n")), &output, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "id  value\n2   250\n(1 row)") {
 		t.Fatalf("saved rows were not reopened:\n%s", output.String())
+	}
+}
+
+// The test owns the node independently of the REPL, just like a separate server.
+func startREPLNode(t *testing.T, ctx context.Context, dir string) ([]string, func()) {
+	t.Helper()
+	node, err := memnode.NewDurableParticipant(1, nodeMemorySize, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := node.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := node.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- node.RPCServer().Serve(listener) }()
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		if err := listener.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+		if err := node.Close(); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(stop)
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []string{"-host", host, "-port", port}, stop
+}
+
+func TestREPLRejectsInvalidAddress(t *testing.T) {
+	for _, args := range [][]string{
+		{"-host", ""}, {"-port", "0"}, {"-port", "-1"},
+		{"-port", "65536"}, {"unexpected-argument"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			if err := run(context.Background(), args, io.NopCloser(strings.NewReader(".quit\n")), io.Discard, io.Discard); err == nil {
+				t.Fatal("invalid address was accepted")
+			}
+		})
 	}
 }
 

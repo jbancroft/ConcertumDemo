@@ -4,6 +4,8 @@ export TMPDIR := $(CURDIR)/tmp
 MEMNODE_BIN := $(CURDIR)/bin/memnode
 MEMNODE_RACE_BIN := $(CURDIR)/bin/memnode-race
 REPL_BIN := $(CURDIR)/bin/repl
+REPL_STARTUP_ATTEMPTS := 100
+REPL_STARTUP_POLL_SECONDS := 0.05
 
 prepare:
 	@mkdir -p tmp
@@ -35,7 +37,22 @@ demo: memnode
 
 repl: memnode
 	go build -o "$(REPL_BIN)" ./cmd/repl
-	"$(REPL_BIN)" -memnode-bin "$(MEMNODE_BIN)"
+	@set -eu; \
+	ready=$$(mktemp "$(TMPDIR)/repl-ready.XXXXXX"); \
+	node_pid=; \
+	trap 'if [ -n "$$node_pid" ]; then kill "$$node_pid" 2>/dev/null || :; wait "$$node_pid" 2>/dev/null || :; fi; rm -f "$$ready"' EXIT; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
+	"$(MEMNODE_BIN)" -id 1 -listen 127.0.0.1:7001 >"$$ready" & \
+	node_pid=$$!; \
+	attempts=0; \
+	while [ ! -s "$$ready" ]; do \
+		if ! kill -0 "$$node_pid" 2>/dev/null; then wait "$$node_pid"; exit 1; fi; \
+		attempts=$$((attempts + 1)); \
+		if [ "$$attempts" -ge "$(REPL_STARTUP_ATTEMPTS)" ]; then echo "memnode startup timed out" >&2; exit 1; fi; \
+		sleep "$(REPL_STARTUP_POLL_SECONDS)"; \
+	done; \
+	"$(REPL_BIN)" -host 127.0.0.1 -port 7001
 
 sinfonia-client-demo: memnode
 	go run ./demo/sinfonia-client-demo -memnode-bin "$(MEMNODE_BIN)"

@@ -1,4 +1,4 @@
-// Command repl runs a small SQL console on local memnode processes.
+// Command repl runs a small SQL console connected to an existing memnode.
 package main
 
 import (
@@ -8,20 +8,24 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
-	"github.com/jbancroft/ConcertumDemo/internal/democluster"
 	minuetsql "github.com/jbancroft/ConcertumDemo/minuet-sql"
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
 const (
-	nodeMemorySize = 2 << 20 // 2 MiB per node.
-	sqlHostID      = 2       // Same SQL storage node as cmd/demo.
+	nodeMemorySize = 2 << 20 // Use the default memnode's 2 MiB region.
+	sqlHostID      = 1
+	maxTCPPort     = 1<<16 - 1
+	flushTimeout   = 10 * time.Second
 	maxLineBytes   = 64 << 10
 )
 
@@ -53,31 +57,34 @@ func main() {
 func run(ctx context.Context, args []string, input io.ReadCloser, out, errOut io.Writer) (err error) {
 	flags := flag.NewFlagSet("repl", flag.ContinueOnError)
 	flags.SetOutput(errOut)
-	executable := flags.String("memnode-bin", "bin/memnode", "path to the prebuilt memnode executable")
-	dir := flags.String("data-dir", "", "save and reopen data in this directory; empty starts in memory")
+	host := flags.String("host", "127.0.0.1", "memnode host (node ID 1, at least 2 MiB)")
+	port := flags.Int("port", 7001, "memnode RPC port")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("expected flags only; enter SQL at the prompt")
 	}
-	cluster, err := democluster.Start(ctx, *executable, *dir, nodeMemorySize)
-	if err != nil {
-		return err
+	if *host == "" || *port < 1 || *port > maxTCPPort {
+		return fmt.Errorf("expected a nonempty host and a port between 1 and %d", maxTCPPort)
 	}
-	defer func() { err = errors.Join(err, cluster.Close()) }()
+	address := net.JoinHostPort(*host, strconv.Itoa(*port))
+	client := sinfoniaclient.NewClient(map[uint32]sinfoniaclient.NodeConfig{
+		sqlHostID: {RPCAddress: address},
+	})
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), flushTimeout)
+		defer cancel()
+		err = errors.Join(err, client.FlushPendingCommits(flushCtx))
+	}()
 	engine, err := minuetsql.NewEngine(minuetsql.Config{
-		HostId: sqlHostID, TxnClient: cluster.Client, MemorySize: nodeMemorySize,
+		HostId: sqlHostID, TxnClient: client, MemorySize: nodeMemorySize,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("open SQL on memnode %s: %w", address, err)
 	}
 	fmt.Fprintln(out, "Concertum SQL REPL")
-	if *dir == "" {
-		fmt.Fprintln(out, "Fresh in-memory session; data is discarded on exit.")
-	} else {
-		fmt.Fprintf(out, "Data directory: %s\n", *dir)
-	}
+	fmt.Fprintf(out, "Connected to memnode %d at %s.\n", sqlHostID, address)
 	fmt.Fprintln(out, "Type .help for examples, .quit to exit.")
 	return repl(ctx, engine.Exec, input, out)
 }
