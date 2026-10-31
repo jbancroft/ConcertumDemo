@@ -1,6 +1,8 @@
 # ConcertumDemo
 
-A Go demo of distributed transactions, B+tree indexing, and SQL.
+A Go demo of distributed transactions, B+tree indexing, and SQL, based on
+[Sinfonia](https://read.seas.harvard.edu/~kohler/class/08w-dsi/aguilera07sinfonia.pdf)
+and [Minuet](https://www.cs.cornell.edu/~sowell/2012-VLDB-Minuet.pdf).
 
 [Sinfonia/Minuet crash course](docs/crash-course.md) · [Design notes and limitations](docs/design.md)
 
