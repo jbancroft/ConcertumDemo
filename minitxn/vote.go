@@ -1,9 +1,9 @@
 package minitxn
 
 // Vote is a participant's answer to a prepare request.
-// Keep the numeric values stable: existing wire messages use VoteOk == 0.
 type Vote int32
 
+// Ordered by wire value; keep these numeric values stable (VoteOk == 0).
 const (
 	VoteOk Vote = iota
 	VoteBadLock

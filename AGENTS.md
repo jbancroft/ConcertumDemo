@@ -16,6 +16,9 @@ Prioritize clear code, correct demonstrated behavior, and easy local execution.
 - Name constants for non-obvious protocol values, storage layouts, limits,
   and durations. Self-explanatory literals and simple example data may stay inline.
 
+- Alphabetize names in `const` and `var` blocks, ignoring case, unless a comment
+  at the top specifies another order.
+
 - Consult docs/design.md when changing transaction semantics, storage formats,
   recovery, or index invariants. Keep deliberate limitations documented.
 

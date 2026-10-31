@@ -12,10 +12,10 @@ import (
 
 const (
 	baselineJournalDirName  = ".baseline-install"
-	baselineTempPrefix      = ".baseline-install.tmp-"
 	baselineRestorePrefix   = ".baseline-restore.tmp-"
-	baselineTransferPrefix  = ".baseline-transfer-"
+	baselineTempPrefix      = ".baseline-install.tmp-"
 	baselineTombstonePrefix = ".baseline-install.done-"
+	baselineTransferPrefix  = ".baseline-transfer-"
 )
 
 var ErrBaselineInstallInProgress = errors.New("replication baseline install recovery is required")

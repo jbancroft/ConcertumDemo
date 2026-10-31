@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	baselineTransferTempPrefix       = ".baseline-transfer-"
-	baselineReplayTransferTempPrefix = ".baseline-transfer-replay-"
 	baselineArtifactImage            = "image"
 	baselineArtifactReplay           = "replay"
+	baselineReplayTransferTempPrefix = ".baseline-transfer-replay-"
+	baselineTransferTempPrefix       = ".baseline-transfer-"
 )
 
 func (n *Participant) SetReplicationBaselineBoundaryHookForTest(fn func(phase string) error) {

@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	fileCopyBufferSize     = 1 << 20
-	defaultRedoBatchWindow = 2 * time.Millisecond
 	defaultRedoBatchSize   = 32
+	defaultRedoBatchWindow = 2 * time.Millisecond
+	fileCopyBufferSize     = 1 << 20
 	redoAppendQueueSize    = 4096
 	redoBatchCapacity      = 64
 	redoTempPrefix         = ".redo.log.tmp-"

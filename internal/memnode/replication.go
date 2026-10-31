@@ -13,6 +13,7 @@ import (
 
 type ReplicationMode int
 
+// Ordered by numeric value, with standalone mode as the zero value.
 const (
 	ModeSingle ReplicationMode = iota
 	ModeReplPrimary

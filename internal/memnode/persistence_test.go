@@ -158,6 +158,7 @@ func TestOnePCOutOfBoundsWriteDoesNotPersistSuccess(t *testing.T) {
 }
 
 func TestDurableLargeWritesSurviveRestart(t *testing.T) {
+	// Ordered by dependency: write sizes precede the combined memory size.
 	const (
 		firstWriteSize  = 64 << 10
 		secondWriteSize = 256 << 10

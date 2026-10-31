@@ -24,8 +24,8 @@ func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	const (
-		largeWriteSize  = 64 << 10
 		largerWriteSize = 256 << 10
+		largeWriteSize  = 64 << 10
 	)
 	var want []storage.RedoLogItem
 	for i, size := range []int{largeWriteSize, largerWriteSize, 1} {

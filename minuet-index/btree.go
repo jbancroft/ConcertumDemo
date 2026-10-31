@@ -13,39 +13,39 @@ import (
 )
 
 const (
-	superblockSize      = 64
-	pageSize            = 512
-	superMagic          = uint32(0x4d4e5433) // ASCII "MNT3": marks the bounded tree metadata.
-	pageMagic           = uint32(0x50414745) // ASCII "PAGE": marks a node's page.
-	maxLeafKeys         = 8
-	maxInternalKeys     = 8
 	defaultMaxRetries   = 8
 	defaultRetryBackoff = time.Millisecond
+	maxInternalKeys     = 8
+	maxLeafKeys         = 8
+	pageMagic           = uint32(0x50414745) // ASCII "PAGE": marks a node's page.
+	pageSize            = 512
+	superblockSize      = 64
+	superMagic          = uint32(0x4d4e5433) // ASCII "MNT3": marks the bounded tree metadata.
 )
 
 // Byte offsets and element sizes in the superblock and node pages.
 const (
-	superVersionOffset    = 8
-	superRootPageOffset   = 16
+	childIDSize           = 4
+	keySize               = 8
+	nodeChildCountOffset  = 12
+	nodeHeaderSize        = 24
+	nodeIDOffset          = 4
+	nodeKeyCountOffset    = 10
+	nodeLeafFlagOffset    = 8
+	nodeNextLeafOffset    = 16
 	superNextPageOffset   = 20
 	superRegionSizeOffset = 24
-	nodeIDOffset          = 4
-	nodeLeafFlagOffset    = 8
-	nodeKeyCountOffset    = 10
-	nodeChildCountOffset  = 12
-	nodeNextLeafOffset    = 16
-	nodeHeaderSize        = 24
-	keySize               = 8
+	superRootPageOffset   = 16
+	superVersionOffset    = 8
 	valueSize             = 8
-	childIDSize           = 4
 )
 
 var (
-	ErrNotFound      = errors.New("minuet-index: key not found")
 	ErrBusy          = errors.New("minuet-index: retry budget exhausted")
-	ErrRegionFull    = errors.New("minuet-index: region full")
-	ErrInvalidRegion = errors.New("minuet-index: invalid region")
 	ErrCorrupt       = errors.New("minuet-index: corrupt tree metadata")
+	ErrInvalidRegion = errors.New("minuet-index: invalid region")
+	ErrNotFound      = errors.New("minuet-index: key not found")
+	ErrRegionFull    = errors.New("minuet-index: region full")
 )
 
 // MinRegionSize holds a superblock and one leaf page.

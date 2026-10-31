@@ -5,9 +5,9 @@ import "encoding/gob"
 const SQLRPCVersion1 uint16 = 1
 
 const (
+	MethodSQLDescribeCapabilities = "sqld.describe_capabilities"
 	MethodSQLExec                 = "sqld.exec"
 	MethodSQLPing                 = "sqld.ping"
-	MethodSQLDescribeCapabilities = "sqld.describe_capabilities"
 )
 
 type SQLExecRequest struct {

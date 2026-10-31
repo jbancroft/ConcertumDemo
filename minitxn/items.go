@@ -39,6 +39,7 @@ type ReadKey = ReadItem
 
 type Status int
 
+// Ordered by numeric value, with unknown as the zero value.
 const (
 	StatusUnknown Status = iota
 	StatusCommitted

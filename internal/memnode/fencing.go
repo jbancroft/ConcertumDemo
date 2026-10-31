@@ -11,20 +11,19 @@ import (
 )
 
 const (
-	fencingGenerationPrefix = "fencing-generation-"
-	fencingGenerationSuffix = ".state"
-
-	fencingCheckpointBeforeTempCreate     = "before_temp_create"
-	fencingCheckpointAfterTempCreate      = "after_temp_create"
-	fencingCheckpointAfterWrite           = "after_write"
-	fencingCheckpointAfterTempSync        = "after_temp_sync"
-	fencingCheckpointAfterPublish         = "after_publish"
 	fencingCheckpointAfterNamespaceSync   = "after_namespace_sync"
-	fencingCheckpointBeforeRetention      = "before_retention"
+	fencingCheckpointAfterPublish         = "after_publish"
+	fencingCheckpointAfterRetention       = "after_retention"
 	fencingCheckpointAfterRetentionRemove = "after_retention_remove"
 	fencingCheckpointAfterRetentionSync   = "after_retention_sync"
-	fencingCheckpointAfterRetention       = "after_retention"
+	fencingCheckpointAfterTempCreate      = "after_temp_create"
+	fencingCheckpointAfterTempSync        = "after_temp_sync"
+	fencingCheckpointAfterWrite           = "after_write"
 	fencingCheckpointBeforeResponse       = "before_response"
+	fencingCheckpointBeforeRetention      = "before_retention"
+	fencingCheckpointBeforeTempCreate     = "before_temp_create"
+	fencingGenerationPrefix               = "fencing-generation-"
+	fencingGenerationSuffix               = ".state"
 )
 
 const maxRetainedFencingGenerations = 3

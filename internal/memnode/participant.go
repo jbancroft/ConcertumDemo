@@ -16,8 +16,8 @@ import (
 var ErrOutOfBounds = errors.New("out of bounds")
 
 const (
-	defaultGlobalBarrierLeaseTTL = 30 * time.Second
 	baselineChunkSize            = 1 << 20
+	defaultGlobalBarrierLeaseTTL = 30 * time.Second
 	maxBaselineBytes             = uint64(1) << 40
 )
 

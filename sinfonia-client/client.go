@@ -15,17 +15,17 @@ type ReadKey = minitxn.ReadKey
 type Status = minitxn.Status
 
 const (
-	StatusUnknown   = minitxn.StatusUnknown
-	StatusCommitted = minitxn.StatusCommitted
 	StatusAborted   = minitxn.StatusAborted
+	StatusCommitted = minitxn.StatusCommitted
+	StatusUnknown   = minitxn.StatusUnknown
 )
+
+// ErrTransactionAborted reports a definite rejection of a Read or Write call.
+var ErrTransactionAborted = client.ErrTransactionAborted
 
 // ErrUnknownOutcome reports an uncertain transaction result. The operation may
 // have committed; callers must not retry writes blindly.
 var ErrUnknownOutcome = client.ErrUnknownOutcome
-
-// ErrTransactionAborted reports a definite rejection of a Read or Write call.
-var ErrTransactionAborted = client.ErrTransactionAborted
 
 type CompareItem = minitxn.CompareItem
 type ReadItem = minitxn.ReadItem

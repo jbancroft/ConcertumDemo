@@ -9,26 +9,26 @@ import (
 
 const (
 	catalogAddr               = 0
-	catalogSize               = 512
-	catalogMagic              = uint32(0x4d53514c) // MSQL
 	catalogFormatVersion      = uint32(2)
 	catalogHeaderSize         = 32
-	catalogRecordSize         = 80
-	catalogMaxRecords         = (catalogSize - catalogHeaderSize) / catalogRecordSize
+	catalogMagic              = uint32(0x4d53514c) // MSQL
 	catalogMaxNameLen         = catalogRecordSize - catalogRecordNameOffset
-	minuetIndexSuperblockSize = 64
+	catalogMaxRecords         = (catalogSize - catalogHeaderSize) / catalogRecordSize
+	catalogRecordSize         = 80
+	catalogSize               = 512
 	defaultCatalogNextBase    = 1024
+	minuetIndexSuperblockSize = 64
 )
 
 // Byte offsets in the catalog header and table records.
 const (
-	catalogVersionOffset          = 4
-	catalogNextTableIDOffset      = 8
 	catalogNextBaseAddrOffset     = 16
-	catalogTableCountOffset       = 24
+	catalogNextTableIDOffset      = 8
 	catalogRecordBaseAddrOffset   = 8
-	catalogRecordRegionSizeOffset = 16
 	catalogRecordNameOffset       = 24
+	catalogRecordRegionSizeOffset = 16
+	catalogTableCountOffset       = 24
+	catalogVersionOffset          = 4
 )
 
 type catalogState struct {

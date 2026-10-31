@@ -9,13 +9,13 @@ import (
 )
 
 const (
-	benchSeedPrimary     int64 = 20260414
-	benchSeedSplitHeavy  int64 = 20260415
-	benchDatasetSmall          = 256
-	benchDatasetMedium         = 512
 	benchDatasetLarge          = 1024
+	benchDatasetMedium         = 512
+	benchDatasetSmall          = 256
 	benchRangeSpanNarrow       = 64
 	benchRangeSpanWide         = 512
+	benchSeedPrimary     int64 = 20260414
+	benchSeedSplitHeavy  int64 = 20260415
 )
 
 func benchmarkIndex(b *testing.B) (*BTree, context.Context) {

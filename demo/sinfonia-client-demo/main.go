@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	demoTimeout    = time.Minute
 	balanceAddress = 0 // Each node holds one balance at byte offset zero.
 	balanceSize    = 8 // Balances are big-endian uint64 values.
+	demoTimeout    = time.Minute
 )
 
 func main() {

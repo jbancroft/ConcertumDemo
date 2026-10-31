@@ -98,8 +98,8 @@ type ReplicateCommitDecisionResponse struct {
 type ReplayRecordKind string
 
 const (
-	ReplayRecordPrepare ReplayRecordKind = "prepare"
 	ReplayRecordOnePC   ReplayRecordKind = "one_pc"
+	ReplayRecordPrepare ReplayRecordKind = "prepare"
 )
 
 // ReplicateReplayRecordRequest sends a reply to a synced replica. The replica
@@ -119,9 +119,9 @@ type ReplicateReplayRecordResponse struct {
 type ReplicationRole string
 
 const (
-	ReplicationRoleSingle  ReplicationRole = "single"
 	ReplicationRolePrimary ReplicationRole = "primary"
 	ReplicationRoleReplica ReplicationRole = "replica"
+	ReplicationRoleSingle  ReplicationRole = "single"
 )
 
 type ConfigureReplicationRequest struct {
@@ -303,6 +303,7 @@ type QueryInDoubtResponse struct {
 
 type TidOutcome int32
 
+// Ordered by wire value, with unknown as the zero value.
 const (
 	TidOutcomeUnknown TidOutcome = iota
 	TidOutcomeCommit

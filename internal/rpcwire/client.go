@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	defaultMaxIdle     = 4
-	defaultDialTimout  = 5 * time.Second
 	defaultCallTimeout = 5 * time.Second
+	defaultDialTimout  = 5 * time.Second
+	defaultMaxIdle     = 4
 	maxFrameSize       = 64 << 20
 )
 

@@ -12,9 +12,9 @@ import (
 
 const (
 	defaultExecuteTimeout    = 5 * time.Second
-	resolutionTimeout        = time.Second
 	resolutionAttemptTimeout = 250 * time.Millisecond
 	resolutionRetryDelay     = 25 * time.Millisecond
+	resolutionTimeout        = time.Second
 )
 
 // Resolve checks the original attempt; it never executes the mutation again.

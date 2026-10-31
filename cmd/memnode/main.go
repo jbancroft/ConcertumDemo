@@ -23,9 +23,9 @@ import (
 
 const (
 	defaultMemorySize = 2 << 20 // 2 MiB
-	recoveryTimeout   = 30 * time.Second
-	recoveryRetry     = 100 * time.Millisecond
 	peerTimeout       = 5 * time.Second
+	recoveryRetry     = 100 * time.Millisecond
+	recoveryTimeout   = 30 * time.Second
 	shutdownTimeout   = 5 * time.Second
 )
 

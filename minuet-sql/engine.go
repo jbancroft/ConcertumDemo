@@ -22,16 +22,16 @@ const (
 )
 
 var (
-	ErrTableExists    = errors.New("minuet-sql: table already exists")
-	ErrCatalogFull    = errors.New("minuet-sql: catalog full")
-	ErrStorageFull    = errors.New("minuet-sql: no space for another table region")
-	ErrTableFull      = errors.New("minuet-sql: table region full")
-	ErrInvalidCatalog = errors.New("minuet-sql: invalid catalog")
-	ErrTableNotFound  = errors.New("minuet-sql: table not found")
-	ErrRowNotFound    = errors.New("minuet-sql: row not found")
-	ErrDuplicateKey   = errors.New("minuet-sql: duplicate key")
-	ErrUnsupportedSQL = errors.New("minuet-sql: unsupported SQL")
 	ErrBusy           = errors.New("minuet-sql: retry budget exhausted")
+	ErrCatalogFull    = errors.New("minuet-sql: catalog full")
+	ErrDuplicateKey   = errors.New("minuet-sql: duplicate key")
+	ErrInvalidCatalog = errors.New("minuet-sql: invalid catalog")
+	ErrRowNotFound    = errors.New("minuet-sql: row not found")
+	ErrStorageFull    = errors.New("minuet-sql: no space for another table region")
+	ErrTableExists    = errors.New("minuet-sql: table already exists")
+	ErrTableFull      = errors.New("minuet-sql: table region full")
+	ErrTableNotFound  = errors.New("minuet-sql: table not found")
+	ErrUnsupportedSQL = errors.New("minuet-sql: unsupported SQL")
 )
 
 type Row struct {

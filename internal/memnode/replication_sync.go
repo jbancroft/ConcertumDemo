@@ -11,11 +11,11 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
-var ErrReplicationBaselineRequiresGlobalLock = errors.New("replication baseline requires the global write lock")
+var ErrReplicationBaselineInProgress = errors.New("replication baseline installation in progress")
 
 var ErrReplicationBaselineLease = errors.New("replication baseline global lock lease is invalid")
 
-var ErrReplicationBaselineInProgress = errors.New("replication baseline installation in progress")
+var ErrReplicationBaselineRequiresGlobalLock = errors.New("replication baseline requires the global write lock")
 
 type baselineTransfer struct {
 	sessionID        string

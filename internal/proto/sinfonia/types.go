@@ -39,11 +39,11 @@ func (i WriteItem) Size() uint64   { return uint64(len(i.Data)) }
 type Vote = minitxn.Vote
 
 const (
-	VoteUnknown       = minitxn.VoteUnknown
-	VoteOk            = minitxn.VoteOk
-	VoteBadLock       = minitxn.VoteBadLock
-	VoteBadForced     = minitxn.VoteBadForced
 	VoteBadCmp        = minitxn.VoteBadCmp
-	VoteBadStaleEpoch = minitxn.VoteBadStaleEpoch
+	VoteBadForced     = minitxn.VoteBadForced
 	VoteBadInternal   = minitxn.VoteBadInternal
+	VoteBadLock       = minitxn.VoteBadLock
+	VoteBadStaleEpoch = minitxn.VoteBadStaleEpoch
+	VoteOk            = minitxn.VoteOk
+	VoteUnknown       = minitxn.VoteUnknown
 )

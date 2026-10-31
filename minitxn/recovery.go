@@ -30,9 +30,9 @@ type RecoveryHandle struct {
 	Reads        []RecoveryRead
 }
 
-var ErrUnknownOutcome = errors.New("sinfonia: transaction outcome unknown; operation may have committed")
 var ErrOutcomeExpired = errors.New("sinfonia: transaction evidence expired")
 var ErrReadResultsUnavailable = errors.New("sinfonia: committed transaction's original read results unavailable")
+var ErrUnknownOutcome = errors.New("sinfonia: transaction outcome unknown; operation may have committed")
 
 // UnknownOutcomeError carries the handle needed to resolve an uncertain write.
 // It survives wrapping through the index and SQL layers via errors.As.

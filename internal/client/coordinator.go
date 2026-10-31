@@ -21,13 +21,13 @@ import (
 var coordinatorIDFallback atomic.Uint64
 
 const (
-	defaultMaxRetries  = 5
-	defaultBaseBackoff = 5 * time.Millisecond
-	defaultMaxBackoff  = 100 * time.Millisecond
-	prepareQueueSize   = 256
-	commitQueueSize    = 1024
 	commitBatchDelay   = 2 * time.Millisecond
 	commitBatchSize    = 64
+	commitQueueSize    = 1024
+	defaultBaseBackoff = 5 * time.Millisecond
+	defaultMaxBackoff  = 100 * time.Millisecond
+	defaultMaxRetries  = 5
+	prepareQueueSize   = 256
 )
 
 // Participant is the node interface used by the coordinator.

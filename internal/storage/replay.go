@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	replayKindPrepare = "prepare"
 	replayKindOnePC   = "one_pc"
+	replayKindPrepare = "prepare"
 	replayTempPrefix  = ".replay.log.tmp-"
 )
 
@@ -335,9 +335,9 @@ func loadReplayStoreRecords(path string) (map[string]replayRecord, error) {
 	records := make(map[string]replayRecord)
 	reader := bufio.NewReader(f)
 	var (
-		validLen  int64
 		lastLine  []byte
 		lastStart int64
+		validLen  int64
 	)
 	for {
 		line, readErr := reader.ReadBytes('\n')

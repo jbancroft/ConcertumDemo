@@ -22,11 +22,11 @@ import (
 )
 
 const (
-	nodeMemorySize = 2 << 20 // Use the default memnode's 2 MiB region.
-	sqlHostID      = 1
-	maxTCPPort     = 1<<16 - 1
 	flushTimeout   = 10 * time.Second
 	maxLineBytes   = 64 << 10
+	maxTCPPort     = 1<<16 - 1
+	nodeMemorySize = 2 << 20 // Use the default memnode's 2 MiB region.
+	sqlHostID      = 1
 )
 
 const helpText = `Enter one SQL statement per line; a trailing semicolon is optional.

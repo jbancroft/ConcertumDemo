@@ -9,9 +9,9 @@ import (
 )
 
 const (
-	recoveryScanInterval      = 250 * time.Millisecond
 	abandonedTransactionAge   = time.Second
 	backgroundRecoveryTimeout = time.Second
+	recoveryScanInterval      = 250 * time.Millisecond
 )
 
 // RunRecovery helps finish old prepared transactions until ctx is cancelled.
