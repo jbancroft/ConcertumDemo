@@ -35,6 +35,9 @@ go run ./cmd/memnode -id 1 -listen 127.0.0.1:7001
 Add `-data-dir tmp/node-1` for persistence and `-peer ID=ADDRESS` for recovery peers.
 Use a separate ID and data directory for each node. Ctrl-C stops the node.
 
+Malformed decision-log records block startup with an error identifying the file
+and line. The log is preserved for manual repair; automatic repair is not implemented.
+
 ## Minuet
 
 Run the combined transaction, index, SQL, and durable-restart demo:

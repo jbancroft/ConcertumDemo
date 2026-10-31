@@ -140,15 +140,16 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 	if err := retainFencingGenerations(dir, nil); err != nil {
 		return nil, fmt.Errorf("retain fencing generations during startup: %w", err)
 	}
+	// Reject malformed decisions before opening the image or starting the redo appender.
+	decided, err := storage.OpenDecidedTransactionLog(dir)
+	if err != nil {
+		return nil, err
+	}
 	disk, mem, err := storage.OpenDiskImage(dir, size)
 	if err != nil {
 		return nil, err
 	}
 	redoLog, err := storage.OpenRedoLog(dir)
-	if err != nil {
-		return nil, err
-	}
-	decided, err := storage.OpenDecidedTransactionLog(dir)
 	if err != nil {
 		return nil, err
 	}

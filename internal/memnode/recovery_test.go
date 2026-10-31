@@ -69,6 +69,85 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	}
 }
 
+func TestRecoveryRejectsTornCommitRecord(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	aDir, bDir := filepath.Join(root, "a"), filepath.Join(root, "b")
+	a, err := memnode.NewDurableParticipant(1, 64, aDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	b, err := memnode.NewDurableParticipant(2, 64, bDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.Close() })
+
+	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+	for _, participant := range []struct {
+		node *memnode.Participant
+		id   uint32
+	}{{a, 1}, {b, 2}} {
+		if err := participant.node.Recover(ctx); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := participant.node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
+			TID: tid, Participants: []uint32{1, 2}, HasWrites: true,
+			WriteItems: []sinfonia.WriteItem{{MemID: participant.id, Addr: 0, Data: []byte{7}}},
+		})
+		if err != nil || resp.Vote != sinfonia.VoteOk {
+			t.Fatalf("prepare participant %d: response=%+v err=%v", participant.id, resp, err)
+		}
+	}
+	if resp, err := a.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: true}); err != nil || !resp.Ack {
+		t.Fatalf("commit participant A: response=%+v err=%v", resp, err)
+	}
+	if got, err := a.ReadBytesForTest(0, 1); err != nil || !bytes.Equal(got, []byte{7}) {
+		t.Fatalf("participant A did not apply its commit: value=%v err=%v", got, err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a torn append by copying A's decision into B's log with the
+	// final "commit\n" cut short to "comm". This is file corruption injection,
+	// not a physical power-loss test; B's prepared redo remains intact.
+	record, err := os.ReadFile(filepath.Join(aDir, "decided.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasSuffix(record, []byte(" commit\n")) {
+		t.Fatalf("expected a complete commit record, got %q", record)
+	}
+	if err := os.WriteFile(filepath.Join(bDir, "decided.log"), bytes.TrimSuffix(record, []byte("it\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Malformed records must block startup, either while opening storage or
+	// during recovery. They must never become authoritative abort evidence.
+	// Manual repair is acceptable for now. Future recovery could automate safe
+	// torn-tail repair using intact redo and peer decision evidence.
+	restarted, err := memnode.NewDurableParticipant(2, 64, bDir)
+	if err != nil {
+		return
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	restarted.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	recoveryErr := restarted.Recover(ctx)
+	status, statusErr := restarted.QueryTidStatus(ctx, sinfonia.QueryTidStatusRequest{TID: tid})
+	if statusErr == nil && status.KnownDecision && status.Outcome == sinfonia.TidOutcomeAbort {
+		t.Errorf("torn commit record became a known abort: %+v", status)
+	}
+	if recoveryErr == nil {
+		aValue, aErr := a.ReadBytesForTest(0, 1)
+		bValue, bErr := restarted.ReadBytesForTest(0, 1)
+		t.Fatalf("recovery accepted a torn commit record: A=%v (err=%v), B=%v (err=%v), B status=%+v (err=%v); want startup corruption error",
+			aValue, aErr, bValue, bErr, status, statusErr)
+	}
+	assertParticipantReady(t, restarted, false)
+}
+
 func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

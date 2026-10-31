@@ -622,15 +622,31 @@ func openOutcomeStore(path string) (*DecidedTransactionLog, error) {
 	defer f.Close()
 	m := map[string]bool{}
 	s := bufio.NewScanner(f)
+	lineNumber := 0
 	for s.Scan() {
-		parts := strings.Split(strings.TrimSpace(s.Text()), " ")
-		if len(parts) != 2 {
+		lineNumber++
+		parts := strings.Fields(s.Text())
+		if len(parts) == 0 {
 			continue
 		}
-		m[parts[0]] = parts[1] == "commit"
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("%s:%d: invalid decision record: expected transaction ID and outcome", path, lineNumber)
+		}
+		tid, ok := parseTidKey(parts[0])
+		if !ok {
+			return nil, fmt.Errorf("%s:%d: invalid transaction ID %q", path, lineNumber, parts[0])
+		}
+		switch parts[1] {
+		case "commit":
+			m[tidKey(tid)] = true
+		case "abort":
+			m[tidKey(tid)] = false
+		default:
+			return nil, fmt.Errorf("%s:%d: invalid transaction decision %q", path, lineNumber, parts[1])
+		}
 	}
 	if err := s.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s:%d: read decision record: %w", path, lineNumber+1, err)
 	}
 	return &DecidedTransactionLog{path: path, outcomes: m}, nil
 }
