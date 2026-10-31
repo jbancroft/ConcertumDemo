@@ -23,6 +23,7 @@ func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer log.Close()
 	const (
 		largerWriteSize = 256 << 10
 		largeWriteSize  = 64 << 10
@@ -47,6 +48,7 @@ func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen accepted large records: %v", err)
 	}
+	defer reopened.Close()
 	if !reflect.DeepEqual(reopened.Entries(), want) {
 		t.Fatal("reopened redo log changed record order, metadata, or binary payloads")
 	}
@@ -85,6 +87,7 @@ func TestRedoLogReaderEOFAndMalformedRecords(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer log.Close()
 			var ids []uint64
 			for _, entry := range log.Entries() {
 				ids = append(ids, entry.TransactionId.Counter)
@@ -102,6 +105,7 @@ func TestRedoLogBatchingReducesFsyncCallsAndPreservesDurability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer log.Close()
 	log.ConfigureBatchingForTest(3*time.Millisecond, 64)
 
 	var fsyncCalls atomic.Int64
@@ -125,6 +129,11 @@ func TestRedoLogBatchingReducesFsyncCallsAndPreservesDurability(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+	for range 2 {
+		if err := log.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if got := fsyncCalls.Load(); got >= entries {
 		t.Fatalf("expected batching to reduce fsync calls; got=%d entries=%d", got, entries)
@@ -134,6 +143,7 @@ func TestRedoLogBatchingReducesFsyncCallsAndPreservesDurability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer reloaded.Close()
 	if got := len(reloaded.Entries()); got != entries {
 		t.Fatalf("expected %d durable entries, got %d", entries, got)
 	}
@@ -147,6 +157,7 @@ func TestRedoLogCompactionReplacesCompleteFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer log.Close()
 			for i := uint64(1); i <= 2; i++ {
 				if err := log.AddItem(storage.RedoLogItem{TransactionId: sinfonia.TransactionID{Counter: i}}); err != nil {
 					t.Fatal(err)
@@ -183,6 +194,7 @@ func TestRedoLogCompactionReplacesCompleteFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer reopened.Close()
 			entries := reopened.Entries()
 			if len(entries) != 3-count {
 				t.Fatalf("reopened entries = %d, want %d", len(entries), 3-count)

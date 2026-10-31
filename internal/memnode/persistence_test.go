@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,50 @@ import (
 )
 
 // Durable transaction records, write boundaries, and uncertain persistence failures.
+
+func TestDurableParticipantReleasesAppenderOnCloseAndFailedOpen(t *testing.T) {
+	appenderCount := func() int {
+		stacks := make([]byte, 1<<20)
+		stacks = stacks[:runtime.Stack(stacks, true)]
+		return strings.Count(string(stacks), "(*RedoLog).runAppender(")
+	}
+	for _, blockedFile := range []string{"", "redo.log", "forced_abort.log", "replay.log"} {
+		t.Run("blocked="+blockedFile, func(t *testing.T) {
+			before := appenderCount()
+			dir := t.TempDir()
+			if blockedFile != "" {
+				if err := os.Mkdir(filepath.Join(dir, blockedFile), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 5 {
+				node, err := memnode.NewDurableParticipant(1, 16, dir)
+				if blockedFile != "" {
+					if err == nil {
+						_ = node.Close()
+						t.Fatal("expected constructor failure")
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				for range 2 {
+					if err := node.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			deadline := time.Now().Add(time.Second)
+			for appenderCount() > before && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if after := appenderCount(); after > before {
+				t.Fatalf("redo appenders retained: before=%d after=%d", before, after)
+			}
+		})
+	}
+}
 
 func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
 	ctx := context.Background()
@@ -379,6 +424,7 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 					writes = append(writes, sinfonia.WriteItem{MemID: 2, Addr: 0, Data: []byte("B")})
 				}
 				coord := client.NewCoordinator(nodes)
+				defer coord.Close()
 				result := coord.ExecuteAndCommit(ctx, nil, nil, writes)
 				if !result.UnknownOutcome || result.Committed || result.Recovery == nil || result.TransportErr == nil {
 					t.Fatalf("ambiguous persistence must survive automatic resolution as unknown: %+v", result)
@@ -425,7 +471,9 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 						t.Fatalf("resynchronization lost committed write: %q, %v", got, err)
 					}
 				}
-				resolved := client.NewCoordinator(map[uint32]client.Participant{1: restarted, 2: other}).Resolve(ctx, *result.Recovery)
+				resolver := client.NewCoordinator(map[uint32]client.Participant{1: restarted, 2: other})
+				defer resolver.Close()
+				resolved := resolver.Resolve(ctx, *result.Recovery)
 				if resolved.UnknownOutcome || !resolved.Committed || resolved.TransportErr != nil {
 					t.Fatalf("same attempt did not resolve after restart: %+v", resolved)
 				}
@@ -447,6 +495,7 @@ func TestRedoFailureBeforeWriteResolvesAbortAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: node})
+	defer coord.Close()
 	result := coord.ExecuteAndCommit(ctx, nil, nil, []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}})
 	if !result.UnknownOutcome || result.Recovery == nil {
 		t.Fatalf("expected conservative uncertainty: %+v", result)
@@ -459,7 +508,9 @@ func TestRedoFailureBeforeWriteResolvesAbortAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted := newRecoveredFailureTestNode(t, 1, dir)
-	resolved := client.NewCoordinator(map[uint32]client.Participant{1: restarted}).Resolve(ctx, *result.Recovery)
+	resolver := client.NewCoordinator(map[uint32]client.Participant{1: restarted})
+	defer resolver.Close()
+	resolved := resolver.Resolve(ctx, *result.Recovery)
 	if resolved.UnknownOutcome || resolved.Committed || resolved.TransportErr != nil {
 		t.Fatalf("missing redo must resolve to abort after reopening: %+v", resolved)
 	}

@@ -2,6 +2,8 @@ package sinfoniaclient
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/client"
@@ -50,6 +52,9 @@ type TxnClient interface {
 // Client coordinates minitransactions across configured memory nodes.
 type Client struct {
 	coordinator *client.Coordinator
+	nodes       []*client.RPCParticipant
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 type NodeConfig struct {
@@ -59,15 +64,32 @@ type NodeConfig struct {
 
 // NewClient configures the coordinator from explicit memory node addresses.
 func NewClient(config map[uint32]NodeConfig) *Client {
+	c := &Client{}
 	nodes := make(map[uint32]client.Participant, len(config))
 	generations := make(map[uint32]uint64, len(config))
 	for id, node := range config {
-		nodes[id] = client.NewRPCParticipantWithGeneration(node.RPCAddress, nil, defaultNodeTimeout, node.Generation)
+		participant := client.NewRPCParticipantWithGeneration(node.RPCAddress, nil, defaultNodeTimeout, node.Generation)
+		nodes[id] = participant
+		c.nodes = append(c.nodes, participant)
 		generations[id] = node.Generation
 	}
 	coord := client.NewCoordinator(nodes)
 	coord.SetGenerations(generations)
-	return &Client{coordinator: coord}
+	c.coordinator = coord
+	return c
+}
+
+// Close drains queued decisions and releases workers and RPC connections.
+// Call after all client calls have returned. Only repeated Close calls are allowed
+// afterward. Delivery errors do not undo a transaction's known decision.
+func (c *Client) Close() error {
+	c.closeOnce.Do(func() {
+		c.closeErr = c.coordinator.Close()
+		for _, node := range c.nodes {
+			c.closeErr = errors.Join(c.closeErr, node.Close())
+		}
+	})
+	return c.closeErr
 }
 
 // Read executes a read-only minitransaction. Separate calls are separate snapshots.

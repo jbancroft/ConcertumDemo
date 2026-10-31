@@ -18,12 +18,48 @@ import (
 
 // Asynchronous commit and abort delivery, batching fallback, flushing, and interrupted delivery.
 
+func TestCoordinatorCloseDrainsDecisions(t *testing.T) {
+	for _, mode := range []string{"commit", "abort", "delivery failure"} {
+		t.Run(mode, func(t *testing.T) {
+			n1 := memnode.NewParticipant(16)
+			n2 := memnode.NewParticipant(16)
+			nodes := map[uint32]Participant{1: n1, 2: n2}
+			if mode == "delivery failure" {
+				nodes[2] = &failingCommitNode{Participant: n2}
+			}
+			coord := NewCoordinator(nodes)
+			defer coord.Close()
+			var compares []sinfonia.CmpItem
+			want := "A"
+			if mode == "abort" {
+				compares = []sinfonia.CmpItem{{MemID: 2, Data: []byte("stale")}}
+				want = "\x00"
+			}
+			result := coord.ExecuteAndCommit(context.Background(), compares, nil, twoParticipantWrites())
+			if result.Committed != (mode != "abort") || result.UnknownOutcome {
+				t.Fatalf("unexpected decision: %+v", result)
+			}
+			for range 2 {
+				if err := coord.Close(); (err != nil) != (mode == "delivery failure") {
+					t.Fatalf("close error=%v for %s", err, mode)
+				}
+			}
+			// Delivery must finish at the reachable node and release its locks.
+			got, err := readParticipant(context.Background(), n1, 8, 1)
+			if err != nil || string(got) != want {
+				t.Fatalf("value after Close=%q, want %q; error=%v", got, want, err)
+			}
+		})
+	}
+}
+
 func TestFlushPendingCommitsReportsEarlierTimerDeliveryFailure(t *testing.T) {
 	failing := &failingCommitNode{Participant: memnode.NewParticipant(16)}
 	coord := NewCoordinator(map[uint32]Participant{
 		1: failing,
 		2: memnode.NewParticipant(16),
 	})
+	defer coord.Close()
 	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{
 		{MemID: 1, Addr: 0, Data: []byte("A")},
 		{MemID: 2, Addr: 0, Data: []byte("B")},
@@ -45,6 +81,7 @@ func TestFlushPendingCommitsReportsUnacknowledgedFallbackDelivery(t *testing.T) 
 		1: unacknowledged,
 		2: memnode.NewParticipant(16),
 	})
+	defer coord.Close()
 	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{
 		{MemID: 1, Addr: 0, Data: []byte("A")},
 		{MemID: 2, Addr: 0, Data: []byte("B")},
@@ -68,6 +105,7 @@ func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T
 	n1 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
 	n2 := newPhaseTwoNode(memnode.NewParticipant(64), gate)
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+	defer func() { release(); _ = coord.Close() }()
 
 	result := coord.ExecuteAndCommit(ctx, nil, nil, twoParticipantWrites())
 	if !result.Committed || result.UnknownOutcome {
@@ -124,6 +162,7 @@ func TestCoordinatorPhaseTwoDeliversAbortAfterRejectedPrepare(t *testing.T) {
 	n1 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
 	n2 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+	defer coord.Close()
 	result := coord.ExecuteAndCommit(ctx, []sinfonia.CmpItem{{MemID: 2, Addr: 8, Data: []byte("stale")}}, nil, twoParticipantWrites())
 	if result.Committed || result.UnknownOutcome || result.Status != sinfonia.VoteBadCmp {
 		t.Fatalf("expected compare abort, got %+v", result)
@@ -323,6 +362,7 @@ func runPhaseTwoCrashHelper(t *testing.T, dir string) {
 		n2.batchErr = n1.batchErr
 	}
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+	defer func() { close(gate); _ = coord.Close() }()
 	if result := coord.ExecuteAndCommit(ctx, nil, nil, twoParticipantWrites()); !result.Committed || result.UnknownOutcome {
 		t.Fatalf("result=%+v", result)
 	}

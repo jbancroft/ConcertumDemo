@@ -122,7 +122,7 @@ func NewParticipantWithId(hostId uint32, size int) *Participant {
 	return n
 }
 
-func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, error) {
+func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant, err error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -149,10 +149,20 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, disk.Close())
+		}
+	}()
 	redoLog, err := storage.OpenRedoLog(dir)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, redoLog.Close())
+		}
+	}()
 	forcedAbort, err := storage.OpenForcedAbortLog(dir)
 	if err != nil {
 		return nil, err
@@ -218,23 +228,21 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (*Participant, e
 	return n, nil
 }
 
+// Close drains the redo appender and releases storage. Callers must first stop
+// serving requests and join any externally started recovery workers.
 func (n *Participant) Close() error {
 	n.mu.Lock()
-	disk := n.diskImage
-	transfer := n.baselineTransfer
-	n.baselineTransfer = nil
-	n.diskImage = nil
-	n.mu.Unlock()
-	if transfer != nil {
-		if transfer.file != nil {
-			_ = transfer.file.Close()
-		}
-		_ = os.Remove(transfer.path)
+	defer n.mu.Unlock()
+	n.abortBaselineTransferLocked()
+	if n.redoLog != nil {
+		_ = n.redoLog.Close()
 	}
-	if disk == nil {
+	if n.diskImage == nil {
 		return nil
 	}
-	return disk.Close()
+	err := n.diskImage.Close()
+	n.diskImage = nil
+	return err
 }
 
 func (n *Participant) read(addr uint64, length uint32) ([]byte, error) {

@@ -99,6 +99,7 @@ func TestPrimaryCopyBasicDurabilityWithPromotion(t *testing.T) {
 	t.Cleanup(func() { _ = promoted.Close() })
 	promoted.PromoteToPrimary(0, nil)
 	coordAfter := client.NewCoordinator(map[uint32]client.Participant{2: promoted})
+	defer coordAfter.Close()
 	coordAfter.SetPrimaryMapping(map[uint32]uint32{10: 2})
 
 	deadline := time.Now().Add(300 * time.Millisecond)

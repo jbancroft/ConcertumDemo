@@ -26,6 +26,11 @@ go run ./demo/sinfonia-client-demo
 - [Participant recovery](internal/memnode/recovery.go)
 - [Transfer demo](demo/sinfonia-client-demo/main.go)
 
+After all client calls have returned, call `Client.Close()` to drain queued
+decisions and release RPC workers and connections. Check its error for failed
+delivery; closing does not undo a known commit. Only repeated `Close` calls are
+allowed afterward. The demos and REPL close their clients automatically.
+
 To run a [memnode](cmd/memnode/main.go) independently:
 
 ```sh
@@ -40,6 +45,8 @@ without resizing the image. Resizing existing images is not supported.
 
 Malformed decision-log records block startup with an error identifying the file
 and line. The log is preserved for manual repair; automatic repair is not implemented.
+Embedded participants must stop serving requests and join their recovery workers
+before calling `Participant.Close()`, which drains and stops the redo appender.
 
 ## Minuet
 

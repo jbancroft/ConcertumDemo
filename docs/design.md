@@ -26,6 +26,13 @@ values and creates the coordinator for those nodes. Each configuration supplies
 an RPC address and optional fencing generation. Nodes serve TCP RPC; no HTTP
 administration or metrics endpoints are exposed.
 
+The client owns its coordinator workers and RPC connections. `Client.Close`
+drains queued decisions, joins the workers, and closes connections. Callers must
+finish all API calls first and must not use the client afterward except to close
+it again. Delivery uses the existing RPC timeouts; there is no overall shutdown
+deadline. Close reports delivery errors without changing the known decision.
+Internal coordinators borrow participants and leave their closure to the owner.
+
 `MiniTransaction` holds comparisons, reads, and writes. It copies the supplied
 bytes so changing the caller's buffer won't change the transaction. Its host
 helpers return copies too. An `Executor` connects the builder to the client;
@@ -121,6 +128,12 @@ records, and earlier replies. On restart it uses those records and asks recovery
 peers for evidence about unfinished transactions. Missing evidence can keep it
 from finishing recovery or serving requests. A coordinator disappearing doesn't
 give a prepared participant permission to abort on its own.
+
+Each durable participant owns its disk image and redo appender, including cleanup
+when construction fails. After requests and externally started recovery workers
+have stopped, `Participant.Close` joins the appender before closing the image.
+Direct redo-log users must finish log operations before `RedoLog.Close`; afterward
+only repeated closes are allowed. Append calls report their own storage errors.
 
 The configured memory size must match the existing image file exactly. Only a
 newly created image is initialized to that size; mismatches fail startup without

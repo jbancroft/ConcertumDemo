@@ -3,6 +3,8 @@ package sinfoniaclient
 import (
 	"context"
 	"errors"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +12,31 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
+
+func TestClientCloseReleasesWorkers(t *testing.T) {
+	workerCount := func() int {
+		stacks := make([]byte, 1<<20)
+		stacks = stacks[:runtime.Stack(stacks, true)]
+		return strings.Count(string(stacks), "(*rpcWorker).runPrepare(") +
+			strings.Count(string(stacks), "(*rpcWorker).runCommitBatcher(")
+	}
+	before := workerCount()
+	for range 10 {
+		c := NewClient(map[uint32]NodeConfig{1: {RPCAddress: "unused"}})
+		for range 2 {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	deadline := time.Now().Add(time.Second)
+	for workerCount() > before && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if after := workerCount(); after > before {
+		t.Fatalf("workers retained after Close: before=%d after=%d", before, after)
+	}
+}
 
 type backoffFunc func(context.Context, int)
 
@@ -32,6 +59,7 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 			coord := client.NewCoordinator(map[uint32]client.Participant{
 				1: memnode.NewParticipant(16), 2: memnode.NewParticipant(16),
 			})
+			defer coord.Close()
 			c := &Client{coordinator: coord}
 			for i, value := range []string{"a", "b"} {
 				if err := c.Write(ctx, uint32(i+1), 0, []byte(value)); err != nil {
@@ -91,6 +119,7 @@ func TestExecuteAndCommitResolvesLostReply(t *testing.T) {
 	ctx := context.Background()
 	n := &lostOnePCReplyParticipant{Participant: memnode.NewParticipant(16)}
 	c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: n})}
+	defer c.Close()
 	result := c.ExecuteAndCommit(ctx, nil, nil, []WriteItem{{HostId: 1, Address: 0, Data: []byte("x")}})
 	if !result.Committed || result.UnknownOutcome || result.Status != StatusCommitted {
 		t.Fatalf("lost reply should resolve to committed: %+v", result)
@@ -104,6 +133,7 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 	n1 := memnode.NewParticipant(16)
 	n2 := memnode.NewParticipant(16)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
+	defer coord.Close()
 	c := &Client{coordinator: coord}
 
 	if err := c.Write(context.Background(), 1, 0, []byte("a")); err != nil {
@@ -133,6 +163,7 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 func TestCompareAbortNoWritesApplied(t *testing.T) {
 	n1 := memnode.NewParticipant(16)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
+	defer coord.Close()
 	c := &Client{coordinator: coord}
 	if err := c.Write(context.Background(), 1, 0, []byte("seed")); err != nil {
 		t.Fatal(err)
@@ -160,6 +191,7 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 	n1 := memnode.NewParticipant(16)
 	n2 := memnode.NewParticipant(16)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
+	defer coord.Close()
 	c := &Client{coordinator: coord}
 
 	if err := c.Write(context.Background(), 1, 0, []byte("ab")); err != nil {

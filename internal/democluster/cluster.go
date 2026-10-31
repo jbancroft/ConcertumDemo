@@ -149,11 +149,11 @@ func (c *Cluster) Close() error {
 		return nil
 	}
 	c.once.Do(func() {
+		if c.Client != nil {
+			c.err = errors.Join(c.err, c.Client.Close())
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		if c.Client != nil {
-			c.err = errors.Join(c.err, c.Client.FlushPendingCommits(ctx))
-		}
 		for _, node := range c.nodes {
 			_ = node.input.Close()
 		}

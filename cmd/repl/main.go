@@ -15,14 +15,12 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
-	"time"
 
 	minuetsql "github.com/jbancroft/ConcertumDemo/minuet-sql"
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
 const (
-	flushTimeout   = 10 * time.Second
 	maxLineBytes   = 64 << 10
 	maxTCPPort     = 1<<16 - 1
 	nodeMemorySize = 2 << 20 // Use the default memnode's 2 MiB region.
@@ -73,9 +71,7 @@ func run(ctx context.Context, args []string, input io.ReadCloser, out, errOut io
 		sqlHostID: {RPCAddress: address},
 	})
 	defer func() {
-		flushCtx, cancel := context.WithTimeout(context.Background(), flushTimeout)
-		defer cancel()
-		err = errors.Join(err, client.FlushPendingCommits(flushCtx))
+		err = errors.Join(err, client.Close())
 	}()
 	engine, err := minuetsql.NewEngine(minuetsql.Config{
 		HostId: sqlHostID, TxnClient: client, MemorySize: nodeMemorySize,

@@ -239,9 +239,11 @@ func (d *DiskImage) Close() error {
 }
 
 type RedoLog struct {
-	mu      sync.Mutex
-	path    string
-	entries []RedoLogItem
+	closeOnce sync.Once
+	done      chan struct{}
+	mu        sync.Mutex
+	path      string
+	entries   []RedoLogItem
 
 	batchWindow time.Duration
 	batchMax    int
@@ -288,8 +290,17 @@ func OpenRedoLog(dir string) (*RedoLog, error) {
 	}
 	r := &RedoLog{path: p, entries: entries, batchWindow: defaultRedoBatchWindow, batchMax: defaultRedoBatchSize, fsyncFn: func(f *os.File) error { return f.Sync() }}
 	r.appendReqCh = make(chan appendReq, redoAppendQueueSize)
+	r.done = make(chan struct{})
 	go r.runAppender()
 	return r, nil
+}
+
+// Close stops and joins the appender. Call after all log operations have returned;
+// only repeated Close calls are allowed afterward. AddItem reports write errors.
+func (r *RedoLog) Close() error {
+	r.closeOnce.Do(func() { close(r.appendReqCh) })
+	<-r.done
+	return nil
 }
 
 func (r *RedoLog) Entries() []RedoLogItem {
@@ -332,6 +343,7 @@ func (r *RedoLog) AddItem(entry RedoLogItem) error {
 }
 
 func (r *RedoLog) runAppender() {
+	defer close(r.done)
 	t := time.NewTimer(time.Hour)
 	if !t.Stop() {
 		<-t.C
@@ -352,7 +364,10 @@ func (r *RedoLog) runAppender() {
 
 	for {
 		if len(batch) == 0 {
-			req := <-r.appendReqCh
+			req, ok := <-r.appendReqCh
+			if !ok {
+				return
+			}
 			batch = append(batch, req)
 			r.mu.Lock()
 			window := r.batchWindow
@@ -382,7 +397,11 @@ func (r *RedoLog) runAppender() {
 		}
 
 		select {
-		case req := <-r.appendReqCh:
+		case req, ok := <-r.appendReqCh:
+			if !ok {
+				flush()
+				return
+			}
 			batch = append(batch, req)
 		case <-t.C:
 			flush()

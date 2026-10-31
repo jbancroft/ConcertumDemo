@@ -15,6 +15,10 @@ type RPCParticipant struct {
 	generation uint64
 }
 
+func (n *RPCParticipant) Close() error {
+	return n.rpc.Close()
+}
+
 func NewRPCParticipant(addr string, tlsConfig *tls.Config, timeout time.Duration) *RPCParticipant {
 	return NewRPCParticipantWithGeneration(addr, tlsConfig, timeout, 0)
 }

@@ -45,6 +45,7 @@ func TestReplicationBaselineInstallCrashBoundariesRecoverOldState(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer redoLog.Close()
 			if err := redoLog.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
 				t.Fatal(err)
 			}
@@ -411,6 +412,7 @@ func seedOldBaseline(t *testing.T, dir string) sinfonia.TransactionID {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer redoLog.Close()
 	if err := redoLog.AddItem(storage.RedoLogItem{TransactionId: txId, HostIds: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("stale")}}}); err != nil {
 		t.Fatal(err)
 	}

@@ -76,6 +76,8 @@ func (b RandomBackoff) Wait(ctx context.Context, attempt int) {
 
 // Coordinator gathers participant votes and sends commit or abort decisions.
 type Coordinator struct {
+	closeOnce   sync.Once
+	closeErr    error
 	nodes       map[uint32]Participant
 	primaryFor  map[uint32]uint32
 	generations map[uint32]uint64
@@ -99,6 +101,23 @@ func NewCoordinator(nodes map[uint32]Participant) *Coordinator {
 		c.workers[id] = newRPCWorker(id, node)
 	}
 	return c
+}
+
+// Close drains queued decisions and joins the workers. Call only after all API
+// calls have returned; the coordinator must not be used afterward except to Close.
+// Participants are borrowed; their owner must close them after the coordinator.
+func (c *Coordinator) Close() error {
+	c.closeOnce.Do(func() {
+		for _, worker := range c.workers {
+			close(worker.prepareCh)
+			close(worker.commitCh)
+		}
+		for _, worker := range c.workers {
+			worker.done.Wait()
+			c.closeErr = errors.Join(c.closeErr, worker.deliveryErr)
+		}
+	})
+	return c.closeErr
 }
 
 func newCoordinatorID() uint64 {
@@ -256,12 +275,14 @@ type commitDispatch struct {
 }
 
 type rpcWorker struct {
-	hostId     uint32
-	node       Participant
-	prepareCh  chan prepareCall
-	commitCh   chan commitDispatch
-	batchDelay time.Duration
-	batchMax   int
+	done        sync.WaitGroup
+	deliveryErr error // Written by the commit worker; read after joining it.
+	hostId      uint32
+	node        Participant
+	prepareCh   chan prepareCall
+	commitCh    chan commitDispatch
+	batchDelay  time.Duration
+	batchMax    int
 }
 
 // FlushPendingCommits waits for queued commit/abort messages and reports errors.
@@ -296,13 +317,19 @@ type prepareCall struct {
 
 func newRPCWorker(hostId uint32, node Participant) *rpcWorker {
 	w := &rpcWorker{hostId: hostId, node: node, prepareCh: make(chan prepareCall, prepareQueueSize), commitCh: make(chan commitDispatch, commitQueueSize), batchDelay: commitBatchDelay, batchMax: commitBatchSize}
+	w.done.Add(2)
 	go w.runPrepare()
 	go w.runCommitBatcher()
 	return w
 }
 
 func (w *rpcWorker) runPrepare() {
+	defer w.done.Done()
 	for req := range w.prepareCh {
+		if err := req.ctx.Err(); err != nil {
+			req.respC <- prepareResult{hostId: w.hostId, err: err}
+			continue
+		}
 		resp, err := w.node.ExecAndPrepare(req.ctx, req.req)
 		mappedReads := make(map[sinfonia.ReadItem][]byte, len(req.req.ReadItems))
 		for idx, item := range req.req.ReadItems {
@@ -315,6 +342,7 @@ func (w *rpcWorker) runPrepare() {
 }
 
 func (w *rpcWorker) runCommitBatcher() {
+	defer w.done.Done()
 	t := time.NewTimer(time.Hour)
 	if !t.Stop() {
 		<-t.C
@@ -322,10 +350,9 @@ func (w *rpcWorker) runCommitBatcher() {
 	defer t.Stop()
 
 	batch := make([]commitDispatch, 0, w.batchMax)
-	var deliveryErr error
 	rememberDeliveryErr := func(err error) {
-		if err != nil && deliveryErr == nil {
-			deliveryErr = err
+		if err != nil && w.deliveryErr == nil {
+			w.deliveryErr = err
 		}
 	}
 	var timerC <-chan time.Time
@@ -388,11 +415,15 @@ func (w *rpcWorker) runCommitBatcher() {
 
 	for {
 		select {
-		case d := <-w.commitCh:
+		case d, ok := <-w.commitCh:
+			if !ok {
+				rememberDeliveryErr(flush())
+				return
+			}
 			if d.barrier {
 				rememberDeliveryErr(flush())
-				d.respC <- deliveryErr
-				deliveryErr = nil
+				d.respC <- w.deliveryErr
+				w.deliveryErr = nil
 				continue
 			}
 			batch = append(batch, d)
@@ -431,8 +462,14 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 	}
 
 	results := make(chan prepareResult, len(hostIds))
+	// A cancelled attempt may return before replies arrive, but its producers
+	// must finish enqueueing before Close can close the worker channels.
+	var dispatches sync.WaitGroup
+	defer dispatches.Wait()
 	for _, hostId := range hostIds {
+		dispatches.Add(1)
 		go func(hostId uint32) {
+			defer dispatches.Done()
 			c.workersMu.Lock()
 			worker, ok := c.workers[hostId]
 			c.workersMu.Unlock()

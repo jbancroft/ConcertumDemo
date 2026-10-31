@@ -31,6 +31,7 @@ func accessClient(t *testing.T, node *memnode.Participant, generation uint64) (*
 	})
 	t.Cleanup(stop)
 	c := NewClient(map[uint32]NodeConfig{1: {RPCAddress: listener.Addr().String(), Generation: generation}})
+	t.Cleanup(func() { _ = c.Close() })
 	if err := c.SetRetryPolicy(0, time.Millisecond, time.Millisecond); err != nil {
 		t.Fatal(err)
 	}

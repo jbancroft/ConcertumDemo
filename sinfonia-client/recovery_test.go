@@ -64,6 +64,7 @@ func TestBackgroundRecoveryPreservesUnrecordedReads(t *testing.T) {
 				stopWorker()
 				<-workerDone
 				c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
+				defer c.Close()
 				if got, err := c.Read(ctx, 1, 0, 1); err != nil || string(got) != "A" {
 					t.Fatalf("background recovery did not apply write: %q, %v", got, err)
 				}
@@ -90,6 +91,7 @@ func TestBackgroundRecoveryPreservesUnrecordedReads(t *testing.T) {
 					}
 					node = durableAccessNode(t, dir)
 					c = &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
+					defer c.Close()
 					checkReads()
 				}
 			})
@@ -118,6 +120,7 @@ func TestRecoveryHandleSurvivesClientRestartAndPreservesOriginalReads(t *testing
 	node := durableAccessNode(t, dir)
 	disconnected := &disconnectedAfterCommit{Participant: node}
 	c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: disconnected})}
+	defer c.Close()
 	short, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
 	result := c.NewMiniTransaction().Read(1, 0, 1).Write(1, 0, []byte("A")).ExecuteAndCommit(short)
 	cancel()
@@ -133,6 +136,7 @@ func TestRecoveryHandleSurvivesClientRestartAndPreservesOriginalReads(t *testing
 	}
 	node = durableAccessNode(t, dir)
 	c = &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
+	defer c.Close()
 	// A newer write must neither be replayed over nor substituted for the old read.
 	if err := c.Write(ctx, 1, 0, []byte("B")); err != nil {
 		t.Fatal(err)
@@ -155,6 +159,7 @@ func TestRecoveryHandleSurvivesClientRestartAndPreservesOriginalReads(t *testing
 func TestWriteUnknownErrorCarriesRecoveryHandle(t *testing.T) {
 	node := memnode.NewParticipantWithId(1, 16)
 	c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: &disconnectedAfterCommit{Participant: node}})}
+	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	err := c.Write(ctx, 1, 0, []byte("A"))
@@ -163,6 +168,7 @@ func TestWriteUnknownErrorCarriesRecoveryHandle(t *testing.T) {
 		t.Fatalf("missing recoverable error: %v", err)
 	}
 	c = &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
+	defer c.Close()
 	if resolved := c.Resolve(context.Background(), *uncertain.Handle); !resolved.Committed {
 		t.Fatalf("resolution failed: %+v", resolved)
 	}
@@ -170,6 +176,7 @@ func TestWriteUnknownErrorCarriesRecoveryHandle(t *testing.T) {
 
 func TestResolveExpiredEvidenceDoesNotInventAbort(t *testing.T) {
 	c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: memnode.NewParticipantWithId(1, 16)})}
+	defer c.Close()
 	handle := RecoveryHandle{TID: minitxn.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now()) - 3}, Participants: []uint32{1}}
 	result := c.Resolve(context.Background(), handle)
 	if !result.UnknownOutcome || result.Status != StatusUnknown || !errors.Is(result.OutcomeError(), ErrOutcomeExpired) {
@@ -182,6 +189,7 @@ func TestResolveCommitWithoutOriginalReadsDoesNotReread(t *testing.T) {
 	node := durableAccessNode(t, dir)
 	node.SetOutcomeReplayBoundaryHookForTest(func(string, sinfonia.TransactionID) error { return errors.New("lost before saving response") })
 	c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: &disconnectedAfterCommit{Participant: node}})}
+	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	result := c.NewMiniTransaction().Read(1, 0, 1).Write(1, 0, []byte("A")).ExecuteAndCommit(ctx)
 	cancel()
@@ -193,6 +201,7 @@ func TestResolveCommitWithoutOriginalReadsDoesNotReread(t *testing.T) {
 	}
 	node = durableAccessNode(t, dir)
 	c = &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
+	defer c.Close()
 	result = c.Resolve(context.Background(), *result.Recovery)
 	if !result.Committed || result.UnknownOutcome || !errors.Is(result.OutcomeError(), ErrReadResultsUnavailable) || len(result.ReadResults) != 0 {
 		t.Fatalf("must distinguish known commit from missing read payload: %+v", result)

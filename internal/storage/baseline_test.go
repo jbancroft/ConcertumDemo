@@ -71,6 +71,7 @@ func TestReplicationBaselineStoragePrimitivesResetDurableState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer redo.Close()
 	if err := redo.AddItem(storage.RedoLogItem{TransactionId: txId}); err != nil {
 		t.Fatal(err)
 	}

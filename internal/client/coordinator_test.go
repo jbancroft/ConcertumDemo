@@ -19,6 +19,7 @@ import (
 func TestCoordinatorResolves1PCResponseLostAfterApply(t *testing.T) {
 	n := &lost1PCNode{Participant: memnode.NewParticipant(16)}
 	coord := NewCoordinator(map[uint32]Participant{1: n})
+	defer coord.Close()
 	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
 	if res.UnknownOutcome || res.TransportErr != nil || !res.Committed {
 		t.Fatalf("expected recovered commit, got %+v", res)
@@ -41,6 +42,7 @@ func TestCoordinatorResolvesPrepareReplyFailsAfterVote(t *testing.T) {
 			n1 := &lostPrepareNode{Participant: memnode.NewParticipant(16), failure: tc.failure}
 			n2 := memnode.NewParticipant(16)
 			coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+			defer coord.Close()
 			coord.coordID = 1
 			res := coord.ExecuteAndCommit(context.Background(), nil, []sinfonia.ReadItem{{MemID: 1, Len: 1}, {MemID: 2, Len: 1}}, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
 			if res.UnknownOutcome || res.TransportErr != nil || !res.Committed {
@@ -65,7 +67,9 @@ func TestCoordinatorResolvesPrepareReplyFailsAfterVote(t *testing.T) {
 
 func TestCoordinatorIDsAreDistinctAndNonZero(t *testing.T) {
 	first := NewCoordinator(nil)
+	defer first.Close()
 	second := NewCoordinator(nil)
+	defer second.Close()
 	if first.coordID == 0 || second.coordID == 0 {
 		t.Fatalf("coordinator IDs must be nonzero: first=%d second=%d", first.coordID, second.coordID)
 	}
@@ -104,6 +108,7 @@ func TestCoordinatorRetriesStaleEpochWithFreshID(t *testing.T) {
 					writes = twoParticipantWrites()
 				}
 				coord := NewCoordinator(nodes)
+				defer coord.Close()
 				coord.maxRetries = retries
 				coord.backoff = retryBackoffFunc(func(ctx context.Context, _ int) {
 					// Deliver the failed attempt's abort before testing the epoch retry.
@@ -159,6 +164,7 @@ func TestCoordinatorRetriesSingleParticipantLockConflict(t *testing.T) {
 			defer node.UnlockAll()
 			recorded := &recordingParticipant{Participant: node}
 			coord := NewCoordinator(map[uint32]Participant{1: recorded})
+			defer coord.Close()
 			coord.maxRetries = 1
 			coord.backoff = retryBackoffFunc(func(context.Context, int) {
 				if release {
@@ -194,6 +200,7 @@ func TestCoordinatorLogsReadOnlyProjectionWhenTransactionHasWrites(t *testing.T)
 	t.Cleanup(func() { _ = n2.Close() })
 
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+	defer coord.Close()
 	ctx := context.Background()
 	result := coord.ExecuteAndCommit(
 		ctx,
@@ -218,6 +225,7 @@ func TestCoordinatorLogsReadOnlyProjectionWhenTransactionHasWrites(t *testing.T)
 
 func readParticipant(ctx context.Context, node Participant, addr uint64, length uint32) ([]byte, error) {
 	c := NewCoordinator(map[uint32]Participant{1: node})
+	defer c.Close()
 	c.SetMaxRetriesForTest(0)
 	return c.Read(ctx, 1, addr, length)
 }

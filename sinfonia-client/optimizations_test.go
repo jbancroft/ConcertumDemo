@@ -51,6 +51,7 @@ func (n *countingNode) CommitBatch(ctx context.Context, req sinfonia.CommitBatch
 func TestSingleParticipantUses1PCFastPath(t *testing.T) {
 	n := &countingNode{Participant: memnode.NewParticipant(64)}
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n})
+	defer coord.Close()
 	c := &Client{coordinator: coord}
 
 	execution := c.NewMiniTransaction().Write(1, 0, []byte("x")).ExecuteAndCommit(context.Background())
@@ -74,6 +75,7 @@ func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
 	n1 := memnode.NewParticipant(4096)
 	n2 := memnode.NewParticipant(4096)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
+	defer coord.Close()
 	c := &Client{coordinator: coord}
 
 	const txns = 1000
@@ -109,6 +111,7 @@ func TestCommitMessageBatchingReducesIndividualCommitRPCs(t *testing.T) {
 	n1 := &countingNode{Participant: memnode.NewParticipant(256)}
 	n2 := &countingNode{Participant: memnode.NewParticipant(256)}
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
+	defer coord.Close()
 	c := &Client{coordinator: coord}
 
 	for i := 0; i < 200; i++ {
@@ -139,6 +142,7 @@ func TestFlushPendingCommitsAppliesQueuedDecisions(t *testing.T) {
 	n1 := memnode.NewParticipant(64)
 	n2 := memnode.NewParticipant(64)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
+	defer coord.Close()
 	c := &Client{coordinator: coord}
 
 	execution := c.NewMiniTransaction().
