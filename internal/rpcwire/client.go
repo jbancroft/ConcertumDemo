@@ -82,11 +82,11 @@ func (c *Client) Call(ctx context.Context, method string, req any, resp any) err
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	conn, reused, err := c.borrow(ctx)
+	conn, err := c.borrow(ctx)
 	if err != nil {
 		return err
 	}
-	reusable := reused
+	reusable := true
 	defer func() {
 		c.release(conn, reusable)
 	}()
@@ -147,18 +147,17 @@ func (c *Client) Close() error {
 	return firstErr
 }
 
-func (c *Client) borrow(ctx context.Context) (net.Conn, bool, error) {
+func (c *Client) borrow(ctx context.Context) (net.Conn, error) {
 	c.mu.Lock()
 	n := len(c.idle)
 	if n > 0 {
 		conn := c.idle[n-1]
 		c.idle = c.idle[:n-1]
 		c.mu.Unlock()
-		return conn, true, nil
+		return conn, nil
 	}
 	c.mu.Unlock()
-	conn, err := c.dial(ctx)
-	return conn, false, err
+	return c.dial(ctx)
 }
 
 func (c *Client) release(conn net.Conn, reusable bool) {
