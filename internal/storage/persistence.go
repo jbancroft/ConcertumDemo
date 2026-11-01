@@ -20,9 +20,11 @@ import (
 )
 
 const (
+	decidedTempPrefix      = ".decided.log.tmp-"
 	defaultRedoBatchSize   = 32
 	defaultRedoBatchWindow = 2 * time.Millisecond
 	fileCopyBufferSize     = 1 << 20
+	forcedAbortTempPrefix  = ".forced_abort.log.tmp-"
 	redoAppendQueueSize    = 4096
 	redoBatchCapacity      = 64
 	redoTempPrefix         = ".redo.log.tmp-"
@@ -486,10 +488,12 @@ func (r *RedoLog) Reset() error {
 	return syncDir(filepath.Dir(r.path))
 }
 
-// rewriteRedoLogFile publishes a complete, synced replacement. Callers update
-// their in-memory entries and sync the directory before acknowledging success.
-func rewriteRedoLogFile(path string, entries []RedoLogItem) error {
-	f, err := os.CreateTemp(filepath.Dir(path), redoTempPrefix)
+// publishLogFile replaces a log with a complete, synced file. The caller must
+// serialize appends, update its in-memory state after publication, and sync the
+// directory before acknowledging success. A later directory-sync error does not
+// undo the rename, so memory must already match the visible replacement.
+func publishLogFile(path, tempPrefix string, write func(io.Writer) error) error {
+	f, err := os.CreateTemp(filepath.Dir(path), tempPrefix)
 	if err != nil {
 		return err
 	}
@@ -500,14 +504,8 @@ func rewriteRedoLogFile(path string, entries []RedoLogItem) error {
 	if err := f.Chmod(0o644); err != nil {
 		return err
 	}
-	for _, e := range entries {
-		b, err := json.Marshal(e)
-		if err != nil {
-			return err
-		}
-		if _, err := f.Write(append(b, '\n')); err != nil {
-			return err
-		}
+	if err := write(f); err != nil {
+		return err
 	}
 	if err := f.Sync(); err != nil {
 		return err
@@ -516,6 +514,23 @@ func rewriteRedoLogFile(path string, entries []RedoLogItem) error {
 		return err
 	}
 	return os.Rename(f.Name(), path)
+}
+
+// rewriteRedoLogFile publishes a complete, synced replacement. Callers update
+// their in-memory entries and sync the directory before acknowledging success.
+func rewriteRedoLogFile(path string, entries []RedoLogItem) error {
+	return publishLogFile(path, redoTempPrefix, func(w io.Writer) error {
+		for _, e := range entries {
+			b, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
+			if _, err := w.Write(append(b, '\n')); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 type DecidedTransactionLog struct {
@@ -594,23 +609,20 @@ func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]sinfonia.TransactionI
 		return nil, nil
 	}
 	threshold := currentEpoch - PublicRetryHorizon
-	changed := false
+	retained := make(map[string]struct{}, len(s.set))
 	removed := make([]sinfonia.TransactionID, 0)
 	for key := range s.set {
 		txId, ok := parseTidKey(key)
-		if !ok {
-			continue
-		}
-		if txId.Epoch < threshold {
-			delete(s.set, key)
+		if ok && txId.Epoch < threshold {
 			removed = append(removed, txId)
-			changed = true
+		} else {
+			retained[key] = struct{}{}
 		}
 	}
-	if !changed {
+	if len(removed) == 0 {
 		return nil, nil
 	}
-	if err := s.rewriteLocked(); err != nil {
+	if err := s.rewriteLocked(retained); err != nil {
 		return nil, err
 	}
 	return removed, nil
@@ -621,32 +633,27 @@ func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]sinfonia.TransactionI
 func (s *ForcedAbortLog) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	previous := s.set
-	s.set = map[string]struct{}{}
-	if err := s.rewriteLocked(); err != nil {
-		s.set = previous
-		return err
-	}
-	return nil
+	return s.rewriteLocked(map[string]struct{}{})
 }
 
-func (s *ForcedAbortLog) rewriteLocked() error {
-	keys := make([]string, 0, len(s.set))
-	for k := range s.set {
+func (s *ForcedAbortLog) rewriteLocked(retained map[string]struct{}) error {
+	keys := make([]string, 0, len(retained))
+	for k := range retained {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
+	if err := publishLogFile(s.path, forcedAbortTempPrefix, func(w io.Writer) error {
+		for _, k := range keys {
+			if _, err := io.WriteString(w, k+"\n"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
-	defer f.Close()
-	for _, k := range keys {
-		if _, err := f.WriteString(k + "\n"); err != nil {
-			return err
-		}
-	}
-	return f.Sync()
+	s.set = retained
+	return syncDir(filepath.Dir(s.path))
 }
 
 func openOutcomeStore(path string) (*DecidedTransactionLog, error) {
@@ -726,27 +733,37 @@ func (s *DecidedTransactionLog) Remove(txId sinfonia.TransactionID) error {
 	if _, ok := s.outcomes[k]; !ok {
 		return nil
 	}
-	delete(s.outcomes, k)
-	keys := make([]string, 0, len(s.outcomes))
-	for key := range s.outcomes {
+	retained := make(map[string]bool, len(s.outcomes)-1)
+	for key, committed := range s.outcomes {
+		if key != k {
+			retained[key] = committed
+		}
+	}
+	return s.rewriteLocked(retained)
+}
+
+func (s *DecidedTransactionLog) rewriteLocked(retained map[string]bool) error {
+	keys := make([]string, 0, len(retained))
+	for key := range retained {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
+	if err := publishLogFile(s.path, decidedTempPrefix, func(w io.Writer) error {
+		for _, key := range keys {
+			state := "abort"
+			if retained[key] {
+				state = "commit"
+			}
+			if _, err := io.WriteString(w, key+" "+state+"\n"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
-	defer f.Close()
-	for _, key := range keys {
-		state := "abort"
-		if s.outcomes[key] {
-			state = "commit"
-		}
-		if _, err := f.WriteString(key + " " + state + "\n"); err != nil {
-			return err
-		}
-	}
-	return f.Sync()
+	s.outcomes = retained
+	return syncDir(filepath.Dir(s.path))
 }
 
 // Reset clears the saved decisions. The caller must prevent participant
@@ -754,16 +771,7 @@ func (s *DecidedTransactionLog) Remove(txId sinfonia.TransactionID) error {
 func (s *DecidedTransactionLog) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	s.outcomes = map[string]bool{}
-	return nil
+	return s.rewriteLocked(map[string]bool{})
 }
 
 func LoadProcessedPointer(dir string) (int, error) {

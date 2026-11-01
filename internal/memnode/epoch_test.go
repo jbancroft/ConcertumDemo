@@ -116,3 +116,49 @@ func TestParticipantRejectsCorruptEpochFloor(t *testing.T) {
 		t.Fatal("started without a valid epoch floor")
 	}
 }
+
+func TestForcedAbortGCRetainsRecentVoteAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	node, err := NewDurableParticipant(1, 64, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close()
+	now := time.Unix(100*3600, 0)
+	node.nowFn = func() time.Time { return now }
+	old := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 100}
+	if resp, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: old}); err != nil || resp.Vote != sinfonia.VoteBadForced {
+		t.Fatalf("old forced abort = %+v, %v", resp, err)
+	}
+	now = now.Add(3 * time.Hour)
+	recent := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 103}
+	if resp, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: recent}); err != nil || resp.Vote != sinfonia.VoteBadForced {
+		t.Fatalf("recent forced abort = %+v, %v", resp, err)
+	}
+	if err := node.RunForcedAbortGC(); err != nil {
+		t.Fatal(err)
+	}
+	if node.forcedAborts.IsForcedAbort(old) {
+		t.Fatal("GC did not remove the expired record")
+	}
+	if err := node.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewDurableParticipant(1, 64, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	restarted.nowFn = func() time.Time { return now }
+	if err := restarted.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := restarted.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
+		TID: recent, Participants: []uint32{1, 2}, HasWrites: true,
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("late")}},
+	})
+	if err != nil || resp.Vote != sinfonia.VoteBadForced {
+		t.Fatalf("late prepare after GC and restart = %+v, %v", resp, err)
+	}
+}

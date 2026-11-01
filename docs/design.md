@@ -201,6 +201,8 @@ recovery, failed writes, duplicate requests, and forced aborts.
 Before discarding old replies or forced-abort records, a durable node saves an
 epoch floor. Restarts and replication baselines preserve that floor so a clock
 rollback cannot make a forgotten transaction eligible to execute again.
+Forced-abort and decision logs use the same replacement procedure to preserve
+retained records during cleanup and to reset their contents safely.
 
 Both demos launch the standalone `cmd/memnode` executable in separate processes.
 Client requests and recovery peer requests use TCP on local, automatically
