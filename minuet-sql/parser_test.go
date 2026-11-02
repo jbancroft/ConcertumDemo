@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Parsing and planning for the supported SQL subset.
+// Parsing for the supported SQL subset.
 
 func TestParseSupportedStatements(t *testing.T) {
 	t.Parallel()
@@ -147,57 +147,4 @@ func FuzzParseNeverPanics(f *testing.F) {
 	f.Fuzz(func(t *testing.T, sql string) {
 		_, _ = Parse(sql)
 	})
-}
-
-func TestPlanSupportedStatements(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		sql      string
-		wantPlan string
-		wantErr  error
-	}{
-		{sql: "CREATE TABLE generated_parents", wantPlan: "create"},
-		{sql: "CREATE TABLE generated_children", wantPlan: "create"},
-		{sql: "INSERT INTO generated_parents VALUES (7, 70)", wantPlan: "insert"},
-		{sql: "INSERT INTO generated_children VALUES (1, 7)", wantPlan: "insert"},
-		{sql: "SELECT id, value FROM generated_parents", wantPlan: "select"},
-		{sql: "DELETE FROM generated_children WHERE id = 1", wantPlan: "delete"},
-		{sql: "SELECT id, value FROM generated_parents JOIN generated_children ON generated_parents.id = generated_children.value", wantErr: ErrUnsupportedSQL},
-		{sql: "UPDATE generated_parents SET value = 71 WHERE id = 7", wantErr: ErrUnsupportedSQL},
-		{sql: "BEGIN", wantErr: ErrUnsupportedSQL},
-		{sql: "ROLLBACK", wantErr: ErrUnsupportedSQL},
-		{sql: "COMMIT", wantErr: ErrUnsupportedSQL},
-	}
-
-	for _, tc := range tests {
-		stmt, err := Parse(tc.sql)
-		if err == nil {
-			var plan planNode
-			plan, err = Plan(stmt)
-			switch plan.(type) {
-			case createTablePlan:
-				if tc.wantPlan != "create" {
-					t.Fatalf("Plan(%q) normalized as create, want %q", tc.sql, tc.wantPlan)
-				}
-			case insertPlan:
-				if tc.wantPlan != "insert" {
-					t.Fatalf("Plan(%q) normalized as insert, want %q", tc.sql, tc.wantPlan)
-				}
-			case selectPlan:
-				if tc.wantPlan != "select" {
-					t.Fatalf("Plan(%q) normalized as select, want %q", tc.sql, tc.wantPlan)
-				}
-			case deletePlan:
-				if tc.wantPlan != "delete" {
-					t.Fatalf("Plan(%q) normalized as delete, want %q", tc.sql, tc.wantPlan)
-				}
-			case nil:
-			default:
-				t.Fatalf("Plan(%q) returned unexpected plan %T", tc.sql, plan)
-			}
-		}
-		if !errors.Is(err, tc.wantErr) {
-			t.Fatalf("Parse/Plan(%q) err=%v, want %v", tc.sql, err, tc.wantErr)
-		}
-	}
 }

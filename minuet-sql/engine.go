@@ -126,21 +126,14 @@ func (e *Engine) Exec(ctx context.Context, sql string) (QueryResult, error) {
 	if err != nil {
 		return QueryResult{}, err
 	}
-	plan, err := Plan(stmt)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	return e.execute(ctx, plan)
-}
 
-func (e *Engine) execute(ctx context.Context, p planNode) (QueryResult, error) {
-	switch n := p.(type) {
-	case createTablePlan:
+	switch n := stmt.(type) {
+	case createTableStmt:
 		if err := e.createTable(ctx, n.name); err != nil {
 			return QueryResult{}, err
 		}
 		return QueryResult{}, nil
-	case insertPlan:
+	case insertStmt:
 		t, ok := e.tables[n.table]
 		if !ok {
 			return QueryResult{}, ErrTableNotFound
@@ -158,7 +151,7 @@ func (e *Engine) execute(ctx context.Context, p planNode) (QueryResult, error) {
 			}
 			return QueryResult{}, nil
 		})
-	case deletePlan:
+	case deleteStmt:
 		t, ok := e.tables[n.table]
 		if !ok {
 			return QueryResult{}, ErrTableNotFound
@@ -176,7 +169,7 @@ func (e *Engine) execute(ctx context.Context, p planNode) (QueryResult, error) {
 			}
 			return QueryResult{}, nil
 		})
-	case selectPlan:
+	case selectStmt:
 		t, ok := e.tables[n.table]
 		if !ok {
 			return QueryResult{}, ErrTableNotFound
@@ -206,7 +199,7 @@ func (e *Engine) execute(ctx context.Context, p planNode) (QueryResult, error) {
 		sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 		return QueryResult{Rows: out}, nil
 	default:
-		return QueryResult{}, fmt.Errorf("%w: %T", ErrUnsupportedSQL, p)
+		return QueryResult{}, fmt.Errorf("%w: %T", ErrUnsupportedSQL, stmt)
 	}
 }
 

@@ -117,7 +117,6 @@ and discards its data when the console exits. The port must be free.
 - [Engine](minuet-sql/engine.go)
 - [Catalog](minuet-sql/catalog.go)
 - [Parser](minuet-sql/parser.go)
-- [Planner](minuet-sql/planner.go)
 - [Console](cmd/repl/main.go)
 
 ## Checks
