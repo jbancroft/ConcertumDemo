@@ -6,6 +6,22 @@ and [Minuet](https://www.cs.cornell.edu/~sowell/2012-VLDB-Minuet.pdf).
 
 [Sinfonia/Minuet crash course](docs/crash-course.md) · [Design notes and limitations](docs/design.md)
 
+## Run with Docker
+
+From the repository root:
+
+```sh
+docker build -t concertum-demo .
+docker run --rm --network none concertum-demo
+```
+
+Runs the combined transaction, index, SQL, and durable-restart demo as a non-root
+user. Both nodes communicate over loopback inside the container. No host Go
+installation, mounted directories, or published ports are needed. Demo data is
+removed with the container when it exits.
+
+## Run locally
+
 Requires Go 1.22+. From the repository root, build the memnode executable used by the demos:
 
 ```sh

@@ -1,0 +1,8 @@
+*
+!go.mod
+!cmd/
+!internal/
+!minitxn/
+!minuet-index/
+!minuet-sql/
+!sinfonia-client/
