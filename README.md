@@ -61,8 +61,9 @@ without resizing the image. Resizing existing images is not supported.
 
 Malformed decision-log records block startup with an error identifying the file
 and line. The log is preserved for manual repair; automatic repair is not implemented.
-Embedded participants must stop serving requests and join their recovery workers
-before calling `Participant.Close()`, which drains and stops the redo appender.
+Embedded participants use `RunRecovery` for background recovery and reply expiration.
+Stop serving requests and join that worker before calling `Participant.Close()`,
+which drains and stops the redo appender.
 
 ## Minuet
 

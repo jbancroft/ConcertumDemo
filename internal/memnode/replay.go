@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
+	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
 var ErrReplayUnavailable = errors.New("durable transaction exists without exact replay payload")
@@ -15,6 +16,62 @@ type prepareOutcome struct {
 
 type onePCOutcome struct {
 	resp sinfonia.ExecCommit1PCResponse
+}
+
+// gcReplayLocked expires the same history in memory and on disk. Requests and
+// replication hold this mutex while saving replies, so none can race compaction.
+func (n *Participant) gcReplayLocked() error {
+	retention := storage.ReplayRetention{
+		CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.PublicRetryHorizon,
+		Keep: make(map[sinfonia.TransactionID]struct{}),
+	}
+	for tid := range n.inDoubt {
+		retention.Keep[tid] = struct{}{}
+	}
+	for tid := range n.prepareFlights {
+		retention.Keep[tid] = struct{}{}
+	}
+	for tid := range n.onePCFlights {
+		retention.Keep[tid] = struct{}{}
+	}
+	if err := n.persistEpochFloorLocked(retention.CurrentEpoch); err != nil {
+		return err
+	}
+	if n.replay != nil {
+		if err := n.replay.Compact(retention); err != nil {
+			return err
+		}
+	}
+	if n.decided != nil {
+		// Redo recovery still needs these decisions after exact replies expire.
+		decisions := retention
+		decisions.Keep = make(map[sinfonia.TransactionID]struct{})
+		for tid := range retention.Keep {
+			decisions.Keep[tid] = struct{}{}
+		}
+		for tid := range n.allLogTxIds {
+			decisions.Keep[tid] = struct{}{}
+		}
+		if err := n.decided.Compact(decisions); err != nil {
+			return err
+		}
+	}
+	for tid := range n.prepareOutcomes {
+		if retention.Expired(tid) {
+			delete(n.prepareOutcomes, tid)
+		}
+	}
+	for tid := range n.onePCOutcomes {
+		if retention.Expired(tid) {
+			delete(n.onePCOutcomes, tid)
+		}
+	}
+	for tid := range n.commitOutcomes {
+		if retention.Expired(tid) {
+			delete(n.commitOutcomes, tid)
+		}
+	}
+	return nil
 }
 
 func cloneReadData(in map[uint32][]byte) map[uint32][]byte {

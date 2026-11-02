@@ -246,7 +246,10 @@ If a crash preserved the commit but lost its exact read response, the result has
 its writes. As with normal execution, knowing the decision does not mean every
 participant has already applied it; background recovery finishes delivery.
 
-Replay records are retained for the current and previous UTC-hour epochs. Once
+Replay records are retained for the current and previous UTC-hour epochs.
+`RunRecovery` also expires saved replies from memory and disk once per minute,
+preserving in-flight and unresolved transactions. Decisions needed by retained
+redo entries remain until redo cleanup; read-only decisions expire with replies. Once
 old evidence is removed, resolution returns unknown with `ErrOutcomeExpired`,
 not a fabricated abort. Save and resolve handles promptly; the demo does not keep
 an indefinite application-level transaction history. An unreachable participant

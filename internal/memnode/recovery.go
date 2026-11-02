@@ -304,26 +304,7 @@ func (n *Participant) Recover(ctx context.Context) error {
 		n.mu.Unlock()
 		return err
 	}
-	currentEpoch := n.currentEpochLocked()
-	if err := n.persistEpochFloorLocked(currentEpoch); err != nil {
-		n.mu.Unlock()
-		return err
-	}
-	n.mu.Unlock()
-	if n.replay != nil {
-		if err := n.replay.Compact(storage.ReplayRetention{
-			CurrentEpoch: currentEpoch,
-			RetryHorizon: storage.PublicRetryHorizon,
-		}); err != nil {
-			n.mu.Lock()
-			n.recoveryComplete = false
-			n.mu.Unlock()
-			return err
-		}
-	}
-	n.mu.Lock()
-	if n.restartRequired != nil {
-		err := n.restartRequired
+	if err := n.gcReplayLocked(); err != nil {
 		n.mu.Unlock()
 		return err
 	}

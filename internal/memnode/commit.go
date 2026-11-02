@@ -49,6 +49,15 @@ func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, re
 		resp.Ack = !requestedAction || out.actionCommit
 		return resp, nil
 	}
+	currentEpoch := n.currentEpochLocked()
+	expired := (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID)
+	if expired && n.inDoubt[req.TID] == nil && !n.hasDurableTransactionLocked(req.TID) {
+		// Acknowledge harmless abort delivery without recreating forgotten evidence.
+		if err := n.persistEpochFloorLocked(currentEpoch); err != nil {
+			return sinfonia.CommitResponse{RequestID: req.RequestID}, err
+		}
+		return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: !req.ActionCommit}, nil
+	}
 	logged := false
 	knownDecision := false
 	if n.decided != nil {
@@ -229,7 +238,10 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: one-phase transaction %v", ErrReplayUnavailable, req.TID)
 	}
 	if (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
-		return n.rememberOnePCOutcomeLocked(ctx, req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch})
+		if err := n.persistEpochFloorLocked(currentEpoch); err != nil {
+			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+		}
+		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch}, nil
 	}
 	if out, ok := n.commitOutcomes[req.TID]; ok && !out.actionCommit {
 		return n.rememberOnePCOutcomeLocked(ctx, req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})

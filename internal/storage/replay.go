@@ -56,8 +56,8 @@ func OpenReplayStore(dir string) (*ReplayStore, error) {
 }
 
 // ReplayRetention decides which saved replies are too old to need anymore.
-// A reply can be dropped when Epoch + RetryHorizon <= CurrentEpoch, matching
-// the node's rule for rejecting old retries.
+// An unpinned reply can be dropped when Epoch + RetryHorizon <= CurrentEpoch,
+// matching the node's rule for rejecting old retries.
 // A zero RetryHorizon keeps everything. The caller supplies an epoch that only
 // moves forward; the store doesn't guess it from the clock.
 type ReplayRetention struct {
@@ -65,11 +65,16 @@ type ReplayRetention struct {
 	CurrentEpoch uint64
 	// RetryHorizon is the retry window in epochs. Zero keeps all replies.
 	RetryHorizon uint64
+	// Keep pins records still needed by in-flight transactions or recovery.
+	Keep map[sinfonia.TransactionID]struct{}
 }
 
-// Expired says whether a transaction is too old to retry.
+// Expired says whether a transaction is outside the retry window and not pinned.
 // A zero RetryHorizon disables expiration.
 func (r ReplayRetention) Expired(txId sinfonia.TransactionID) bool {
+	if _, keep := r.Keep[txId]; keep {
+		return false
+	}
 	if r.RetryHorizon == 0 {
 		return false
 	}
@@ -215,8 +220,8 @@ func (s *ReplayStore) ReplaceFrom(path string) error {
 
 // Compact drops replies that are too old to retry. It writes a temporary file
 // and renames it, so a crash leaves either the old log or the new one.
-// Keep replies still inside the retry window. A zero retry window, or a current
-// epoch smaller than the window, removes nothing.
+// Keep replies inside the retry window or explicitly pinned by the caller.
+// A zero retry window, or a current epoch smaller than the window, removes nothing.
 func (s *ReplayStore) Compact(retention ReplayRetention) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -251,37 +256,19 @@ func (s *ReplayStore) Compact(retention ReplayRetention) error {
 		buf.WriteByte('\n')
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), replayTempPrefix)
-	if err != nil {
+	if err := publishLogFile(s.path, replayTempPrefix, func(w io.Writer) error {
+		_, err := io.Copy(w, bytes.NewReader(buf.Bytes()))
+		return err
+	}); err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-	if _, err := io.Copy(tmp, bytes.NewReader(buf.Bytes())); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, s.path); err != nil {
-		return err
-	}
-	if err := syncDir(filepath.Dir(s.path)); err != nil {
-		return err
-	}
-	// The file is durable. Keep the old records before replacing the map so
-	// we can rebuild the index from them.
+	// Match the published file even if the directory sync fails.
 	snapshot := make(map[string]replayRecord, kept)
 	for _, key := range keys {
 		snapshot[key] = s.records[key]
 	}
 	s.records = snapshot
-	return nil
+	return syncDir(filepath.Dir(s.path))
 }
 
 func (s *ReplayStore) append(record replayRecord) error {
