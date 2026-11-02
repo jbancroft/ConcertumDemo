@@ -13,19 +13,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 const (
-	decidedTempPrefix      = ".decided.log.tmp-"
-	defaultRedoBatchSize   = 32
-	defaultRedoBatchWindow = 2 * time.Millisecond
-	forcedAbortTempPrefix  = ".forced_abort.log.tmp-"
-	redoAppendQueueSize    = 4096
-	redoBatchCapacity      = 64
-	redoTempPrefix         = ".redo.log.tmp-"
+	decidedTempPrefix     = ".decided.log.tmp-"
+	forcedAbortTempPrefix = ".forced_abort.log.tmp-"
+	redoTempPrefix        = ".redo.log.tmp-"
 )
 
 type RedoLogItem struct {
@@ -107,21 +102,10 @@ func (d *DiskImage) Close() error {
 }
 
 type RedoLog struct {
-	closeOnce sync.Once
-	done      chan struct{}
-	mu        sync.Mutex
-	path      string
-	entries   []RedoLogItem
-
-	batchWindow time.Duration
-	batchMax    int
-	appendReqCh chan appendReq
-	fsyncFn     func(*os.File) error
-}
-
-type appendReq struct {
-	entry RedoLogItem
-	ack   chan error
+	mu      sync.Mutex
+	path    string
+	entries []RedoLogItem
+	fsyncFn func(*os.File) error
 }
 
 func OpenRedoLog(dir string) (*RedoLog, error) {
@@ -156,19 +140,7 @@ func OpenRedoLog(dir string) (*RedoLog, error) {
 			break
 		}
 	}
-	r := &RedoLog{path: p, entries: entries, batchWindow: defaultRedoBatchWindow, batchMax: defaultRedoBatchSize, fsyncFn: func(f *os.File) error { return f.Sync() }}
-	r.appendReqCh = make(chan appendReq, redoAppendQueueSize)
-	r.done = make(chan struct{})
-	go r.runAppender()
-	return r, nil
-}
-
-// Close stops and joins the appender. Call after all log operations have returned;
-// only repeated Close calls are allowed afterward. AddItem reports write errors.
-func (r *RedoLog) Close() error {
-	r.closeOnce.Do(func() { close(r.appendReqCh) })
-	<-r.done
-	return nil
+	return &RedoLog{path: p, entries: entries, fsyncFn: (*os.File).Sync}, nil
 }
 
 func (r *RedoLog) Entries() []RedoLogItem {
@@ -179,135 +151,41 @@ func (r *RedoLog) Entries() []RedoLogItem {
 	return out
 }
 
-func (r *RedoLog) Append(entry RedoLogItem) error {
-	return r.AddItem(entry)
-}
-
-func (r *RedoLog) ConfigureBatchingForTest(window time.Duration, max int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if window > 0 {
-		r.batchWindow = window
-	}
-	if max > 0 {
-		r.batchMax = max
-	}
-}
-
 func (r *RedoLog) SetFsyncHookForTest(fn func(*os.File) error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if fn == nil {
-		r.fsyncFn = func(f *os.File) error { return f.Sync() }
+		r.fsyncFn = (*os.File).Sync
 		return
 	}
 	r.fsyncFn = fn
 }
 
+// AddItem persists one record before publishing it in memory. The mutex also
+// serializes appends with compaction so writes always reach the current log.
 func (r *RedoLog) AddItem(entry RedoLogItem) error {
-	ack := make(chan error, 1)
-	r.appendReqCh <- appendReq{entry: entry, ack: ack}
-	return <-ack
-}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-func (r *RedoLog) runAppender() {
-	defer close(r.done)
-	t := time.NewTimer(time.Hour)
-	if !t.Stop() {
-		<-t.C
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
 	}
-	defer t.Stop()
-
-	batch := make([]appendReq, 0, redoBatchCapacity)
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		err := r.flushBatch(batch)
-		for _, req := range batch {
-			req.ack <- err
-		}
-		batch = batch[:0]
-	}
-
-	for {
-		if len(batch) == 0 {
-			req, ok := <-r.appendReqCh
-			if !ok {
-				return
-			}
-			batch = append(batch, req)
-			r.mu.Lock()
-			window := r.batchWindow
-			r.mu.Unlock()
-			if window <= 0 {
-				window = time.Millisecond
-			}
-			t.Reset(window)
-		}
-
-		r.mu.Lock()
-		max := r.batchMax
-		r.mu.Unlock()
-		if max <= 0 {
-			max = 1
-		}
-
-		if len(batch) >= max {
-			if !t.Stop() {
-				select {
-				case <-t.C:
-				default:
-				}
-			}
-			flush()
-			continue
-		}
-
-		select {
-		case req, ok := <-r.appendReqCh:
-			if !ok {
-				flush()
-				return
-			}
-			batch = append(batch, req)
-		case <-t.C:
-			flush()
-		}
-	}
-}
-
-func (r *RedoLog) flushBatch(batch []appendReq) error {
 	f, err := os.OpenFile(r.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-
-	entries := make([]RedoLogItem, 0, len(batch))
-	for _, req := range batch {
-		b, err := json.Marshal(req.entry)
-		if err != nil {
-			return err
-		}
-		if _, err := f.Write(append(b, '\n')); err != nil {
-			return err
-		}
-		entries = append(entries, req.entry)
-	}
-	r.mu.Lock()
-	fsyncFn := r.fsyncFn
-	r.mu.Unlock()
-	if fsyncFn == nil {
-		fsyncFn = func(f *os.File) error { return f.Sync() }
-	}
-	if err := fsyncFn(f); err != nil {
+	if _, err := f.Write(append(data, '\n')); err != nil {
 		return err
 	}
-
-	r.mu.Lock()
-	r.entries = append(r.entries, entries...)
-	r.mu.Unlock()
+	if err := r.fsyncFn(f); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	r.entries = append(r.entries, entry)
 	return nil
 }
 

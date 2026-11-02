@@ -70,8 +70,7 @@ without resizing the image. Resizing existing images is not supported.
 Malformed decision-log records block startup with an error identifying the file
 and line. The log is preserved for manual repair; automatic repair is not implemented.
 Embedded participants use `RunRecovery` for background recovery and reply expiration.
-Stop serving requests and join that worker before calling `Participant.Close()`,
-which drains and stops the redo appender.
+Stop serving requests and join that worker before calling `Participant.Close()`.
 Redo cleanup preserves recent transaction decisions through the retry window,
 even when a crash lost the exact reply, so a restart cannot turn a known commit
 into an abort or execute it again.

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,7 +21,7 @@ const (
 	logCrashTimeout  = 10 * time.Second
 )
 
-// Durable log reading, batching, compaction, and interrupted replacement.
+// Durable log reading, appends, compaction, and interrupted replacement.
 
 func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -30,7 +29,6 @@ func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer log.Close()
 	const (
 		largerWriteSize = 256 << 10
 		largeWriteSize  = 64 << 10
@@ -55,7 +53,6 @@ func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen accepted large records: %v", err)
 	}
-	defer reopened.Close()
 	if !reflect.DeepEqual(reopened.Entries(), want) {
 		t.Fatal("reopened redo log changed record order, metadata, or binary payloads")
 	}
@@ -94,7 +91,6 @@ func TestRedoLogReaderEOFAndMalformedRecords(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer log.Close()
 			var ids []uint64
 			for _, entry := range log.Entries() {
 				ids = append(ids, entry.TransactionId.Counter)
@@ -106,53 +102,132 @@ func TestRedoLogReaderEOFAndMalformedRecords(t *testing.T) {
 	}
 }
 
-func TestRedoLogBatchingReducesFsyncCallsAndPreservesDurability(t *testing.T) {
+func TestRedoLogConcurrentAppendsAndCompactionPreserveDurability(t *testing.T) {
 	dir := t.TempDir()
 	log, err := OpenRedoLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer log.Close()
-	log.ConfigureBatchingForTest(3*time.Millisecond, 64)
-
-	var fsyncCalls atomic.Int64
-	log.SetFsyncHookForTest(func(f *os.File) error {
-		time.Sleep(2 * time.Millisecond)
-		fsyncCalls.Add(1)
-		return f.Sync()
-	})
-
+	// Only this oldest record is eligible for the concurrent compaction.
+	if err := log.AddItem(RedoLogItem{}); err != nil {
+		t.Fatal(err)
+	}
 	const entries = 200
 	var wg sync.WaitGroup
-	wg.Add(entries)
+	wg.Add(entries + 1)
 	for i := 0; i < entries; i++ {
-		i := i
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			err := log.AddItem(RedoLogItem{TransactionId: sinfonia.TransactionID{CoordinatorID: 1, Counter: uint64(i + 1), Epoch: 1}, HostIds: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: uint64(i), Data: []byte{byte(i)}}}})
-			if err != nil {
+			entry := RedoLogItem{
+				TransactionId: sinfonia.TransactionID{CoordinatorID: 1, Counter: uint64(i + 1), Epoch: 1},
+				HostIds:       []uint32{1},
+				WriteItems:    []sinfonia.WriteItem{{MemID: 1, Addr: uint64(i), Data: []byte{byte(i)}}},
+			}
+			if err := log.AddItem(entry); err != nil {
 				t.Errorf("append failed: %v", err)
 			}
-		}()
+		}(i)
 	}
-	wg.Wait()
-	for range 2 {
-		if err := log.Close(); err != nil {
-			t.Fatal(err)
+	go func() {
+		defer wg.Done()
+		if err := log.TruncateHead(1); err != nil {
+			t.Errorf("compaction failed: %v", err)
 		}
-	}
+	}()
+	wg.Wait()
 
-	if got := fsyncCalls.Load(); got >= entries {
-		t.Fatalf("expected batching to reduce fsync calls; got=%d entries=%d", got, entries)
-	}
-
-	reloaded, err := OpenRedoLog(filepath.Clean(dir))
+	reloaded, err := OpenRedoLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reloaded.Close()
-	if got := len(reloaded.Entries()); got != entries {
-		t.Fatalf("expected %d durable entries, got %d", entries, got)
+	got := reloaded.Entries()
+	if len(got) != entries || !reflect.DeepEqual(got, log.Entries()) {
+		t.Fatalf("durable entries do not match the acknowledged appends: got %d, want %d", len(got), entries)
+	}
+	seen := make(map[uint64]bool, entries)
+	for _, entry := range got {
+		id := entry.TransactionId.Counter
+		if id < 1 || id > entries || seen[id] {
+			t.Fatalf("unexpected or duplicate transaction: %+v", entry.TransactionId)
+		}
+		want := RedoLogItem{
+			TransactionId: sinfonia.TransactionID{CoordinatorID: 1, Counter: id, Epoch: 1},
+			HostIds:       []uint32{1},
+			WriteItems:    []sinfonia.WriteItem{{MemID: 1, Addr: id - 1, Data: []byte{byte(id - 1)}}},
+		}
+		if !reflect.DeepEqual(entry, want) {
+			t.Fatalf("durable record changed: got %+v, want %+v", entry, want)
+		}
+		seen[id] = true
+	}
+}
+
+func TestRedoLogAppendWaitsForSync(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		name := "success"
+		if fail {
+			name = "sync failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			log, err := OpenRedoLog(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			entered, release := make(chan struct{}), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(release) })
+			injected := errors.New("sync failed")
+			log.SetFsyncHookForTest(func(f *os.File) error {
+				close(entered)
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				if fail {
+					return injected
+				}
+				return f.Sync()
+			})
+			entry := RedoLogItem{TransactionId: sinfonia.TransactionID{Counter: 1}, HostIds: []uint32{1}}
+			result := make(chan error, 1)
+			finished := make(chan struct{})
+			go func() {
+				defer close(finished)
+				result <- log.AddItem(entry)
+			}()
+			defer func() { unblock(); <-finished }()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			select {
+			case err := <-result:
+				t.Fatalf("append returned before sync finished: %v", err)
+			default:
+			}
+			unblock()
+			err = <-result
+			if fail {
+				if !errors.Is(err, injected) || len(log.Entries()) != 0 {
+					t.Fatalf("failed sync published an entry or lost its error: entries=%v, err=%v", log.Entries(), err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := OpenRedoLog(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(reloaded.Entries(), []RedoLogItem{entry}) {
+				t.Fatal("successful append was not preserved on reopen")
+			}
+		})
 	}
 }
 
@@ -164,7 +239,6 @@ func TestRedoLogCompactionReplacesCompleteFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer log.Close()
 			for i := uint64(1); i <= 2; i++ {
 				if err := log.AddItem(RedoLogItem{TransactionId: sinfonia.TransactionID{Counter: i}}); err != nil {
 					t.Fatal(err)
@@ -201,7 +275,6 @@ func TestRedoLogCompactionReplacesCompleteFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer reopened.Close()
 			entries := reopened.Entries()
 			if len(entries) != 3-count {
 				t.Fatalf("reopened entries = %d, want %d", len(entries), 3-count)

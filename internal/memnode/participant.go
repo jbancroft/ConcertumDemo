@@ -90,7 +90,7 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 		return nil, err
 	}
 
-	// Reject malformed decisions before opening the image or starting the redo appender.
+	// Reject malformed decisions before opening the image.
 	decided, err := storage.OpenDecidedTransactionLog(dir)
 	if err != nil {
 		return nil, err
@@ -108,11 +108,6 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, redoLog.Close())
-		}
-	}()
 	forcedAbort, err := storage.OpenForcedAbortLog(dir)
 	if err != nil {
 		return nil, err
@@ -167,14 +162,11 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 	return n, nil
 }
 
-// Close drains the redo appender and releases storage. Callers must first stop
+// Close releases the disk image. Callers must first stop
 // serving requests and join any externally started recovery workers.
 func (n *Participant) Close() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.redoLog != nil {
-		_ = n.redoLog.Close()
-	}
 	if n.diskImage == nil {
 		return nil
 	}

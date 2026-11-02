@@ -126,11 +126,10 @@ peers for evidence about unfinished transactions. Missing evidence can keep it
 from finishing recovery or serving requests. A coordinator disappearing doesn't
 give a prepared participant permission to abort on its own.
 
-Each durable participant owns its disk image and redo appender, including cleanup
-when construction fails. After requests and externally started recovery workers
-have stopped, `Participant.Close` joins the appender before closing the image.
-Direct redo-log users must finish log operations before `RedoLog.Close`; afterward
-only repeated closes are allowed. Append calls report their own storage errors.
+Each durable participant owns its disk image, including cleanup when construction
+fails. After requests and externally started recovery workers have stopped,
+`Participant.Close` closes the image. Each redo append writes and syncs its record
+before returning success. Appends and compaction share the log mutex.
 
 The configured memory size must match the existing image file exactly. Only a
 newly created image is initialized to that size; mismatches fail startup without

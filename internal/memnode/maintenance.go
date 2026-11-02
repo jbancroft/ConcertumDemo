@@ -3,7 +3,6 @@ package memnode
 import (
 	"context"
 	"os"
-	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
@@ -167,14 +166,6 @@ func (n *Participant) RunForcedAbortGC() error {
 func (n *Participant) RunForcedAbortGCRPC(ctx context.Context, _ sinfonia.RunForcedAbortGCRequest) (sinfonia.RunForcedAbortGCResponse, error) {
 	err := n.RunForcedAbortGC()
 	return sinfonia.RunForcedAbortGCResponse{Ack: err == nil}, err
-}
-
-func (n *Participant) SetRedoBatchingForTest(window time.Duration, max int) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.redoLog != nil {
-		n.redoLog.ConfigureBatchingForTest(window, max)
-	}
 }
 
 func (n *Participant) SetRedoFsyncHookForTest(fn func(*os.File) error) {
