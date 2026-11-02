@@ -241,7 +241,7 @@ func TestRecoveryAfterGCWithProcessedCheckpoint(t *testing.T) {
 
 			// Stop after the new commit decision is durable, before its write.
 			interrupted := errors.New("interrupted before applying committed write")
-			node.SetOutcomeReplayBoundaryHookForTest(func(phase string, _ sinfonia.TransactionID) error {
+			node.SetResponseBoundaryHookForTest(func(phase string, _ sinfonia.TransactionID) error {
 				if phase == "one-pc-before-response" {
 					return interrupted
 				}

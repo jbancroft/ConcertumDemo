@@ -11,8 +11,8 @@ import (
 const (
 	abandonedTransactionAge   = time.Second
 	backgroundRecoveryTimeout = time.Second
+	outcomeGCInterval         = time.Minute
 	recoveryScanInterval      = 250 * time.Millisecond
-	replayGCInterval          = time.Minute
 )
 
 // RunRecovery finishes old prepared transactions and expires saved replies until
@@ -38,11 +38,11 @@ func (n *Participant) RunRecovery(ctx context.Context, remote map[uint32]recover
 		n.mu.Lock()
 		ready := n.recoveryComplete && n.restartRequired == nil
 		if ready && !tick.Before(nextGC) {
-			if err := n.gcReplayLocked(); err != nil {
-				n.failUncertainLocked("expire transaction replies", err)
+			if err := n.gcOutcomesLocked(); err != nil {
+				n.failUncertainLocked("expire transaction outcomes", err)
 				ready = false
 			}
-			nextGC = tick.Add(replayGCInterval)
+			nextGC = tick.Add(outcomeGCInterval)
 		}
 		now := n.nowFn()
 		n.mu.Unlock()

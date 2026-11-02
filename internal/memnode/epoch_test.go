@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
-	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
 func TestParticipantEpochSharedAndMonotonic(t *testing.T) {
@@ -37,7 +36,7 @@ func TestParticipantEpochSharedAndMonotonic(t *testing.T) {
 }
 
 func TestEpochFloorProtectsDiscardedHistory(t *testing.T) {
-	for _, kind := range []string{"forced-abort", "replay"} {
+	for _, kind := range []string{"forced-abort", "cached reply"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx := context.Background()
 			dir := t.TempDir()
@@ -61,7 +60,7 @@ func TestEpochFloorProtectsDiscardedHistory(t *testing.T) {
 					t.Fatalf("prepare=%+v, err=%v", resp, err)
 				}
 				gc = func() error { return node.Recover(ctx) }
-				hasRecord = func() bool { _, ok := node.replay.GetPrepare(tid); return ok }
+				hasRecord = func() bool { _, ok := node.prepareOutcomes[tid]; return ok }
 			}
 			now = now.Add(3 * time.Hour)
 			// Prevent publishing the floor. History must remain until it is durable.
@@ -164,7 +163,7 @@ func TestForcedAbortGCRetainsRecentVoteAfterRestart(t *testing.T) {
 	}
 }
 
-func TestBackgroundReplayRetention(t *testing.T) {
+func TestBackgroundTransactionRetention(t *testing.T) {
 	for _, mode := range []string{"ram", "durable"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
@@ -235,22 +234,7 @@ func TestBackgroundReplayRetention(t *testing.T) {
 					t.Fatalf("retained reply for %v = %+v, %v", tid, vote, err)
 				}
 			}
-			if node.replay != nil {
-				reopened, err := storage.OpenReplayStore(dir)
-				if err != nil {
-					t.Fatal(err)
-				}
-				for _, store := range []*storage.ReplayStore{node.replay, reopened} {
-					if _, ok := store.GetOnePC(old); ok {
-						t.Fatal("expired read retained in replay store")
-					}
-					if _, ok := store.GetPrepare(pending); !ok {
-						t.Fatal("unresolved reply lost from replay store")
-					}
-					if _, ok := store.GetOnePC(recent.TID); !ok {
-						t.Fatal("recent reply lost from replay store")
-					}
-				}
+			if node.decided != nil {
 				if _, ok := node.decided.Get(old); ok {
 					t.Fatal("expired read-only decision retained")
 				}
@@ -277,7 +261,7 @@ func TestBackgroundReplayRetention(t *testing.T) {
 				t.Fatalf("finish expired prepare = %+v, %v", resp, err)
 			}
 			node.mu.Lock()
-			err = node.gcReplayLocked()
+			err = node.gcOutcomesLocked()
 			node.mu.Unlock()
 			if err != nil {
 				t.Fatal(err)
@@ -291,8 +275,8 @@ func TestBackgroundReplayRetention(t *testing.T) {
 	}
 }
 
-func TestReplayRetentionFailureAndRestart(t *testing.T) {
-	for _, blocked := range []string{"epoch.floor", "replay.log", "decided.log"} {
+func TestTransactionRetentionFailureAndRestart(t *testing.T) {
+	for _, blocked := range []string{"epoch.floor", "decided.log"} {
 		t.Run(blocked, func(t *testing.T) {
 			ctx := context.Background()
 			dir := t.TempDir()
@@ -328,7 +312,7 @@ func TestReplayRetentionFailureAndRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 			node.mu.Lock()
-			err = node.gcReplayLocked()
+			err = node.gcOutcomesLocked()
 			node.mu.Unlock()
 			if err == nil {
 				t.Fatal("cleanup succeeded with blocked storage")
@@ -343,7 +327,7 @@ func TestReplayRetentionFailureAndRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 			node.mu.Lock()
-			err = node.gcReplayLocked()
+			err = node.gcOutcomesLocked()
 			node.mu.Unlock()
 			if err != nil {
 				t.Fatal(err)

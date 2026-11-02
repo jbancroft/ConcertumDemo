@@ -44,8 +44,7 @@ func writeGobRecord(w io.Writer, value any) error {
 
 // The section covers the file as it was opened. Check lengths against the
 // remaining bytes before allocating, including when a damaged header is huge.
-// Only an incomplete frame is recoverable as a torn replay tail; a complete
-// frame with invalid gob data is corruption, even if gob reports unexpected EOF.
+// Incomplete frames and invalid gob payloads both block redo recovery.
 func readGobRecord(r *io.SectionReader, value any) error {
 	var header [gobRecordHeaderSize]byte
 	n, err := io.ReadFull(r, header[:])

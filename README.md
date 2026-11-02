@@ -67,10 +67,12 @@ The image size defaults to 2 MiB; use `-size BYTES` to choose another size when
 creating a node. Reopen durable nodes with the same size: a mismatch fails startup
 without resizing the image. Resizing existing images is not supported.
 
-`redo.log` and `replay.log` use framed gob records. Redo stores transaction writes
-for recovery; replay stores original replies for retries and outcome resolution.
-Existing JSON logs are unsupported; use a fresh data directory when upgrading
-from that format.
+`redo.log` uses framed gob records to store transaction writes for recovery.
+Existing JSON redo logs are unsupported; use a fresh data directory when upgrading
+from that format. Original replies are cached only in memory. After a participant
+restarts, `Resolve` can recover a commit decision but reports
+`ErrReadResultsUnavailable` if the original reads were lost. No replay log is
+created or read; an old `replay.log` is unused and can be deleted.
 
 Malformed decision-log records block startup with an error identifying the file
 and line. The log is preserved for manual repair; automatic repair is not implemented.

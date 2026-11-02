@@ -139,7 +139,7 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 			}
 		}
 	}
-	// Leave decisions for epoch-based replay cleanup: a decision may be the
+	// Leave decisions for epoch-based outcome cleanup: a decision may be the
 	// only durable outcome evidence when a crash lost the exact reply.
 	return nil
 }

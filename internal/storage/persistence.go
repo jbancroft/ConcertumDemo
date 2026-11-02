@@ -453,7 +453,7 @@ func (s *DecidedTransactionLog) Remove(txId sinfonia.TransactionID) error {
 }
 
 // Compact removes expired decisions unless the caller still needs them for redo.
-func (s *DecidedTransactionLog) Compact(retention ReplayRetention) error {
+func (s *DecidedTransactionLog) Compact(retention TransactionRetention) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	retained := make(map[string]bool, len(s.outcomes))

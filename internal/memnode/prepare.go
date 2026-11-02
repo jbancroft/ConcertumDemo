@@ -31,24 +31,24 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	}
 
 	currentEpoch := n.currentEpochLocked()
-	if resp, ok := n.replayPrepareOutcomeLocked(req.TID, req.RequestID, currentEpoch); ok {
+	if resp, ok := n.cachedPrepareOutcomeLocked(req.TID, req.RequestID, currentEpoch); ok {
 		return resp, nil
 	}
 
 	if n.hasDurableTransactionLocked(req.TID) {
-		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: prepare transaction %v", ErrReplayUnavailable, req.TID)
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: prepare transaction %v", ErrResponseUnavailable, req.TID)
 	}
-	if (storage.ReplayRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
+	if (storage.TransactionRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
 		if err := n.persistEpochFloorLocked(currentEpoch); err != nil {
 			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 		}
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch}, nil
 	}
 	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch}), nil
 	}
 	if out, ok := n.commitOutcomes[req.TID]; ok && !out.actionCommit {
-		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch}), nil
 	}
 	if txn, ok := n.inDoubt[req.TID]; ok {
 		resp := sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(txn.readData), CurrentEpoch: currentEpoch}
@@ -63,7 +63,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	acquired, conflict := n.tryTransactionLocksLocked(req.CmpItems, req.ReadItems, req.WriteItems)
 	if conflict != nil {
 		delete(n.inDoubt, req.TID)
-		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
+		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict}), nil
 	}
 
 	for _, item := range req.CmpItems {
@@ -71,7 +71,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 		if err != nil || string(actual) != string(item.Data) {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
-			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadCmp, CurrentEpoch: currentEpoch})
+			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadCmp, CurrentEpoch: currentEpoch}), nil
 		}
 	}
 
@@ -105,12 +105,10 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 		txn.redoLoggedTid = true
 	}
 	resp := clonePrepareResponse(original)
-	if err := n.callOutcomeReplayBoundaryHookLocked("prepare-before-response", req.TID); err != nil {
+	if err := n.callResponseBoundaryHookLocked("prepare-before-response", req.TID); err != nil {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
-	resp, err := n.rememberPrepareOutcomeLocked(req.TID, resp)
-	if err == nil {
-		txn.prepareResponse = nil
-	}
-	return resp, err
+	resp = n.rememberPrepareOutcomeLocked(req.TID, resp)
+	txn.prepareResponse = nil
+	return resp, nil
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
-var ErrReplayUnavailable = errors.New("durable transaction exists without exact replay payload")
+var ErrResponseUnavailable = errors.New("transaction exists without its original response")
 
 type prepareOutcome struct {
 	resp sinfonia.ExecPrepareResponse
@@ -17,10 +17,10 @@ type onePCOutcome struct {
 	resp sinfonia.ExecCommit1PCResponse
 }
 
-// gcReplayLocked expires the same history in memory and on disk.
-// Saving replies holds the same mutex, so it cannot race compaction.
-func (n *Participant) gcReplayLocked() error {
-	retention := storage.ReplayRetention{
+// gcOutcomesLocked expires cached replies and retained decisions. In-flight
+// transactions keep their replies; redo entries also pin their decisions.
+func (n *Participant) gcOutcomesLocked() error {
+	retention := storage.TransactionRetention{
 		CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.PublicRetryHorizon,
 		Keep: make(map[sinfonia.TransactionID]struct{}),
 	}
@@ -29,11 +29,6 @@ func (n *Participant) gcReplayLocked() error {
 	}
 	if err := n.persistEpochFloorLocked(retention.CurrentEpoch); err != nil {
 		return err
-	}
-	if n.replay != nil {
-		if err := n.replay.Compact(retention); err != nil {
-			return err
-		}
 	}
 	if n.decided != nil {
 		// Redo recovery still needs these decisions after exact replies expire.
@@ -107,77 +102,50 @@ func (n *Participant) hasDurableTransactionLocked(txId sinfonia.TransactionID) b
 	return false
 }
 
-func (n *Participant) callOutcomeReplayBoundaryHookLocked(phase string, txId sinfonia.TransactionID) error {
-	if n.outcomeReplayBoundaryHook == nil {
+func (n *Participant) callResponseBoundaryHookLocked(phase string, txId sinfonia.TransactionID) error {
+	if n.responseBoundaryHook == nil {
 		return nil
 	}
-	return n.outcomeReplayBoundaryHook(phase, txId)
+	return n.responseBoundaryHook(phase, txId)
 }
 
-func (n *Participant) rememberPrepareOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecPrepareResponse) (sinfonia.ExecPrepareResponse, error) {
-	if n.replay != nil {
-		if err := n.replay.AppendPrepare(txId, resp); err != nil {
-			return sinfonia.ExecPrepareResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
-		}
-	}
-
+func (n *Participant) rememberPrepareOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecPrepareResponse) sinfonia.ExecPrepareResponse {
 	n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(resp)}
-	return resp, nil
+	return resp
 }
 
-func (n *Participant) replayPrepareOutcomeLocked(txId sinfonia.TransactionID, requestID sinfonia.RequestID, currentEpoch uint64) (sinfonia.ExecPrepareResponse, bool) {
-	var original sinfonia.ExecPrepareResponse
-	if out, ok := n.prepareOutcomes[txId]; ok {
-		original = clonePrepareResponse(out.resp)
-	} else {
-		if n.replay == nil {
-			return sinfonia.ExecPrepareResponse{}, false
-		}
-		var ok bool
-		original, ok = n.replay.GetPrepare(txId)
-		if !ok {
-			return sinfonia.ExecPrepareResponse{}, false
-		}
-		n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(original)}
+func (n *Participant) cachedPrepareOutcomeLocked(txId sinfonia.TransactionID, requestID sinfonia.RequestID, currentEpoch uint64) (sinfonia.ExecPrepareResponse, bool) {
+	out, ok := n.prepareOutcomes[txId]
+	if !ok {
+		return sinfonia.ExecPrepareResponse{}, false
 	}
 
-	resp := original
+	resp := clonePrepareResponse(out.resp)
 	resp.RequestID = requestID
 	resp.CurrentEpoch = currentEpoch
 	return resp, true
 }
 
-func (n *Participant) rememberOnePCOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecCommit1PCResponse) (sinfonia.ExecCommit1PCResponse, error) {
-	if n.replay != nil {
-		if err := n.replay.AppendOnePC(txId, resp); err != nil {
-			return sinfonia.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
-		}
-	}
-
+func (n *Participant) rememberOnePCOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecCommit1PCResponse) sinfonia.ExecCommit1PCResponse {
 	n.onePCOutcomes[txId] = onePCOutcome{resp: clone1PCResponse(resp)}
-	return resp, nil
+	return resp
 }
 
-// rememberPendingResponseLocked preserves the original reply before recovery
-// discards its only remaining copy. The existing replay store rejects overwrites.
-func (n *Participant) rememberPendingResponseLocked(txId sinfonia.TransactionID, txn *preparedTxn, commit bool) error {
+// rememberPendingResponseLocked keeps live reads available when recovery
+// finishes an interrupted request. These responses do not survive a restart.
+func (n *Participant) rememberPendingResponseLocked(txId sinfonia.TransactionID, txn *preparedTxn, commit bool) {
 	if txn.prepareResponse != nil {
-		if _, err := n.rememberPrepareOutcomeLocked(txId, *txn.prepareResponse); err != nil {
-			return err
-		}
+		n.rememberPrepareOutcomeLocked(txId, *txn.prepareResponse)
 		txn.prepareResponse = nil
 	}
 	if commit && txn.onePCResponse != nil {
-		if _, err := n.rememberOnePCOutcomeLocked(txId, *txn.onePCResponse); err != nil {
-			return err
-		}
+		n.rememberOnePCOutcomeLocked(txId, *txn.onePCResponse)
 		txn.onePCResponse = nil
 	}
-	return nil
 }
 
-func (n *Participant) SetOutcomeReplayBoundaryHookForTest(fn func(phase string, txId sinfonia.TransactionID) error) {
+func (n *Participant) SetResponseBoundaryHookForTest(fn func(phase string, txId sinfonia.TransactionID) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.outcomeReplayBoundaryHook = fn
+	n.responseBoundaryHook = fn
 }

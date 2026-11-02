@@ -16,7 +16,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/recovery"
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
-	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
 // Durable transaction records, write boundaries, and uncertain persistence failures.
@@ -102,8 +101,8 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 		TID:        txId,
 		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 4, Data: []byte("redo")}},
 	})
-	if !errors.Is(err, memnode.ErrReplayUnavailable) || retry.Vote != sinfonia.VoteBadInternal {
-		t.Fatalf("exact-TID retry = (%+v, %v), want replay-unavailable failure", retry, err)
+	if !errors.Is(err, memnode.ErrResponseUnavailable) || retry.Vote != sinfonia.VoteBadInternal {
+		t.Fatalf("exact-TID retry = (%+v, %v), want response-unavailable failure", retry, err)
 	}
 	got, err = n.ReadBytesForTest(4, 4)
 	if err != nil {
@@ -148,13 +147,7 @@ func TestOnePCOutOfBoundsWriteDoesNotPersistSuccess(t *testing.T) {
 	if n.RedoEntryCountForTest() != 0 || n.HasDecidedForTest(txId) {
 		t.Fatal("out-of-bounds request created durable transaction state")
 	}
-	store, err := storage.OpenReplayStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if replay, ok := store.GetOnePC(txId); ok {
-		t.Fatalf("out-of-bounds request persisted success replay: %+v", replay)
-	}
+
 }
 
 func TestDurableLargeWritesSurviveRestart(t *testing.T) {
@@ -187,7 +180,7 @@ func TestDurableLargeWritesSurviveRestart(t *testing.T) {
 				{MemID: 1, Addr: firstWriteSize, Data: want[firstWriteSize:]},
 			} {
 				if interrupted && i == 1 {
-					node.SetOutcomeReplayBoundaryHookForTest(func(phase string, _ sinfonia.TransactionID) error {
+					node.SetResponseBoundaryHookForTest(func(phase string, _ sinfonia.TransactionID) error {
 						if phase == "one-pc-before-response" {
 							return fault
 						}

@@ -14,7 +14,7 @@ import (
 	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
-func TestBackgroundRecoveryPreservesUnrecordedReads(t *testing.T) {
+func TestBackgroundRecoveryKeepsReadsOnlyWhileParticipantLives(t *testing.T) {
 	for _, phase := range []struct {
 		name  string
 		onePC bool
@@ -30,7 +30,7 @@ func TestBackgroundRecoveryPreservesUnrecordedReads(t *testing.T) {
 				}
 				tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 				fault := errors.New("interrupted before saving original response")
-				node.SetOutcomeReplayBoundaryHookForTest(func(string, sinfonia.TransactionID) error { return fault })
+				node.SetResponseBoundaryHookForTest(func(string, sinfonia.TransactionID) error { return fault })
 				reads := []sinfonia.ReadItem{{MemID: 1, Len: 1}}
 				writes := []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}}
 				var err error
@@ -42,7 +42,7 @@ func TestBackgroundRecoveryPreservesUnrecordedReads(t *testing.T) {
 				if !errors.Is(err, fault) {
 					t.Fatalf("expected interrupted request: %v", err)
 				}
-				node.SetOutcomeReplayBoundaryHookForTest(nil)
+				node.SetResponseBoundaryHookForTest(nil)
 				workerCtx, stopWorker := context.WithCancel(ctx)
 				workerDone := make(chan struct{})
 				go func() { defer close(workerDone); node.RunRecovery(workerCtx, nil) }()
@@ -92,7 +92,10 @@ func TestBackgroundRecoveryPreservesUnrecordedReads(t *testing.T) {
 					node = durableAccessNode(t, dir)
 					c = &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
 					defer c.Close()
-					checkReads()
+					result := c.Resolve(ctx, handle)
+					if !result.Committed || !errors.Is(result.OutcomeError(), ErrReadResultsUnavailable) || len(result.ReadResults) != 0 {
+						t.Fatalf("restart must recover commit without original reads: %+v", result)
+					}
 				}
 			})
 		}
@@ -114,7 +117,7 @@ func (n *disconnectedAfterCommit) RecoveryForceAbort(ctx context.Context, _ sinf
 	return sinfonia.RecoverForceAbortResponse{}, ctx.Err()
 }
 
-func TestRecoveryHandleSurvivesClientRestartAndPreservesOriginalReads(t *testing.T) {
+func TestRecoveryHandleResolvesCommitAfterRestartWithoutOriginalReads(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	node := durableAccessNode(t, dir)
@@ -147,8 +150,8 @@ func TestRecoveryHandleSurvivesClientRestartAndPreservesOriginalReads(t *testing
 	}
 	for range 2 {
 		resolved := c.Resolve(ctx, handle)
-		if !resolved.Committed || resolved.OutcomeError() != nil || string(resolved.ReadResults[ReadKey{HostId: 1, Length: 1}]) != "\x00" {
-			t.Fatalf("resolution lost original result: %+v", resolved)
+		if !resolved.Committed || !errors.Is(resolved.OutcomeError(), ErrReadResultsUnavailable) || len(resolved.ReadResults) != 0 {
+			t.Fatalf("resolution must preserve commit without original reads: %+v", resolved)
 		}
 	}
 	if got, err := c.Read(ctx, 1, 0, 1); err != nil || string(got) != "B" {
@@ -187,7 +190,7 @@ func TestResolveExpiredEvidenceDoesNotInventAbort(t *testing.T) {
 func TestResolveCommitWithoutOriginalReadsDoesNotReread(t *testing.T) {
 	dir := t.TempDir()
 	node := durableAccessNode(t, dir)
-	node.SetOutcomeReplayBoundaryHookForTest(func(string, sinfonia.TransactionID) error { return errors.New("lost before saving response") })
+	node.SetResponseBoundaryHookForTest(func(string, sinfonia.TransactionID) error { return errors.New("lost before saving response") })
 	c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: &disconnectedAfterCommit{Participant: node}})}
 	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)

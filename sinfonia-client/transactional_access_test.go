@@ -124,7 +124,7 @@ func TestClientWriteResolvesDecisionAfterServerCommitError(t *testing.T) {
 	dir := t.TempDir()
 	n := durableAccessNode(t, dir)
 	var attempts atomic.Int32
-	n.SetOutcomeReplayBoundaryHookForTest(func(string, sinfonia.TransactionID) error {
+	n.SetResponseBoundaryHookForTest(func(string, sinfonia.TransactionID) error {
 		attempts.Add(1)
 		return errors.New("injected failure after commit decision")
 	})
@@ -136,7 +136,7 @@ func TestClientWriteResolvesDecisionAfterServerCommitError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("saved commit decision did not resolve: %v", err)
 	}
-	n.SetOutcomeReplayBoundaryHookForTest(nil)
+	n.SetResponseBoundaryHookForTest(nil)
 	if data, readErr := c.Read(ctx, 1, 4, 5); readErr != nil || string(data) != "saved" {
 		t.Fatalf("recovery did not apply the committed write: %q, %v", data, readErr)
 	}

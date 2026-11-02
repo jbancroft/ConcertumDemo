@@ -1,2 +1,2 @@
-// Package storage saves node memory, transaction logs, and earlier replies.
+// Package storage saves node memory and transaction recovery records.
 package storage

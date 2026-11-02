@@ -59,6 +59,40 @@ func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDecidedRetentionPreservesRecentAndPinnedOutcomes(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenDecidedTransactionLog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the retry boundary and a near-maximum epoch without overflow.
+	current := ^uint64(0)
+	old := sinfonia.TransactionID{Counter: 1, Epoch: current - PublicRetryHorizon}
+	recent := sinfonia.TransactionID{Counter: 2, Epoch: current - 1}
+	now := sinfonia.TransactionID{Counter: 3, Epoch: current}
+	pinned := sinfonia.TransactionID{Counter: 4, Epoch: 1}
+	for _, tid := range []sinfonia.TransactionID{old, recent, now, pinned} {
+		if err := log.AddItem(tid, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := log.Compact(TransactionRetention{CurrentEpoch: current, RetryHorizon: PublicRetryHorizon, Keep: map[sinfonia.TransactionID]struct{}{pinned: {}}}); err != nil {
+		t.Fatal(err)
+	}
+	log, err = OpenDecidedTransactionLog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, known := log.Get(old); known {
+		t.Fatal("expired decision survived compaction")
+	}
+	for _, tid := range []sinfonia.TransactionID{recent, now, pinned} {
+		if committed, known := log.Get(tid); !committed || !known {
+			t.Fatalf("required decision lost after compaction and reopen: %+v", tid)
+		}
+	}
+}
+
 func TestRedoLogReaderEOFAndMalformedRecords(t *testing.T) {
 	first, err := encodeGobRecord(RedoLogItem{TransactionId: sinfonia.TransactionID{Counter: 1}})
 	if err != nil {

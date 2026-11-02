@@ -88,14 +88,6 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 	// Inspect saved replies without replaying operations.
 	one, oneOK := n.onePCOutcomes[tid]
 	prep, prepOK := n.prepareOutcomes[tid]
-	if n.replay != nil {
-		if !oneOK {
-			one.resp, oneOK = n.replay.GetOnePC(tid)
-		}
-		if !prepOK {
-			prep.resp, prepOK = n.replay.GetPrepare(tid)
-		}
-	}
 	if oneOK {
 		out.Vote, out.ReadData = one.resp.Vote, cloneReadData(one.resp.ReadData)
 		out.KnownDecision, out.DecisionCommit = true, one.resp.Vote == sinfonia.VoteOk
@@ -133,7 +125,7 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 		return out, nil
 	}
 	// Missing evidence after retention is not evidence of an abort.
-	if (storage.ReplayRetention{CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.PublicRetryHorizon}).Expired(tid) {
+	if (storage.TransactionRetention{CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.PublicRetryHorizon}).Expired(tid) {
 		out.Expired = true
 		return out, nil
 	}
@@ -278,7 +270,7 @@ func (n *Participant) Recover(ctx context.Context) error {
 		n.mu.Unlock()
 		return err
 	}
-	if err := n.gcReplayLocked(); err != nil {
+	if err := n.gcOutcomesLocked(); err != nil {
 		n.mu.Unlock()
 		return err
 	}

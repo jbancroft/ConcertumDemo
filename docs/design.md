@@ -50,8 +50,8 @@ These convenience methods return `ErrTransactionAborted` for an explicit
 rejection and `ErrUnknownOutcome` when the outcome cannot be established. Separate
 reads are separate transactions, so callers still need validation or a combined
 minitransaction to obtain a snapshot across several ranges. The current
-single-participant path saves decisions and exact replies for read-only calls
-too, including disk writes on durable nodes.
+single-participant path saves decisions for read-only calls too, including disk
+writes on durable nodes. Original replies are cached only in memory.
 
 ## Finding the participant code
 
@@ -65,7 +65,7 @@ the same state and mutex; the split adds no package or API boundary.
 | [locking.go](../internal/memnode/locking.go) | Transaction range locks |
 | [prepare.go](../internal/memnode/prepare.go) | Comparisons, reads, prepared writes, and yes/no votes |
 | [commit.go](../internal/memnode/commit.go) | Applying commit/abort decisions and single-participant execution |
-| [replay.go](../internal/memnode/replay.go) | Remembering and replaying exact transaction replies |
+| [outcomes.go](../internal/memnode/outcomes.go) | Caching replies in memory and expiring transaction outcomes |
 | [recovery.go](../internal/memnode/recovery.go) | Epoch floors, recovery evidence, and unfinished transactions |
 | [maintenance.go](../internal/memnode/maintenance.go) | Applied notifications and log cleanup |
 
@@ -108,8 +108,11 @@ aborted, or unknown. An ambiguous result first triggers bounded resolution of th
 same transaction ID; it never triggers a fresh mutation. Both the direct client
 and transaction builder return the complete `ExecResult`, preserving its recovery
 handle and any error.
-Participants remember replies so duplicate requests can get the same result
-without applying writes twice.
+Participants cache replies in memory so duplicate requests can get the same
+result without applying writes twice. After restart, a transaction retained in
+redo or decision storage cannot execute again, but its original response is
+unavailable. A lost reply must be handled through outcome resolution; callers
+must not resubmit the operation as a new transaction.
 
 Transaction epochs are UTC hours since the Unix epoch, shared by coordinators
 and participants regardless of when they start. Each process keeps its epoch
@@ -120,8 +123,8 @@ limit. This assumes roughly synchronized system clocks.
 
 ## Disk storage and recovery
 
-A durable node saves its memory image, redo entries, decisions, forced-abort
-records, and earlier replies. On restart it uses those records and asks recovery
+A durable node saves its memory image, redo entries, decisions, and forced-abort
+records. On restart it uses those records and asks recovery
 peers for evidence about unfinished transactions. Missing evidence can keep it
 from finishing recovery or serving requests. A coordinator disappearing doesn't
 give a prepared participant permission to abort on its own.
@@ -138,26 +141,21 @@ resizing the image. Resizing existing images is not supported.
 `redo.log` holds transaction IDs, participant IDs, and writes needed to recover
 transaction effects. This follows Sinfonia's redo-log role: section 4.3 of the
 [paper](https://read.seas.harvard.edu/~kohler/class/08w-dsi/aguilera07sinfonia.pdf)
-explicitly omits read and compare items from redo. `replay.log` is our extension
-that saves the original participant replies, including votes and read results,
-for duplicate requests and outcome resolution. Both belong to the transaction
-layer; neither comes from Minuet, the B+tree, or SQL. Keeping them separate lets
-redo cleanup follow durable transaction effects while reply retention follows
-the retry window.
+explicitly omits read and compare items from redo. Original replies, including
+read results, are kept only in memory and are lost when the participant restarts.
+There is no durable replay store. An old `replay.log` is unused and can be deleted.
 
-Both logs use framed gob records: the four-byte `CGB1` format marker, an
+The redo log uses framed gob records: the four-byte `CGB1` format marker, an
 eight-byte big-endian payload length, then one standalone gob stream. Byte
 payloads stay binary. Each record has its own gob type metadata so reopening,
 appending, and compaction do not depend on a previous encoder's state. Readers
 check the length against remaining file bytes before allocating. There is no
-checksum. Earlier JSON logs are rejected; use a fresh data directory when moving
+checksum. Earlier JSON redo logs are rejected; use a fresh data directory when moving
 from that format. No migration or compatibility reader is provided.
 
 Malformed or incomplete redo records block startup without modifying the log,
-since discarding one could lose transaction evidence. A replay log's incomplete
-final frame is truncated and synced; the original reply may then be unavailable.
-A complete frame with invalid gob data blocks startup and is preserved in either
-log. Recovery never treats a missing original reply as an abort decision.
+since discarding one could lose transaction evidence. Recovery never treats a
+missing original reply as an abort decision.
 
 The shared [recovery coordinator](../internal/recovery/resolve.go) asks participants
 for their existing votes. A node that has not voted records a forced abort and
@@ -244,19 +242,18 @@ if result.UnknownOutcome {
 `Handle` and `Cause` survive wrapping through `errors.As`. Reopen a SQL engine
 after resolving an uncertain `CREATE TABLE` to reload its catalog cache.
 
-A commit decision and its read payload are separate facts. Recovery returns saved
-reads from the original attempt; it never substitutes a new read of current data.
-Before clearing a live pending transaction, recovery saves any missing original
-response through the replay store. If saving fails, it
-retains the response and locks for another attempt. A successful recovery leaves
-the original reads available for repeated resolution and durable restarts.
-If a crash preserved the commit but lost its exact read response, the result has
+A commit decision and its read payload are separate facts. Recovery can return
+reads still cached in memory from the original attempt; it never substitutes a
+new read of current data. Before clearing a live pending transaction, recovery
+keeps its original response in the memory cache. These responses are never
+written to disk. If a restart preserved the commit but lost its read response,
+the result has
 `StatusCommitted` and `ErrReadResultsUnavailable`. This does not authorize retrying
 its writes. As with normal execution, knowing the decision does not mean every
 participant has already applied it; background recovery finishes delivery.
 
-Replay records are retained for the current and previous UTC-hour epochs.
-`RunRecovery` also expires saved replies from memory and disk once per minute,
+Cached replies are retained for the current and previous UTC-hour epochs.
+`RunRecovery` expires replies from memory once per minute,
 preserving in-flight and unresolved transactions. Decisions remain for the same
 retry window even after redo cleanup, since they may be the only durable outcome
 evidence when a crash lost the exact reply. Retained redo entries pin their
@@ -265,6 +262,12 @@ old evidence is removed, resolution returns unknown with `ErrOutcomeExpired`,
 not a fabricated abort. Save and resolve handles promptly; the demo does not keep
 an indefinite application-level transaction history. An unreachable participant
 can leave a transaction unresolved until it returns.
+
+The public `Resolve` API and retention of decisions after redo cleanup are
+additional implementation choices. Sinfonia describes internal outcome recovery;
+section 4.7 collects decisions together with their redo entries. This demo still
+retains recent decisions to support later client queries and reject duplicate
+execution after restart.
 
 ## The B+tree
 

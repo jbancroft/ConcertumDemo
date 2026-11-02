@@ -26,7 +26,6 @@ type Participant struct {
 	redoLog      *storage.RedoLog
 	decided      *storage.DecidedTransactionLog
 	forcedAborts *storage.ForcedAbortLog
-	replay       *storage.ReplayStore
 	inDoubt      map[sinfonia.TransactionID]*preparedTxn
 	locks        LockManager
 	epoch        uint64
@@ -49,9 +48,9 @@ type Participant struct {
 	recoveryComplete bool
 	restartRequired  error
 
-	recoverBoundaryHook       func(phase string, txId sinfonia.TransactionID) error
-	outcomeReplayBoundaryHook func(phase string, txId sinfonia.TransactionID) error
-	writeApplyFaultHook       func(addr uint64, data []byte) error
+	recoverBoundaryHook  func(phase string, txId sinfonia.TransactionID) error
+	responseBoundaryHook func(phase string, txId sinfonia.TransactionID) error
+	writeApplyFaultHook  func(addr uint64, data []byte) error
 }
 
 func NewParticipant(size int) *Participant {
@@ -112,10 +111,6 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 	if err != nil {
 		return nil, err
 	}
-	replay, err := storage.OpenReplayStore(dir)
-	if err != nil {
-		return nil, err
-	}
 	now := time.Now()
 	n := &Participant{
 		hostId:           hostId,
@@ -130,7 +125,6 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 		epochFloor:       epochFloor,
 		allLogTxIds:      map[sinfonia.TransactionID]struct{}{},
 		participants:     map[uint32]RecoveryPeer{},
-		replay:           replay,
 		nowFn:            time.Now,
 		appliedLocal:     map[sinfonia.TransactionID]bool{},
 		appliedRemote:    map[sinfonia.TransactionID]map[uint32]bool{},
