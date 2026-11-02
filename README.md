@@ -1,8 +1,14 @@
 # ConcertumDemo
 
-A Go demo of distributed transactions, B+tree indexing, and SQL, based on
-[Sinfonia](https://read.seas.harvard.edu/~kohler/class/08w-dsi/aguilera07sinfonia.pdf)
-and [Minuet](https://www.cs.cornell.edu/~sowell/2012-VLDB-Minuet.pdf).
+A Go demo of distributed transactions, B+tree indexing, and SQL, based on [Sinfonia](https://read.seas.harvard.edu/~kohler/class/08w-dsi/aguilera07sinfonia.pdf) and [Minuet](https://www.cs.cornell.edu/~sowell/2012-VLDB-Minuet.pdf).
+
+ConcertumDemo is an experimental Go project exploring how a small distributed transaction primitive can support higher-level data structures.
+
+I’ve long been interested in Sinfonia’s approach: providing atomic operations over bytes distributed across memory nodes, letting applications build structures and services on that foundation. The original research demonstrated applications including a cluster filesystem. I wanted to explore those ideas using Go. I chose Go because its static typing, efficient memory usage, and concurrency model seemed like good fits for the needs of this project.
+
+Gob appealed to me as a straightforward way to encode messages between Go processes. Familiarity influenced that choice too—I encountered it when first learning Go, and it became a natural default. I’d reconsider it if the project’s requirements called for a different encoding.
+
+This demo connects cross-node transactions and durable recovery to a B+tree and a small SQL layer. Each tree currently lives on one node. Distributed trees and a filesystem for sharing agent context across machines are possible future directions; their scalability and usefulness remain open questions here.
 
 [Sinfonia/Minuet crash course](docs/crash-course.md) · [Design notes and limitations](docs/design.md)
 
