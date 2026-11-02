@@ -25,13 +25,13 @@ func (deletePlan) isPlan()      {}
 func Plan(stmt statement) (planNode, error) {
 	switch n := stmt.(type) {
 	case createTableStmt:
-		return createTablePlan{name: n.name}, nil
+		return createTablePlan(n), nil
 	case insertStmt:
-		return insertPlan{table: n.table, row: n.row}, nil
+		return insertPlan(n), nil
 	case selectStmt:
-		return selectPlan{table: n.table, byID: n.byID, id: n.id}, nil
+		return selectPlan(n), nil
 	case deleteStmt:
-		return deletePlan{table: n.table, id: n.id}, nil
+		return deletePlan(n), nil
 	default:
 		return nil, ErrUnsupportedSQL
 	}

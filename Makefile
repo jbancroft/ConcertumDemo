@@ -1,4 +1,4 @@
-.PHONY: prepare check fmt-check vet build test race memnode demo repl sinfonia-client-demo bench
+.PHONY: prepare check fmt-check vet staticcheck build test race memnode demo repl sinfonia-client-demo bench
 
 export TMPDIR := $(CURDIR)/tmp
 MEMNODE_BIN := $(CURDIR)/bin/memnode
@@ -6,11 +6,12 @@ MEMNODE_RACE_BIN := $(CURDIR)/bin/memnode-race
 REPL_BIN := $(CURDIR)/bin/repl
 REPL_STARTUP_ATTEMPTS := 100
 REPL_STARTUP_POLL_SECONDS := 0.05
+STATICCHECK_VERSION := v0.8.2
 
 prepare:
 	@mkdir -p tmp
 
-check: fmt-check vet build test
+check: fmt-check vet staticcheck build test
 
 fmt-check:
 	@test -z "$$(gofmt -l cmd demo internal minitxn minuet-index minuet-sql sinfonia-client)" || \
@@ -18,6 +19,9 @@ fmt-check:
 
 vet: prepare
 	go vet ./...
+
+staticcheck: prepare
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 
 build: memnode
 	go build ./...

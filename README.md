@@ -96,12 +96,11 @@ and discards its data when the console exits. The port must be free.
 ## Checks
 
 ```sh
-go vet ./...
-MEMNODE_BIN="$PWD/bin/memnode" go test ./...
+make check       # Formatting, go vet, Staticcheck, build, and tests
+make staticcheck # Run only Staticcheck
 
 # With the race detector:
-go build -race -o bin/memnode-race ./cmd/memnode
-MEMNODE_BIN="$PWD/bin/memnode-race" go test -race ./...
+make race
 ```
 
 [MIT License](LICENSE)

@@ -500,10 +500,6 @@ func (n *Participant) replicationBaselineIngressBlockedLocked() bool {
 	return n.baselineTransfer != nil || n.baselineRecoveryRequired
 }
 
-func (n *Participant) baselineTransferChunkLimit() int {
-	return baselineChunkSize
-}
-
 func fileSHA256(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
