@@ -43,10 +43,6 @@ type QueryResult struct {
 	Rows []Row
 }
 
-type QuotaEnforcer interface {
-	CheckAndConsumeQuota(ctx context.Context, resource string, delta int64) error
-}
-
 type Config struct {
 	HostId          uint32
 	MemorySize      uint64 // Required upper bound on addresses used by SQL; must fit the node.
@@ -54,7 +50,6 @@ type Config struct {
 	TxnClient       sinfoniaclient.TxnClient
 	MaxRetries      int
 	RetryBackoff    time.Duration
-	Quota           QuotaEnforcer
 }
 
 type Engine struct {
@@ -127,11 +122,6 @@ func NewEngine(cfg Config) (*Engine, error) {
 }
 
 func (e *Engine) Exec(ctx context.Context, sql string) (QueryResult, error) {
-	if e.cfg.Quota != nil {
-		if err := e.cfg.Quota.CheckAndConsumeQuota(ctx, "transactions", 1); err != nil {
-			return QueryResult{}, err
-		}
-	}
 	stmt, err := Parse(sql)
 	if err != nil {
 		return QueryResult{}, err
@@ -242,11 +232,6 @@ func (e *Engine) loadCatalog(ctx context.Context) error {
 }
 
 func (e *Engine) createTable(ctx context.Context, name string) error {
-	if e.cfg.Quota != nil {
-		if err := e.cfg.Quota.CheckAndConsumeQuota(ctx, "sql_objects", 1); err != nil {
-			return err
-		}
-	}
 	for attempt := 0; attempt < e.cfg.MaxRetries; attempt++ {
 		raw, err := e.cfg.TxnClient.Read(ctx, e.cfg.HostId, catalogAddr, catalogSize)
 		if err != nil {

@@ -70,9 +70,6 @@ func (n *Participant) QueryTidStatus(ctx context.Context, req sinfonia.QueryTidS
 }
 
 func (n *Participant) RecoveryForceAbort(ctx context.Context, req sinfonia.RecoverForceAbortRequest) (sinfonia.RecoverForceAbortResponse, error) {
-	if !n.allowRate(n.recoveryLimiter, "recovery") {
-		return sinfonia.RecoverForceAbortResponse{}, ErrResourceExhausted
-	}
 	return n.recoveryVote(ctx, req.TID)
 }
 
@@ -153,9 +150,6 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 }
 
 func (n *Participant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDecideRequest) (sinfonia.RecoverDecideResponse, error) {
-	if !n.allowRate(n.recoveryLimiter, "recovery") {
-		return sinfonia.RecoverDecideResponse{Ack: false}, ErrResourceExhausted
-	}
 	resp, err := n.commit(ctx, sinfonia.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit}, true)
 	if err != nil {
 		return sinfonia.RecoverDecideResponse{Ack: false}, err

@@ -21,13 +21,27 @@ func (n *Participant) requireRecoveryComplete() error {
 
 func (n *Participant) RPCServer() *rpcwire.Server {
 	srv := rpcwire.NewServer(nil)
+	// Admit execution before the readiness mutex. Commit and recovery bypass
+	// this limit so existing transactions can finish when execution is full.
 	rpcwire.RegisterTyped(srv, sinfonia.MethodExecPrepare, func(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
+		select {
+		case n.executionSlots <- struct{}{}:
+			defer func() { <-n.executionSlots }()
+		default:
+			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
+		}
 		if err := n.requireRecoveryComplete(); err != nil {
 			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, err
 		}
 		return n.ExecAndPrepare(ctx, req)
 	})
 	rpcwire.RegisterTyped(srv, sinfonia.MethodExecCommit1PC, func(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
+		select {
+		case n.executionSlots <- struct{}{}:
+			defer func() { <-n.executionSlots }()
+		default:
+			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
+		}
 		if err := n.requireRecoveryComplete(); err != nil {
 			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, err
 		}

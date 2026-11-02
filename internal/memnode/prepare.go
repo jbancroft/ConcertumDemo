@@ -24,28 +24,6 @@ type preparedTxn struct {
 }
 
 func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
-	if !n.allowRate(n.prepareLimiter, "prepare") {
-		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
-	}
-	select {
-	case n.prepareSlots <- struct{}{}:
-		defer func() { <-n.prepareSlots }()
-	default:
-		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
-	}
-	if n.maxItemsPerTxn > 0 && len(req.CmpItems)+len(req.ReadItems)+len(req.WriteItems) > n.maxItemsPerTxn {
-		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
-	}
-	var reqBytes int64
-	for _, i := range req.ReadItems {
-		reqBytes += int64(i.Len)
-	}
-	for _, i := range req.WriteItems {
-		reqBytes += int64(len(i.Data))
-	}
-	if (n.maxRequestBytes > 0 && reqBytes > int64(n.maxRequestBytes)) || ((n.maxReadBytesPerTxn > 0 || n.maxWriteBytesPerTxn > 0) && reqBytes > n.maxReadBytesPerTxn+n.maxWriteBytesPerTxn) {
-		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.restartRequired != nil {
@@ -79,9 +57,6 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 
 	if err := n.validateWriteRangesLocked(req.WriteItems); err != nil {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
-	}
-	if n.maxInDoubtHard > 0 && len(n.inDoubt) >= n.maxInDoubtHard {
-		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, ErrResourceExhausted
 	}
 	n.inDoubt[req.TID] = &preparedTxn{preparedAt: n.nowFn(), participants: append([]uint32(nil), req.Participants...)}
 	txn := n.inDoubt[req.TID]

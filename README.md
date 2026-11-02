@@ -63,6 +63,8 @@ Add `-data-dir tmp/node-1` for persistence and `-peer ID=ADDRESS` for recovery p
 Use a separate ID and data directory for each node. Ctrl-C stops the node.
 Nodes are not replicated and there is no automatic failover; an unavailable node
 can block transactions until it returns. Backup and restore are not implemented.
+Nodes accept at most 256 concurrent transaction-execution RPCs. Commit and
+recovery requests are exempt from this limit.
 The image size defaults to 2 MiB; use `-size BYTES` to choose another size when
 creating a node. Reopen durable nodes with the same size: a mismatch fails startup
 without resizing the image. Resizing existing images is not supported.

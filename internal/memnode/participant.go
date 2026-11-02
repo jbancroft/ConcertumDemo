@@ -7,11 +7,15 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
-	"github.com/jbancroft/ConcertumDemo/internal/ratelimit"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
-var ErrOutOfBounds = errors.New("out of bounds")
+var (
+	ErrOutOfBounds       = errors.New("out of bounds")
+	ErrResourceExhausted = errors.New("RESOURCE_EXHAUSTED")
+)
+
+const maxConcurrentExecutions = 256
 
 type Participant struct {
 	mu           sync.Mutex
@@ -40,34 +44,14 @@ type Participant struct {
 
 	peerTimeout time.Duration
 
+	executionSlots chan struct{}
+
 	recoveryComplete bool
 	restartRequired  error
 
-	maxInFlightPrepare        int
-	maxInDoubtSoft            int
-	maxInDoubtHard            int
-	maxRequestBytes           int
-	maxItemsPerTxn            int
-	maxReadBytesPerTxn        int64
-	maxWriteBytesPerTxn       int64
-	prepareSlots              chan struct{}
-	prepareLimiter            *ratelimit.KeyedLimiter
-	commitLimiter             *ratelimit.KeyedLimiter
-	recoveryLimiter           *ratelimit.KeyedLimiter
 	recoverBoundaryHook       func(phase string, txId sinfonia.TransactionID) error
 	outcomeReplayBoundaryHook func(phase string, txId sinfonia.TransactionID) error
 	writeApplyFaultHook       func(addr uint64, data []byte) error
-}
-
-func (n *Participant) initSafetyDefaults() {
-	n.maxInFlightPrepare = defaultMaxInFlightPrepare
-	n.maxInDoubtSoft = 0
-	n.maxInDoubtHard = 0
-	n.maxRequestBytes = 0
-	n.maxItemsPerTxn = 0
-	n.maxReadBytesPerTxn = 0
-	n.maxWriteBytesPerTxn = 0
-	n.prepareSlots = make(chan struct{}, n.maxInFlightPrepare)
 }
 
 func NewParticipant(size int) *Participant {
@@ -86,7 +70,7 @@ func NewParticipant(size int) *Participant {
 	}
 	n.recoveryComplete = true
 	n.peerTimeout = defaultPeerTimeout
-	n.initSafetyDefaults()
+	n.executionSlots = make(chan struct{}, maxConcurrentExecutions)
 	return n
 }
 
@@ -162,7 +146,7 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 		recoveryComplete: false,
 		peerTimeout:      defaultPeerTimeout,
 	}
-	n.initSafetyDefaults()
+	n.executionSlots = make(chan struct{}, maxConcurrentExecutions)
 	for _, e := range redoLog.Entries() {
 		n.allLogTxIds[e.TransactionId] = struct{}{}
 		if committed, ok := decided.Get(e.TransactionId); ok {

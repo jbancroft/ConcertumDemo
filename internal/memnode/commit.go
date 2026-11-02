@@ -18,9 +18,6 @@ func (n *Participant) Commit(ctx context.Context, req sinfonia.CommitRequest) (s
 }
 
 func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, recoveryDecision bool) (sinfonia.CommitResponse, error) {
-	if !n.allowRate(n.commitLimiter, "commit") {
-		return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, ErrResourceExhausted
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.restartRequired != nil {
