@@ -135,10 +135,29 @@ The configured memory size must match the existing image file exactly. Only a
 newly created image is initialized to that size; mismatches fail startup without
 resizing the image. Resizing existing images is not supported.
 
-Redo entries use newline-delimited JSON; Go encodes byte payloads as base64.
-This is a simple demo storage format with encoding and space overhead. The redo
-reader accepts variable-size records, including large binary writes, and rejects
-malformed JSON or byte encodings rather than skipping them during recovery.
+`redo.log` holds transaction IDs, participant IDs, and writes needed to recover
+transaction effects. This follows Sinfonia's redo-log role: section 4.3 of the
+[paper](https://read.seas.harvard.edu/~kohler/class/08w-dsi/aguilera07sinfonia.pdf)
+explicitly omits read and compare items from redo. `replay.log` is our extension
+that saves the original participant replies, including votes and read results,
+for duplicate requests and outcome resolution. Both belong to the transaction
+layer; neither comes from Minuet, the B+tree, or SQL. Keeping them separate lets
+redo cleanup follow durable transaction effects while reply retention follows
+the retry window.
+
+Both logs use framed gob records: the four-byte `CGB1` format marker, an
+eight-byte big-endian payload length, then one standalone gob stream. Byte
+payloads stay binary. Each record has its own gob type metadata so reopening,
+appending, and compaction do not depend on a previous encoder's state. Readers
+check the length against remaining file bytes before allocating. There is no
+checksum. Earlier JSON logs are rejected; use a fresh data directory when moving
+from that format. No migration or compatibility reader is provided.
+
+Malformed or incomplete redo records block startup without modifying the log,
+since discarding one could lose transaction evidence. A replay log's incomplete
+final frame is truncated and synced; the original reply may then be unavailable.
+A complete frame with invalid gob data blocks startup and is preserved in either
+log. Recovery never treats a missing original reply as an abort decision.
 
 The shared [recovery coordinator](../internal/recovery/resolve.go) asks participants
 for their existing votes. A node that has not voted records a forced abort and

@@ -67,6 +67,11 @@ The image size defaults to 2 MiB; use `-size BYTES` to choose another size when
 creating a node. Reopen durable nodes with the same size: a mismatch fails startup
 without resizing the image. Resizing existing images is not supported.
 
+`redo.log` and `replay.log` use framed gob records. Redo stores transaction writes
+for recovery; replay stores original replies for retries and outcome resolution.
+Existing JSON logs are unsupported; use a fresh data directory when upgrading
+from that format.
+
 Malformed decision-log records block startup with an error identifying the file
 and line. The log is preserved for manual repair; automatic repair is not implemented.
 An uncertain redo or forced-abort append faults the node until storage is reopened

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 // Fuzz coverage for internal storage decoders.
@@ -29,8 +31,13 @@ func FuzzParseTIDKeyNeverPanics(f *testing.F) {
 
 func FuzzLoadReplayStoreRecordsNeverPanics(f *testing.F) {
 	f.Add([]byte{})
-	f.Add([]byte("invalid\n"))
-	f.Add([]byte("{\"tid\":{},\"kind\":\"prepare\",\"prepare\":{}}\n"))
+	f.Add([]byte("invalid"))
+	seed, err := encodeGobRecord(replayRecord{Kind: replayKindPrepare, Prepare: prepareReplayPtr(sinfonia.ExecPrepareResponse{})})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(seed)
+	f.Add(seed[:len(seed)-1])
 	f.Fuzz(func(t *testing.T, data []byte) {
 		path := filepath.Join(t.TempDir(), "replay.log")
 		if err := os.WriteFile(path, data, 0o600); err != nil {

@@ -34,52 +34,60 @@ func TestReplayStoreRejectsConflictingDuplicate(t *testing.T) {
 func TestReplayStoreOpenTruncatesTornTail(t *testing.T) {
 	dir := t.TempDir()
 	stable := sinfonia.ExecPrepareResponse{RequestID: "stable", Vote: sinfonia.VoteOk, ReadData: map[uint32][]byte{1: []byte("keep")}}
+	stableTID := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	tailTID := sinfonia.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}
 	stored, err := storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stored.AppendPrepare(sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, stable); err != nil {
+	if err := stored.AppendPrepare(stableTID, stable); err != nil {
 		t.Fatal(err)
 	}
 	want, err := os.ReadFile(filepath.Join(dir, "replay.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Add an unfinished line with no newline and invalid JSON. Loading must
-	// discard it rather than invent a saved reply.
-	f, err := os.OpenFile(filepath.Join(dir, "replay.log"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err := stored.AppendPrepare(tailTID, stable); err != nil {
+		t.Fatal(err)
+	}
+	complete, err := os.ReadFile(filepath.Join(dir, "replay.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Write([]byte(`{"tid":{"coordinator_id":9,`)); err != nil {
-		_ = f.Close()
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := storage.OpenReplayStore(dir)
-	if err != nil {
-		t.Fatalf("open with torn tail failed: %v", err)
-	}
-	got, ok := reopened.GetPrepare(sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1})
-	if !ok || !reflect.DeepEqual(got, stable) {
-		t.Fatalf("stable record lost or changed: %+v ok=%v", got, ok)
-	}
-	if _, ok := reopened.GetPrepare(sinfonia.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 1}); ok {
-		t.Fatal("torn tail was treated as a valid record")
-	}
-	// The file should contain only the complete records.
-	disk, err := os.ReadFile(filepath.Join(dir, "replay.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(disk, want) {
-		t.Fatalf("torn tail not physically truncated:\n got %q\nwant %q", string(disk), string(want))
+	tail := complete[len(want):]
+	for _, cut := range []int{1, len(tail) / 2, len(tail) - 1} {
+		path := filepath.Join(dir, "replay.log")
+		if err := os.WriteFile(path, append(bytes.Clone(want), tail[:cut]...), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := storage.OpenReplayStore(dir)
+		if err != nil {
+			t.Fatalf("open with %d-byte torn tail: %v", cut, err)
+		}
+		got, ok := reopened.GetPrepare(stableTID)
+		if !ok || !reflect.DeepEqual(got, stable) {
+			t.Fatalf("stable record lost or changed: %+v ok=%v", got, ok)
+		}
+		if _, ok := reopened.GetPrepare(tailTID); ok {
+			t.Fatal("torn tail was treated as a valid record")
+		}
+		if disk, err := os.ReadFile(path); err != nil || !bytes.Equal(disk, want) {
+			t.Fatalf("torn tail not physically truncated: %v", err)
+		}
+		if err := reopened.AppendPrepare(tailTID, stable); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err = storage.OpenReplayStore(dir)
+		if err != nil {
+			t.Fatalf("reopen after repairing and appending: %v", err)
+		}
+		if got, ok := reopened.GetPrepare(tailTID); !ok || !reflect.DeepEqual(got, stable) {
+			t.Fatalf("reply appended after repair was lost: %+v, %t", got, ok)
+		}
 	}
 }
 
-func TestReplayStoreOpenFailsClosedOnCompleteCorruptLine(t *testing.T) {
+func TestReplayStoreOpenFailsClosedOnCorruptRecords(t *testing.T) {
 	dir := t.TempDir()
 	stable := sinfonia.ExecPrepareResponse{RequestID: "stable", Vote: sinfonia.VoteOk}
 	stored, err := storage.OpenReplayStore(dir)
@@ -89,21 +97,25 @@ func TestReplayStoreOpenFailsClosedOnCompleteCorruptLine(t *testing.T) {
 	if err := stored.AppendPrepare(sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, stable); err != nil {
 		t.Fatal(err)
 	}
-	// A bad record with a newline was fully written. Report corruption
-	// instead of treating it as an unfinished tail.
-	f, err := os.OpenFile(filepath.Join(dir, "replay.log"), os.O_APPEND|os.O_WRONLY, 0o644)
+	path := filepath.Join(dir, "replay.log")
+	complete, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Write([]byte("{this is not json}\n")); err != nil {
-		_ = f.Close()
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := storage.OpenReplayStore(dir); err == nil {
-		t.Fatal("expected open to fail closed on a complete corrupt line")
+	// Damage the payload without shortening the frame. A gob decoding error
+	// must not be mistaken for an incomplete record that can be discarded.
+	corrupt := bytes.Clone(complete)
+	corrupt[len(corrupt)-1] = 0xff
+	for _, data := range [][]byte{corrupt, []byte("{\"tid\":{},\"kind\":\"prepare\"}\n")} {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := storage.OpenReplayStore(dir); err == nil {
+			t.Fatal("accepted a corrupt or obsolete replay record")
+		}
+		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, data) {
+			t.Fatalf("failed open modified replay log: %v", err)
+		}
 	}
 }
 
@@ -193,50 +205,56 @@ func TestReplayStoreCompactUnboundedRetentionKeepsAll(t *testing.T) {
 	}
 }
 
-func TestReplayStoreOpenDiscardsValidUnterminatedTail(t *testing.T) {
+func TestReplayStoreGobRepliesSurviveReopenAndCompaction(t *testing.T) {
 	dir := t.TempDir()
 	store, err := storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stableTID := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	if err := store.AppendPrepare(stableTID, sinfonia.ExecPrepareResponse{RequestID: "stable", Vote: sinfonia.VoteOk}); err != nil {
+	expired := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
+	if err := store.AppendPrepare(expired, sinfonia.ExecPrepareResponse{Vote: sinfonia.VoteBadCmp}); err != nil {
 		t.Fatal(err)
 	}
-	prefix, err := os.ReadFile(filepath.Join(dir, "replay.log"))
+	data := make([]byte, 256<<10)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 3}
+	want := sinfonia.ExecPrepareResponse{
+		RequestID: "original", Vote: sinfonia.VoteOk, CurrentEpoch: 3,
+		ReadData: map[uint32][]byte{0: data, 1: nil},
+	}
+	if err := store.AppendPrepare(tid, want); err != nil {
+		t.Fatal(err)
+	}
+	store, err = storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tailTID := sinfonia.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2}
-	tailDir := t.TempDir()
-	tailStore, err := storage.OpenReplayStore(tailDir)
+	// A duplicate must still match the original after gob decoding.
+	if err := store.AppendPrepare(tid, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Compact(storage.ReplayRetention{CurrentEpoch: 3, RetryHorizon: 2}); err != nil {
+		t.Fatal(err)
+	}
+	oneTID := sinfonia.TransactionID{CoordinatorID: 1, Counter: 3, Epoch: 3}
+	// Preserve a present response even when every field has its zero value.
+	if err := store.AppendOnePC(oneTID, sinfonia.ExecCommit1PCResponse{}); err != nil {
+		t.Fatal(err)
+	}
+	store, err = storage.OpenReplayStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tailStore.AppendPrepare(tailTID, sinfonia.ExecPrepareResponse{RequestID: "tail", Vote: sinfonia.VoteOk}); err != nil {
-		t.Fatal(err)
+	if got, ok := store.GetPrepare(tid); !ok || !reflect.DeepEqual(got, want) {
+		t.Fatal("gob changed original binary read results")
 	}
-	tail, err := os.ReadFile(filepath.Join(tailDir, "replay.log"))
-	if err != nil {
-		t.Fatal(err)
+	if _, ok := store.GetPrepare(expired); ok {
+		t.Fatal("compacted reply survived restart")
 	}
-	tail = tail[:len(tail)-1]
-	if err := os.WriteFile(filepath.Join(dir, "replay.log"), append(prefix, tail...), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := storage.OpenReplayStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := reopened.GetPrepare(tailTID); ok {
-		t.Fatal("valid unterminated tail was treated as a durable record")
-	}
-	disk, err := os.ReadFile(filepath.Join(dir, "replay.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(disk, prefix) {
-		t.Fatalf("valid unterminated tail not truncated: got %q want %q", disk, prefix)
+	if got, ok := store.GetOnePC(oneTID); !ok || !reflect.DeepEqual(got, sinfonia.ExecCommit1PCResponse{}) {
+		t.Fatalf("zero-valued one-phase reply lost: %+v, %t", got, ok)
 	}
 }
 

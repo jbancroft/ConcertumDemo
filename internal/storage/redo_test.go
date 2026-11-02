@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -59,32 +60,49 @@ func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 }
 
 func TestRedoLogReaderEOFAndMalformedRecords(t *testing.T) {
-	const first = `{"tid":{"Counter":1},"participants":[1],"write_items":[]}`
-	const second = `{"tid":{"Counter":2},"participants":[1],"write_items":[]}`
+	first, err := encodeGobRecord(RedoLogItem{TransactionId: sinfonia.TransactionID{Counter: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := encodeGobRecord(RedoLogItem{TransactionId: sinfonia.TransactionID{Counter: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := bytes.Clone(first)
+	corrupt[len(corrupt)-1] = 0xff // Break the gob payload, leaving the frame complete.
+	hugeLength := bytes.Clone(first)
+	binary.BigEndian.PutUint64(hugeLength[len(gobRecordMagic):], ^uint64(0))
+	emptyPayload := bytes.Clone(first[:gobRecordHeaderSize])
+	binary.BigEndian.PutUint64(emptyPayload[len(gobRecordMagic):], 0)
 	for _, tc := range []struct {
 		name    string
-		data    string
+		data    []byte
 		wantIDs []uint64
 		wantErr bool
 	}{
 		{name: "empty"},
-		{name: "whitespace", data: " \t\r\n\n "},
-		{name: "multiple records and blank lines", data: first + "\r\n\n \t\n" + second + "\n", wantIDs: []uint64{1, 2}},
-		{name: "complete final record without newline", data: first + "\n" + second, wantIDs: []uint64{1, 2}},
-		{name: "malformed middle record", data: first + "\nnot JSON\n" + second + "\n", wantErr: true},
-		{name: "truncated final record", data: first + "\n" + second[:len(second)-1], wantErr: true},
-		{name: "invalid binary encoding", data: `{"write_items":[{"Data":"!!!"}]}` + "\n", wantErr: true},
+		{name: "multiple records", data: append(bytes.Clone(first), second...), wantIDs: []uint64{1, 2}},
+		{name: "partial magic", data: first[:2], wantErr: true},
+		{name: "partial length", data: first[:gobRecordHeaderSize-1], wantErr: true},
+		{name: "partial payload", data: append(bytes.Clone(first), second[:len(second)-1]...), wantErr: true},
+		{name: "corrupt payload", data: append(corrupt, second...), wantErr: true},
+		{name: "huge length", data: hugeLength, wantErr: true},
+		{name: "empty payload", data: emptyPayload, wantErr: true},
+		{name: "old JSON", data: []byte("{\"tid\":{}}\n"), wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "redo.log")
-			if err := os.WriteFile(path, []byte(tc.data), 0o644); err != nil {
+			if err := os.WriteFile(path, tc.data, 0o644); err != nil {
 				t.Fatal(err)
 			}
 			log, err := OpenRedoLog(dir)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("accepted malformed redo log")
+				}
+				if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, tc.data) {
+					t.Fatalf("failed open modified redo log: %v", err)
 				}
 				return
 			}
@@ -97,6 +115,16 @@ func TestRedoLogReaderEOFAndMalformedRecords(t *testing.T) {
 			}
 			if !reflect.DeepEqual(ids, tc.wantIDs) {
 				t.Fatalf("record IDs = %v, want %v", ids, tc.wantIDs)
+			}
+			if err := log.AddItem(RedoLogItem{TransactionId: sinfonia.TransactionID{Counter: 3}}); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := OpenRedoLog(dir)
+			if err != nil {
+				t.Fatalf("reopen after append: %v", err)
+			}
+			if !reflect.DeepEqual(reopened.Entries(), log.Entries()) {
+				t.Fatal("append after reopening changed saved records")
 			}
 		})
 	}

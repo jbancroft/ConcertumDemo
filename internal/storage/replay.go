@@ -1,9 +1,6 @@
 package storage
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,10 +22,10 @@ const (
 var ErrReplayConflict = errors.New("conflicting replay record for transaction")
 
 type replayRecord struct {
-	TID     sinfonia.TransactionID          `json:"tid"`
-	Kind    string                          `json:"kind"`
-	Prepare *sinfonia.ExecPrepareResponse   `json:"prepare,omitempty"`
-	OnePC   *sinfonia.ExecCommit1PCResponse `json:"one_pc,omitempty"`
+	TID     sinfonia.TransactionID
+	Kind    string
+	Prepare *sinfonia.ExecPrepareResponse
+	OnePC   *sinfonia.ExecCommit1PCResponse
 }
 
 // ReplayStore saves participant replies by transaction ID. A retry gets the
@@ -142,20 +139,13 @@ func (s *ReplayStore) Compact(retention ReplayRetention) error {
 		}
 	}
 	sort.Strings(keys)
-	var buf bytes.Buffer
-	for _, key := range keys {
-		record := s.records[key]
-		encoded, err := json.Marshal(record)
-		if err != nil {
-			return err
-		}
-		buf.Write(encoded)
-		buf.WriteByte('\n')
-	}
-
 	if err := publishLogFile(s.path, replayTempPrefix, func(w io.Writer) error {
-		_, err := io.Copy(w, bytes.NewReader(buf.Bytes()))
-		return err
+		for _, key := range keys {
+			if err := writeGobRecord(w, s.records[key]); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -185,18 +175,9 @@ func (s *ReplayStore) append(record replayRecord) error {
 	if err != nil {
 		return err
 	}
-	encoded, err := json.Marshal(record)
-	if err != nil {
+	if err := writeGobRecord(f, record); err != nil {
 		_ = f.Close()
 		return err
-	}
-	line := append(encoded, '\n')
-	if written, err := f.Write(line); err != nil {
-		_ = f.Close()
-		return err
-	} else if written != len(line) {
-		_ = f.Close()
-		return io.ErrShortWrite
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
@@ -217,58 +198,47 @@ func loadReplayStoreRecords(path string) (map[string]replayRecord, error) {
 	defer f.Close()
 
 	records := make(map[string]replayRecord)
-	reader := bufio.NewReader(f)
-	var (
-		lastLine  []byte
-		lastStart int64
-		validLen  int64
-	)
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	reader := io.NewSectionReader(f, 0, info.Size())
 	for {
-		line, readErr := reader.ReadBytes('\n')
-		lastStart = validLen
-		lastLine = line
-		validLen += int64(len(line))
-		trimmed := bytes.TrimSpace(line)
-		// A record is complete only when its newline was written. Drop a final
-		// partial line even if it happens to contain valid JSON.
-		complete := len(line) > 0 && line[len(line)-1] == '\n'
-		if complete && len(trimmed) != 0 {
-			var record replayRecord
-			if e := json.Unmarshal(trimmed, &record); e != nil {
-				return nil, e
-			} else {
-				if e := validateReplayRecord(record); e != nil {
-					return nil, e
-				}
-				key := replayKey(record.TID, record.Kind)
-				if existing, exists := records[key]; exists {
-					if !reflect.DeepEqual(existing, record) {
-						return nil, fmt.Errorf("%w: %s", ErrReplayConflict, key)
-					}
-				} else {
-					records[key] = cloneReplayRecord(record)
-				}
-			}
+		start, err := reader.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, err
 		}
-		if errors.Is(readErr, io.EOF) {
+		var record replayRecord
+		err = readGobRecord(reader, &record)
+		if err == io.EOF {
 			break
 		}
-		if readErr != nil {
-			return nil, readErr
+		if errors.Is(err, errIncompleteGobRecord) {
+			if err := truncateDurableReplay(path, start); err != nil {
+				return nil, err
+			}
+			break
 		}
-	}
-	// Remove a final partial record and sync the truncation. Recovery must use
-	// only complete records, never guess an outcome from a half-written reply.
-	if len(lastLine) > 0 && lastLine[len(lastLine)-1] != '\n' {
-		if err := truncateDurableReplay(path, lastStart); err != nil {
+		if err != nil {
+			return nil, fmt.Errorf("%s at byte %d: %w", path, start, err)
+		}
+		if err := validateReplayRecord(record); err != nil {
 			return nil, err
+		}
+		key := replayKey(record.TID, record.Kind)
+		if existing, exists := records[key]; exists {
+			if !reflect.DeepEqual(existing, record) {
+				return nil, fmt.Errorf("%w: %s", ErrReplayConflict, key)
+			}
+		} else {
+			records[key] = cloneReplayRecord(record)
 		}
 	}
 	return records, nil
 }
 
 // truncateDurableReplay removes a partial tail, then syncs the file and its
-// parent directory. length must end at the last complete record's newline.
+// parent directory. length must end at the last complete gob record.
 func truncateDurableReplay(path string, length int64) error {
 	f, err := os.OpenFile(path, os.O_WRONLY, 0o644)
 	if err != nil {

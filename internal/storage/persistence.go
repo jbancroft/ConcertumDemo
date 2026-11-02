@@ -2,8 +2,6 @@ package storage
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,9 +22,9 @@ const (
 )
 
 type RedoLogItem struct {
-	TransactionId sinfonia.TransactionID `json:"tid"`
-	HostIds       []uint32               `json:"participants"`
-	WriteItems    []sinfonia.WriteItem   `json:"write_items"`
+	TransactionId sinfonia.TransactionID
+	HostIds       []uint32
+	WriteItems    []sinfonia.WriteItem
 }
 
 type DiskImage struct {
@@ -119,26 +117,19 @@ func OpenRedoLog(dir string) (*RedoLog, error) {
 		return nil, err
 	}
 	defer f.Close()
-	// Redo records contain arbitrary write payloads and can exceed Scanner's
-	// token limit. Read one whole JSON line without imposing that size ceiling.
-	reader := bufio.NewReader(f)
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	reader := io.NewSectionReader(f, 0, info.Size())
 	for {
-		line, readErr := reader.ReadBytes('\n')
-		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			return nil, readErr
-		}
-		if len(bytes.TrimSpace(line)) != 0 {
-			var e RedoLogItem
-			if err := json.Unmarshal(line, &e); err != nil {
-				return nil, err
-			}
-			entries = append(entries, e)
-		}
-		// ReadBytes can return a final record together with EOF; decode it above
-		// so an unterminated record is neither skipped nor exempt from validation.
-		if errors.Is(readErr, io.EOF) {
+		var entry RedoLogItem
+		if err := readGobRecord(reader, &entry); err == io.EOF {
 			break
+		} else if err != nil {
+			return nil, fmt.Errorf("%s: %w", p, err)
 		}
+		entries = append(entries, entry)
 	}
 	return &RedoLog{path: p, entries: entries, fsyncFn: (*os.File).Sync}, nil
 }
@@ -167,16 +158,12 @@ func (r *RedoLog) AddItem(entry RedoLogItem) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return err
-	}
 	f, err := os.OpenFile(r.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if _, err := f.Write(append(data, '\n')); err != nil {
+	if err := writeGobRecord(f, entry); err != nil {
 		return err
 	}
 	if err := r.fsyncFn(f); err != nil {
@@ -246,11 +233,7 @@ func publishLogFile(path, tempPrefix string, write func(io.Writer) error) error 
 func rewriteRedoLogFile(path string, entries []RedoLogItem) error {
 	return publishLogFile(path, redoTempPrefix, func(w io.Writer) error {
 		for _, e := range entries {
-			b, err := json.Marshal(e)
-			if err != nil {
-				return err
-			}
-			if _, err := w.Write(append(b, '\n')); err != nil {
+			if err := writeGobRecord(w, e); err != nil {
 				return err
 			}
 		}
