@@ -49,9 +49,9 @@ used only inside node operations.
 These convenience methods return `ErrTransactionAborted` for an explicit
 rejection and `ErrUnknownOutcome` when the outcome cannot be established. Separate
 reads are separate transactions, so callers still need validation or a combined
-minitransaction to obtain a snapshot across several ranges. The current
-single-participant path saves decisions for read-only calls too, including disk
-writes on durable nodes. Original replies are cached only in memory.
+minitransaction to obtain a snapshot across several ranges. Read-only and
+compare-only minitransactions append neither redo nor decision records, including
+on the single-participant path. Original replies are cached only in memory.
 
 ## Finding the participant code
 
@@ -251,6 +251,12 @@ the result has
 `StatusCommitted` and `ErrReadResultsUnavailable`. This does not authorize retrying
 its writes. As with normal execution, knowing the decision does not mean every
 participant has already applied it; background recovery finishes delivery.
+
+Read-only transactions have no durable vote or decision to recover. After a
+participant restart, a recovery probe can force abort when it finds no retained
+vote, even if the original read completed successfully. `Resolve` cannot recover
+that original success or its read results. A fresh read-only transaction is safe
+and observes data at its own execution time.
 
 Cached replies are retained for the current and previous UTC-hour epochs.
 `RunRecovery` expires replies from memory once per minute,

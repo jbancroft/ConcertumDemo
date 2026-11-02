@@ -21,26 +21,69 @@ import (
 // Durable transaction records, write boundaries, and uncertain persistence failures.
 
 func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	n, err := memnode.NewDurableParticipant(1, 32, filepath.Join(dir, "n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = n.Close() })
-	if err := n.ApplyWriteForTest(0, []byte("seed")); err != nil {
-		t.Fatal(err)
-	}
-	txId := sinfonia.TransactionID{CoordinatorID: 9, Counter: 9, Epoch: sinfonia.EpochAt(time.Now())}
-	resp, err := n.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: []uint32{1}, ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 4}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Vote != sinfonia.VoteOk {
-		t.Fatalf("expected OK vote, got %v", resp.Vote)
-	}
-	if n.RedoEntryCountForTest() != 0 {
-		t.Fatalf("expected no redo log entries for read-only transaction")
+	for _, phase := range []string{"one-phase", "prepare/commit"} {
+		for _, kind := range []string{"read", "compare-only"} {
+			t.Run(phase+"/"+kind, func(t *testing.T) {
+				ctx := context.Background()
+				dir := t.TempDir()
+				node := newRecoveredFailureTestNode(t, 1, dir)
+				var compares []sinfonia.CmpItem
+				var reads []sinfonia.ReadItem
+				if kind == "read" {
+					reads = []sinfonia.ReadItem{{Addr: 0, Len: 1}}
+				} else {
+					compares = []sinfonia.CmpItem{{Addr: 0, Data: []byte{0}}}
+				}
+				decisionPath := filepath.Join(dir, "decided.log")
+				for _, blocked := range []bool{false, true} {
+					if blocked {
+						// Opening the decision log for append must not be necessary.
+						if err := os.Remove(decisionPath); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Mkdir(decisionPath, 0o700); err != nil {
+							t.Fatal(err)
+						}
+					}
+					tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+					if blocked {
+						tid.Counter++
+					}
+					var data map[uint32][]byte
+					if phase == "one-phase" {
+						resp, err := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, CmpItems: compares, ReadItems: reads})
+						if err != nil || resp.Vote != sinfonia.VoteOk {
+							t.Fatalf("execute (blocked=%t) = %+v, %v", blocked, resp, err)
+						}
+						data = resp.ReadData
+					} else {
+						resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1}, CmpItems: compares, ReadItems: reads})
+						if err != nil || resp.Vote != sinfonia.VoteOk {
+							t.Fatalf("prepare (blocked=%t) = %+v, %v", blocked, resp, err)
+						}
+						data = resp.ReadData
+						if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: true}); err != nil || !resp.Ack {
+							t.Fatalf("commit (blocked=%t) = %+v, %v", blocked, resp, err)
+						}
+					}
+					if kind == "read" && !bytes.Equal(data[0], []byte{0}) {
+						t.Fatalf("read result = %v", data)
+					}
+					if node.HasDecidedForTest(tid) || node.ActiveLockCountForTest() != 0 {
+						t.Fatal("read-only transaction saved a decision or retained locks")
+					}
+					assertParticipantReady(t, node, true)
+					for _, name := range []string{"redo.log", "decided.log"} {
+						if blocked && name == "decided.log" {
+							continue
+						}
+						if contents, err := os.ReadFile(filepath.Join(dir, name)); err != nil || len(contents) != 0 {
+							t.Fatalf("read-only transaction wrote %s: %q, %v", name, contents, err)
+						}
+					}
+				}
+			})
+		}
 	}
 }
 

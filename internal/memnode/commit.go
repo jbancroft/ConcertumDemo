@@ -213,7 +213,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 		n.allLogTxIds[req.TID] = struct{}{}
 		txn.redoLoggedTid = true
 	}
-	if n.decided != nil {
+	if n.decided != nil && txn.redoLoggedTid {
 		if _, known := n.decided.Get(req.TID); !known {
 			if err := n.decided.AddItem(req.TID, true); err != nil {
 				n.recoveryComplete = false

@@ -291,9 +291,13 @@ func TestTransactionRetentionFailureAndRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 100}
-			read := sinfonia.ExecCommit1PCRequest{TID: tid, ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 1}}}
-			if resp, err := node.ExecCommit1PC(ctx, read); err != nil || resp.Vote != sinfonia.VoteOk {
-				t.Fatalf("read = %+v, %v", resp, err)
+			write := sinfonia.ExecCommit1PCRequest{TID: tid, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 2, Data: []byte("A")}}}
+			if resp, err := node.ExecCommit1PC(ctx, write); err != nil || resp.Vote != sinfonia.VoteOk {
+				t.Fatalf("write = %+v, %v", resp, err)
+			}
+			// Leave a decision eligible for expiration after its redo is removed.
+			if err := node.RunRedoLogGC(ctx); err != nil {
+				t.Fatal(err)
 			}
 			aborted := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 100}
 			prepare := sinfonia.ExecPrepareRequest{TID: aborted, Participants: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("X")}}}
@@ -348,7 +352,7 @@ func TestTransactionRetentionFailureAndRestart(t *testing.T) {
 			if err := restarted.Recover(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if resp, err := restarted.ExecCommit1PC(ctx, read); err != nil || resp.Vote != sinfonia.VoteBadStaleEpoch {
+			if resp, err := restarted.ExecCommit1PC(ctx, write); err != nil || resp.Vote != sinfonia.VoteBadStaleEpoch {
 				t.Fatalf("forgotten retry after clock rollback = %+v, %v", resp, err)
 			}
 			if got, err := restarted.ReadBytesForTest(1, 1); err != nil || string(got) != "\x00" {

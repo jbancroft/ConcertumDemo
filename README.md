@@ -73,6 +73,9 @@ from that format. Original replies are cached only in memory. After a participan
 restarts, `Resolve` can recover a commit decision but reports
 `ErrReadResultsUnavailable` if the original reads were lost. No replay log is
 created or read; an old `replay.log` is unused and can be deleted.
+Read-only and compare-only minitransactions append neither redo nor decision
+records. Their original outcomes and read results are not recoverable after a
+participant restart; issue a fresh read-only transaction if needed.
 
 Malformed decision-log records block startup with an error identifying the file
 and line. The log is preserved for manual repair; automatic repair is not implemented.
