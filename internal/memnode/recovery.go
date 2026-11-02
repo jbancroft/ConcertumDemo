@@ -76,39 +76,19 @@ func (n *Participant) RecoveryForceAbort(ctx context.Context, req sinfonia.Recov
 	return n.recoveryVote(ctx, req.TID)
 }
 
-// recoveryVote never changes a yes vote. Wait for a request that temporarily
-// released the mutex (for replication) before deciding whether it has voted.
+// recoveryVote inspects votes under the same mutex as prepare and commit.
+// An in-flight request must finish before recovery can decide whether it voted.
 func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.TransactionID) (sinfonia.RecoverForceAbortResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for {
-		if n.restartRequired != nil {
-			return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteUnknown}, n.restartRequired
-		}
-		var done <-chan struct{}
-		if flight := n.prepareFlights[tid]; flight != nil {
-			done = flight.done
-		}
-		if flight := n.onePCFlights[tid]; flight != nil {
-			done = flight.done
-		}
-		if done == nil {
-			break
-		}
-		n.mu.Unlock()
-		select {
-		case <-done:
-			n.mu.Lock()
-		case <-ctx.Done():
-			n.mu.Lock()
-			return sinfonia.RecoverForceAbortResponse{}, ctx.Err()
-		}
+	if n.restartRequired != nil {
+		return sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteUnknown}, n.restartRequired
 	}
 	if err := ctx.Err(); err != nil {
 		return sinfonia.RecoverForceAbortResponse{}, err
 	}
-	out := sinfonia.RecoverForceAbortResponse{Generation: n.generation, Vote: sinfonia.VoteUnknown}
-	// Inspect saved replies without replaying operations or doing replication I/O.
+	out := sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteUnknown}
+	// Inspect saved replies without replaying operations.
 	one, oneOK := n.onePCOutcomes[tid]
 	prep, prepOK := n.prepareOutcomes[tid]
 	if n.replay != nil {
@@ -176,7 +156,7 @@ func (n *Participant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDe
 	if !n.allowRate(n.recoveryLimiter, "recovery") {
 		return sinfonia.RecoverDecideResponse{Ack: false}, ErrResourceExhausted
 	}
-	resp, err := n.commit(ctx, sinfonia.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit, Generation: req.Generation}, true)
+	resp, err := n.commit(ctx, sinfonia.CommitRequest{TID: req.TID, ActionCommit: req.ActionCommit}, true)
 	if err != nil {
 		return sinfonia.RecoverDecideResponse{Ack: false}, err
 	}

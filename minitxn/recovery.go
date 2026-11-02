@@ -16,18 +16,12 @@ func (t TransactionID) CorrelationID() string {
 	return "txn-" + strconv.FormatUint(t.CoordinatorID, 10) + "-" + strconv.FormatUint(t.Epoch, 10) + "-" + strconv.FormatUint(t.Counter, 10)
 }
 
-// RecoveryRead preserves the original result key and the participant that read it.
-type RecoveryRead struct {
-	ParticipantID uint32
-	Item          ReadItem
-}
-
 // RecoveryHandle can be saved as JSON and resolved with a new client. Keep it
 // intact: resolution must contact every participant in the original attempt.
 type RecoveryHandle struct {
 	TID          TransactionID
 	Participants []uint32
-	Reads        []RecoveryRead
+	Reads        []ReadItem
 }
 
 var ErrOutcomeExpired = errors.New("sinfonia: transaction evidence expired")

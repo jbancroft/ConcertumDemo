@@ -216,193 +216,169 @@ func TestRedoLogCompactionReplacesCompleteFile(t *testing.T) {
 }
 
 func TestForcedAbortLogReplacement(t *testing.T) {
-	for _, reset := range []bool{false, true} {
-		name := "gc"
-		if reset {
-			name = "reset"
-		}
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			log, err := OpenForcedAbortLog(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			old := sinfonia.TransactionID{Counter: 1, Epoch: 100}
-			recent := sinfonia.TransactionID{Counter: 2, Epoch: 103}
-			for _, tid := range []sinfonia.TransactionID{old, recent} {
-				if err := log.AddItem(tid); err != nil {
-					t.Fatal(err)
-				}
-			}
-			checkOriginal := unchangedOpenLog(t, filepath.Join(dir, "forced_abort.log"))
-			if reset {
-				err = log.Reset()
-			} else {
-				var removed []sinfonia.TransactionID
-				removed, err = log.GCByEpoch(103)
-				if len(removed) != 1 || removed[0] != old {
-					t.Fatalf("removed = %v, want only %v", removed, old)
-				}
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			checkOriginal()
-			if log.IsForcedAbort(old) || log.IsForcedAbort(recent) == reset {
-				t.Fatal("wrong live forced-abort set after replacement")
-			}
-			// A later append must go to the replacement, not the old inode.
-			later := sinfonia.TransactionID{Counter: 3, Epoch: 103}
-			if err := log.AddItem(later); err != nil {
-				t.Fatal(err)
-			}
-			reopened, err := OpenForcedAbortLog(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if reopened.IsForcedAbort(old) || reopened.IsForcedAbort(recent) == reset || !reopened.IsForcedAbort(later) {
-				t.Fatal("wrong durable forced-abort set after replacement and append")
-			}
-		})
+
+	dir := t.TempDir()
+	log, err := OpenForcedAbortLog(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
+	old := sinfonia.TransactionID{Counter: 1, Epoch: 100}
+	recent := sinfonia.TransactionID{Counter: 2, Epoch: 103}
+	for _, tid := range []sinfonia.TransactionID{old, recent} {
+		if err := log.AddItem(tid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkOriginal := unchangedOpenLog(t, filepath.Join(dir, "forced_abort.log"))
+
+	var removed []sinfonia.TransactionID
+	removed, err = log.GCByEpoch(103)
+	if len(removed) != 1 || removed[0] != old {
+		t.Fatalf("removed = %v, want only %v", removed, old)
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkOriginal()
+	if log.IsForcedAbort(old) || !log.IsForcedAbort(recent) {
+		t.Fatal("wrong live forced-abort set after replacement")
+	}
+	// A later append must go to the replacement, not the old inode.
+	later := sinfonia.TransactionID{Counter: 3, Epoch: 103}
+	if err := log.AddItem(later); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenForcedAbortLog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.IsForcedAbort(old) || !reopened.IsForcedAbort(recent) || !reopened.IsForcedAbort(later) {
+		t.Fatal("wrong durable forced-abort set after replacement and append")
+	}
+
 }
 
 func TestDecidedLogReplacement(t *testing.T) {
-	for _, reset := range []bool{false, true} {
-		name := "remove"
-		if reset {
-			name = "reset"
-		}
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			log, err := OpenDecidedTransactionLog(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			removed := sinfonia.TransactionID{Counter: 1, Epoch: 100}
-			retained := sinfonia.TransactionID{Counter: 2, Epoch: 103}
-			if err := log.AddItem(removed, true); err != nil {
-				t.Fatal(err)
-			}
-			if err := log.AddItem(retained, false); err != nil {
-				t.Fatal(err)
-			}
-			checkOriginal := unchangedOpenLog(t, filepath.Join(dir, "decided.log"))
-			if reset {
-				err = log.Reset()
-			} else {
-				err = log.Remove(removed)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			checkOriginal()
-			if _, known := log.Get(removed); known {
-				t.Fatal("removed decision remains in memory")
-			}
-			if committed, known := log.Get(retained); committed || known == reset {
-				t.Fatalf("retained decision = %t, %t", committed, known)
-			}
-			later := sinfonia.TransactionID{Counter: 3, Epoch: 103}
-			if err := log.AddItem(later, true); err != nil {
-				t.Fatal(err)
-			}
-			reopened, err := OpenDecidedTransactionLog(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, known := reopened.Get(removed); known {
-				t.Fatal("removed decision remains on disk")
-			}
-			if committed, known := reopened.Get(retained); committed || known == reset {
-				t.Fatalf("reopened retained decision = %t, %t", committed, known)
-			}
-			if committed, known := reopened.Get(later); !committed || !known {
-				t.Fatal("append after replacement was lost")
-			}
-		})
+
+	dir := t.TempDir()
+	log, err := OpenDecidedTransactionLog(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
+	removed := sinfonia.TransactionID{Counter: 1, Epoch: 100}
+	retained := sinfonia.TransactionID{Counter: 2, Epoch: 103}
+	if err := log.AddItem(removed, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.AddItem(retained, false); err != nil {
+		t.Fatal(err)
+	}
+	checkOriginal := unchangedOpenLog(t, filepath.Join(dir, "decided.log"))
+
+	err = log.Remove(removed)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkOriginal()
+	if _, known := log.Get(removed); known {
+		t.Fatal("removed decision remains in memory")
+	}
+	if committed, known := log.Get(retained); committed || !known {
+		t.Fatalf("retained decision = %t, %t", committed, known)
+	}
+	later := sinfonia.TransactionID{Counter: 3, Epoch: 103}
+	if err := log.AddItem(later, true); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenDecidedTransactionLog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, known := reopened.Get(removed); known {
+		t.Fatal("removed decision remains on disk")
+	}
+	if committed, known := reopened.Get(retained); committed || !known {
+		t.Fatalf("reopened retained decision = %t, %t", committed, known)
+	}
+	if committed, known := reopened.Get(later); !committed || !known {
+		t.Fatal("append after replacement was lost")
+	}
+
 }
 
 func TestTransactionLogFailedReplacementPreservesMemory(t *testing.T) {
 	for _, kind := range []string{"forced-abort", "decided"} {
-		for _, reset := range []bool{false, true} {
-			operation := "cleanup"
-			if reset {
-				operation = "reset"
+
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			old := sinfonia.TransactionID{Counter: 1, Epoch: 100}
+			recent := sinfonia.TransactionID{Counter: 2, Epoch: 103}
+			var path string
+			var rewrite func() error
+			var contains func(sinfonia.TransactionID) bool
+			if kind == "forced-abort" {
+				log, err := OpenForcedAbortLog(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, tid := range []sinfonia.TransactionID{old, recent} {
+					if err := log.AddItem(tid); err != nil {
+						t.Fatal(err)
+					}
+				}
+				path = filepath.Join(dir, "forced_abort.log")
+				contains = log.IsForcedAbort
+				rewrite = func() error { _, err := log.GCByEpoch(103); return err }
+
+			} else {
+				log, err := OpenDecidedTransactionLog(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, tid := range []sinfonia.TransactionID{old, recent} {
+					if err := log.AddItem(tid, false); err != nil {
+						t.Fatal(err)
+					}
+				}
+				path = filepath.Join(dir, "decided.log")
+				contains = func(tid sinfonia.TransactionID) bool { _, ok := log.Get(tid); return ok }
+				rewrite = func() error { return log.Remove(old) }
+
 			}
-			t.Run(kind+"/"+operation, func(t *testing.T) {
-				dir := t.TempDir()
-				old := sinfonia.TransactionID{Counter: 1, Epoch: 100}
-				recent := sinfonia.TransactionID{Counter: 2, Epoch: 103}
-				var path string
-				var rewrite func() error
-				var contains func(sinfonia.TransactionID) bool
-				if kind == "forced-abort" {
-					log, err := OpenForcedAbortLog(dir)
-					if err != nil {
-						t.Fatal(err)
-					}
-					for _, tid := range []sinfonia.TransactionID{old, recent} {
-						if err := log.AddItem(tid); err != nil {
-							t.Fatal(err)
-						}
-					}
-					path = filepath.Join(dir, "forced_abort.log")
-					contains = log.IsForcedAbort
-					rewrite = func() error { _, err := log.GCByEpoch(103); return err }
-					if reset {
-						rewrite = log.Reset
-					}
-				} else {
-					log, err := OpenDecidedTransactionLog(dir)
-					if err != nil {
-						t.Fatal(err)
-					}
-					for _, tid := range []sinfonia.TransactionID{old, recent} {
-						if err := log.AddItem(tid, false); err != nil {
-							t.Fatal(err)
-						}
-					}
-					path = filepath.Join(dir, "decided.log")
-					contains = func(tid sinfonia.TransactionID) bool { _, ok := log.Get(tid); return ok }
-					rewrite = func() error { return log.Remove(old) }
-					if reset {
-						rewrite = log.Reset
-					}
-				}
-				// A directory at the destination prevents publishing a replacement.
-				backup := path + ".saved"
-				if err := os.Rename(path, backup); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Mkdir(path, 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := rewrite(); err == nil {
-					t.Fatal("replacement unexpectedly succeeded")
-				}
-				if !contains(old) || !contains(recent) {
-					t.Error("failed replacement removed in-memory history")
-				}
-				if err := os.Remove(path); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Rename(backup, path); err != nil {
-					t.Fatal(err)
-				}
-				if err := rewrite(); err != nil {
-					t.Fatal(err)
-				}
-				if contains(old) || contains(recent) == reset {
-					t.Fatal("replacement did not succeed after the failure was removed")
-				}
-				entries, err := os.ReadDir(dir)
-				if err != nil || len(entries) != 1 {
-					t.Fatalf("replacement leaked temporary files: %v, %v", entries, err)
-				}
-			})
-		}
+			// A directory at the destination prevents publishing a replacement.
+			backup := path + ".saved"
+			if err := os.Rename(path, backup); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := rewrite(); err == nil {
+				t.Fatal("replacement unexpectedly succeeded")
+			}
+			if !contains(old) || !contains(recent) {
+				t.Error("failed replacement removed in-memory history")
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(backup, path); err != nil {
+				t.Fatal(err)
+			}
+			if err := rewrite(); err != nil {
+				t.Fatal(err)
+			}
+			if contains(old) || contains(recent) == false {
+				t.Fatal("replacement did not succeed after the failure was removed")
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("replacement leaked temporary files: %v, %v", entries, err)
+			}
+		})
+
 	}
 }
 

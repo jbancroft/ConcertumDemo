@@ -1,7 +1,6 @@
 package memnode
 
 import (
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"os"
@@ -15,11 +14,7 @@ import (
 
 var ErrOutOfBounds = errors.New("out of bounds")
 
-const (
-	baselineChunkSize            = 1 << 20
-	defaultGlobalBarrierLeaseTTL = 30 * time.Second
-	maxBaselineBytes             = uint64(1) << 40
-)
+const defaultGlobalBarrierLeaseTTL = 30 * time.Second
 
 type Participant struct {
 	mu           sync.Mutex
@@ -27,7 +22,6 @@ type Participant struct {
 	hostId       uint32
 	memory       []byte
 	storageDir   string
-	durable      bool
 	diskImage    *storage.DiskImage
 	redoLog      *storage.RedoLog
 	decided      *storage.DecidedTransactionLog
@@ -44,52 +38,34 @@ type Participant struct {
 	appliedLocal    map[sinfonia.TransactionID]bool
 	appliedRemote   map[sinfonia.TransactionID]map[uint32]bool
 	pendingNotify   map[uint32]map[sinfonia.TransactionID]struct{}
-	logParticipants map[sinfonia.TransactionID][]uint32
 	prepareOutcomes map[sinfonia.TransactionID]prepareOutcome
 	onePCOutcomes   map[sinfonia.TransactionID]onePCOutcome
 	commitOutcomes  map[sinfonia.TransactionID]commitOutcome
 
-	backupMode         bool
-	prepareFlights     map[sinfonia.TransactionID]*prepareFlight
-	onePCFlights       map[sinfonia.TransactionID]*onePCFlight
-	pendingDiskWrites  []sinfonia.WriteItem
-	lastBackupBoundary sinfonia.TransactionID
+	backupMode        bool
+	pendingDiskWrites []sinfonia.WriteItem
 
-	mode                     ReplicationMode
-	replica                  ReplicaPeer
-	replicaID                uint32
-	primaryID                uint32
-	heartbeat                time.Time
-	partnerRPC               string
-	lastReplicationError     string
-	generation               uint64
-	peerTLS                  *tls.Config
-	peerTimeout              time.Duration
-	localBarrierOwner        string
-	globalBarrierLeaseTTL    time.Duration
-	baselineTransfer         *baselineTransfer
-	baselineRecoveryRequired bool
+	peerTimeout           time.Duration
+	localBarrierOwner     string
+	globalBarrierLeaseTTL time.Duration
 
 	recoveryComplete bool
 	restartRequired  error
-	replicaSynced    bool
 
-	maxInFlightPrepare          int
-	maxInDoubtSoft              int
-	maxInDoubtHard              int
-	maxRequestBytes             int
-	maxItemsPerTxn              int
-	maxReadBytesPerTxn          int64
-	maxWriteBytesPerTxn         int64
-	prepareSlots                chan struct{}
-	prepareLimiter              *ratelimit.KeyedLimiter
-	commitLimiter               *ratelimit.KeyedLimiter
-	recoveryLimiter             *ratelimit.KeyedLimiter
-	recoverBoundaryHook         func(phase string, txId sinfonia.TransactionID) error
-	outcomeReplayBoundaryHook   func(phase string, txId sinfonia.TransactionID) error
-	baselineInstallBoundaryHook func(phase string) error
-	fencingPublicationHook      func(point string) error
-	writeApplyFaultHook         func(addr uint64, data []byte) error
+	maxInFlightPrepare        int
+	maxInDoubtSoft            int
+	maxInDoubtHard            int
+	maxRequestBytes           int
+	maxItemsPerTxn            int
+	maxReadBytesPerTxn        int64
+	maxWriteBytesPerTxn       int64
+	prepareSlots              chan struct{}
+	prepareLimiter            *ratelimit.KeyedLimiter
+	commitLimiter             *ratelimit.KeyedLimiter
+	recoveryLimiter           *ratelimit.KeyedLimiter
+	recoverBoundaryHook       func(phase string, txId sinfonia.TransactionID) error
+	outcomeReplayBoundaryHook func(phase string, txId sinfonia.TransactionID) error
+	writeApplyFaultHook       func(addr uint64, data []byte) error
 }
 
 func (n *Participant) initSafetyDefaults() {
@@ -104,10 +80,20 @@ func (n *Participant) initSafetyDefaults() {
 }
 
 func NewParticipant(size int) *Participant {
-	n := &Participant{memory: make([]byte, size), inDoubt: make(map[sinfonia.TransactionID]*preparedTxn), allLogTxIds: map[sinfonia.TransactionID]struct{}{}, nowFn: time.Now, participants: map[uint32]RecoveryPeer{}, appliedLocal: map[sinfonia.TransactionID]bool{}, appliedRemote: map[sinfonia.TransactionID]map[uint32]bool{}, pendingNotify: map[uint32]map[sinfonia.TransactionID]struct{}{}, logParticipants: map[sinfonia.TransactionID][]uint32{}, prepareOutcomes: map[sinfonia.TransactionID]prepareOutcome{}, onePCOutcomes: map[sinfonia.TransactionID]onePCOutcome{}, commitOutcomes: map[sinfonia.TransactionID]commitOutcome{}, prepareFlights: map[sinfonia.TransactionID]*prepareFlight{}, onePCFlights: map[sinfonia.TransactionID]*onePCFlight{}}
-	n.mode = ModeSingle
+	n := &Participant{
+		memory:          make([]byte, size),
+		inDoubt:         make(map[sinfonia.TransactionID]*preparedTxn),
+		allLogTxIds:     make(map[sinfonia.TransactionID]struct{}),
+		nowFn:           time.Now,
+		participants:    make(map[uint32]RecoveryPeer),
+		appliedLocal:    make(map[sinfonia.TransactionID]bool),
+		appliedRemote:   make(map[sinfonia.TransactionID]map[uint32]bool),
+		pendingNotify:   make(map[uint32]map[sinfonia.TransactionID]struct{}),
+		prepareOutcomes: make(map[sinfonia.TransactionID]prepareOutcome),
+		onePCOutcomes:   make(map[sinfonia.TransactionID]onePCOutcome),
+		commitOutcomes:  make(map[sinfonia.TransactionID]commitOutcome),
+	}
 	n.recoveryComplete = true
-	n.replicaSynced = true
 	n.peerTimeout = defaultPeerTimeout
 	n.initSafetyDefaults()
 	n.cond = sync.NewCond(&n.mu)
@@ -126,20 +112,12 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	if err := storage.RecoverBaselineInstall(dir); err != nil {
-		return nil, err
-	}
+
 	epochFloor, err := storage.LoadEpochFloor(dir)
 	if err != nil {
 		return nil, err
 	}
-	generation, err := loadFencingGeneration(dir)
-	if err != nil {
-		return nil, err
-	}
-	if err := retainFencingGenerations(dir, nil); err != nil {
-		return nil, fmt.Errorf("retain fencing generations during startup: %w", err)
-	}
+
 	// Reject malformed decisions before opening the image or starting the redo appender.
 	decided, err := storage.OpenDecidedTransactionLog(dir)
 	if err != nil {
@@ -176,7 +154,6 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 		hostId:           hostId,
 		memory:           mem,
 		storageDir:       dir,
-		durable:          true,
 		diskImage:        disk,
 		redoLog:          redoLog,
 		decided:          decided,
@@ -191,16 +168,10 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 		appliedLocal:     map[sinfonia.TransactionID]bool{},
 		appliedRemote:    map[sinfonia.TransactionID]map[uint32]bool{},
 		pendingNotify:    map[uint32]map[sinfonia.TransactionID]struct{}{},
-		logParticipants:  map[sinfonia.TransactionID][]uint32{},
 		prepareOutcomes:  map[sinfonia.TransactionID]prepareOutcome{},
 		onePCOutcomes:    map[sinfonia.TransactionID]onePCOutcome{},
 		commitOutcomes:   map[sinfonia.TransactionID]commitOutcome{},
-		prepareFlights:   map[sinfonia.TransactionID]*prepareFlight{},
-		onePCFlights:     map[sinfonia.TransactionID]*onePCFlight{},
-		generation:       generation,
-		mode:             ModeSingle,
 		recoveryComplete: false,
-		replicaSynced:    true,
 		peerTimeout:      defaultPeerTimeout,
 	}
 	n.initSafetyDefaults()
@@ -209,7 +180,6 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 	n.globalBarrierLeaseTTL = defaultGlobalBarrierLeaseTTL
 	for _, e := range redoLog.Entries() {
 		n.allLogTxIds[e.TransactionId] = struct{}{}
-		n.logParticipants[e.TransactionId] = append([]uint32(nil), e.HostIds...)
 		if committed, ok := decided.Get(e.TransactionId); ok {
 			n.commitOutcomes[e.TransactionId] = commitOutcome{resp: sinfonia.CommitResponse{Ack: true}, actionCommit: committed}
 			if committed {
@@ -233,7 +203,6 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 func (n *Participant) Close() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.abortBaselineTransferLocked()
 	if n.redoLog != nil {
 		_ = n.redoLog.Close()
 	}
@@ -284,14 +253,4 @@ func (n *Participant) SetWriteApplyFaultForTest(fn func(addr uint64, data []byte
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.writeApplyFaultHook = fn
-}
-
-func (n *Participant) isReadyLocked() bool {
-	if n.restartRequired != nil || !n.recoveryComplete || n.backupMode {
-		return false
-	}
-	if n.mode == ModeReplReplica && !n.replicaSynced {
-		return false
-	}
-	return true
 }

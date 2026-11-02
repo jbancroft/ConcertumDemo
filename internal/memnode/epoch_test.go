@@ -165,7 +165,7 @@ func TestForcedAbortGCRetainsRecentVoteAfterRestart(t *testing.T) {
 }
 
 func TestBackgroundReplayRetention(t *testing.T) {
-	for _, mode := range []string{"ram", "durable", "replica"} {
+	for _, mode := range []string{"ram", "durable"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			dir := t.TempDir()
@@ -206,9 +206,7 @@ func TestBackgroundReplayRetention(t *testing.T) {
 				t.Fatalf("recent read = %+v, %v", resp, err)
 			}
 			now = now.Add(time.Hour)
-			if mode == "replica" {
-				node.ConfigureAsReplica(2)
-			}
+
 			workerCtx, cancel := context.WithCancel(ctx)
 			done := make(chan struct{})
 			go func() { defer close(done); node.RunRecovery(workerCtx, nil) }()
@@ -261,34 +259,34 @@ func TestBackgroundReplayRetention(t *testing.T) {
 			if err != nil || !vote.Expired || vote.KnownDecision {
 				t.Fatalf("forgotten outcome = %+v, %v", vote, err)
 			}
-			if mode != "replica" {
-				if resp, err := node.ExecCommit1PC(ctx, read); err != nil || resp.Vote != sinfonia.VoteBadStaleEpoch {
-					t.Fatalf("expired retry = %+v, %v", resp, err)
-				}
-				if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: old, ActionCommit: true}); err != nil || resp.Ack {
-					t.Fatalf("expired decision = %+v, %v", resp, err)
-				}
-				if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: old}); err != nil || !resp.Ack {
-					t.Fatalf("expired abort delivery = %+v, %v", resp, err)
-				}
-				vote, err = node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: old})
-				if err != nil || !vote.Expired {
-					t.Fatalf("late requests recreated evidence: %+v, %v", vote, err)
-				}
-				if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: pending, ActionCommit: true}); err != nil || !resp.Ack {
-					t.Fatalf("finish expired prepare = %+v, %v", resp, err)
-				}
-				node.mu.Lock()
-				err = node.gcReplayLocked()
-				node.mu.Unlock()
-				if err != nil {
-					t.Fatal(err)
-				}
-				vote, err = node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: pending})
-				if err != nil || !vote.Expired {
-					t.Fatalf("completed old transaction retained: %+v, %v", vote, err)
-				}
+
+			if resp, err := node.ExecCommit1PC(ctx, read); err != nil || resp.Vote != sinfonia.VoteBadStaleEpoch {
+				t.Fatalf("expired retry = %+v, %v", resp, err)
 			}
+			if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: old, ActionCommit: true}); err != nil || resp.Ack {
+				t.Fatalf("expired decision = %+v, %v", resp, err)
+			}
+			if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: old}); err != nil || !resp.Ack {
+				t.Fatalf("expired abort delivery = %+v, %v", resp, err)
+			}
+			vote, err = node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: old})
+			if err != nil || !vote.Expired {
+				t.Fatalf("late requests recreated evidence: %+v, %v", vote, err)
+			}
+			if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: pending, ActionCommit: true}); err != nil || !resp.Ack {
+				t.Fatalf("finish expired prepare = %+v, %v", resp, err)
+			}
+			node.mu.Lock()
+			err = node.gcReplayLocked()
+			node.mu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			vote, err = node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: pending})
+			if err != nil || !vote.Expired {
+				t.Fatalf("completed old transaction retained: %+v, %v", vote, err)
+			}
+
 		})
 	}
 }

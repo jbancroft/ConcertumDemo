@@ -16,7 +16,7 @@ func (n *Participant) ApplyWriteForTest(addr uint64, data []byte) error {
 	return n.write(addr, data)
 }
 
-// ReadBytesForTest inspects physical memory, including unready nodes and replicas.
+// ReadBytesForTest inspects physical memory, including unready nodes.
 // It exists only in test builds; applications must use minitransactions.
 func (n *Participant) ReadBytesForTest(addr uint64, length uint32) ([]byte, error) {
 	n.mu.Lock()
@@ -28,4 +28,15 @@ func (n *Participant) ActiveLockCountForTest() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return len(n.locks.locks)
+}
+
+func (n *Participant) ReadyForTest() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.restartRequired == nil && n.recoveryComplete && !n.backupMode
+}
+func (n *Participant) SetRecoveryTimeoutForTest(timeout time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.peerTimeout = timeout
 }

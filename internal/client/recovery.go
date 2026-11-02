@@ -50,14 +50,14 @@ func (c *Coordinator) Resolve(ctx context.Context, handle minitxn.RecoveryHandle
 			result.Status = sinfonia.VoteOk
 			offsets := make(map[uint32]uint32)
 			for _, read := range handle.Reads {
-				index := offsets[read.ParticipantID]
-				offsets[read.ParticipantID]++
-				data, ok := outcome.Votes[read.ParticipantID].ReadData[index]
-				if !ok || len(data) != int(read.Item.Length) {
+				index := offsets[read.HostId]
+				offsets[read.HostId]++
+				data, ok := outcome.Votes[read.HostId].ReadData[index]
+				if !ok || len(data) != int(read.Length) {
 					result.TransportErr = minitxn.ErrReadResultsUnavailable
 					continue
 				}
-				item := sinfonia.ReadItem{MemID: read.Item.HostId, Addr: read.Item.Address, Len: read.Item.Length}
+				item := sinfonia.ReadItem{MemID: read.HostId, Addr: read.Address, Len: read.Length}
 				result.ReadResults[item] = append([]byte(nil), data...)
 			}
 			return result

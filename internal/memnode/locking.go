@@ -2,11 +2,14 @@ package memnode
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
+
+var ErrBackupLockLease = errors.New("backup global lock lease is invalid")
 
 type RangeLock struct {
 	start uint64
@@ -30,7 +33,6 @@ func (rl RangeLock) OverlapsWith(other RangeLock) bool {
 type LockManager struct {
 	locks                 []RangeLock
 	globalWriteLock       bool
-	globalLockedAt        time.Time
 	globalOwner           string
 	globalLeaseUntil      time.Time
 	globalLeaseGeneration uint64
@@ -165,7 +167,7 @@ func (n *Participant) LockAllBlocking(ctx context.Context) error {
 
 func (n *Participant) LockAllBlockingOwned(ctx context.Context, owner string) error {
 	if owner == "" {
-		return ErrReplicationBaselineLease
+		return ErrBackupLockLease
 	}
 	// sync.Cond doesn't understand contexts. Wake it on cancellation; the timer
 	// below also wakes it when an abandoned owner's lease expires.
@@ -193,7 +195,6 @@ func (n *Participant) LockAllBlockingOwned(ctx context.Context, owner string) er
 		n.expireGlobalLockLocked()
 		if !n.locks.globalWriteLock && len(n.locks.locks) == 0 {
 			n.locks.globalWriteLock = true
-			n.locks.globalLockedAt = time.Now()
 			n.locks.globalOwner = owner
 			n.locks.globalLeaseGeneration++
 			n.renewGlobalLeaseLocked()
@@ -242,11 +243,8 @@ func (n *Participant) expireGlobalLockLocked() {
 }
 
 func (n *Participant) clearGlobalLockLocked() {
-	if n.baselineTransfer != nil {
-		n.abortBaselineTransferLocked()
-	}
+
 	n.locks.globalWriteLock = false
-	n.locks.globalLockedAt = time.Time{}
 	n.locks.globalOwner = ""
 	n.locks.globalLeaseUntil = time.Time{}
 }
@@ -257,7 +255,7 @@ func (n *Participant) touchGlobalLockLocked(owner string) error {
 	}
 	n.expireGlobalLockLocked()
 	if owner == "" || !n.locks.globalWriteLock || n.locks.globalOwner != owner {
-		return ErrReplicationBaselineLease
+		return ErrBackupLockLease
 	}
 	n.renewGlobalLeaseLocked()
 	return nil
@@ -278,23 +276,6 @@ func (n *Participant) renewGlobalLeaseLocked() {
 			n.expireGlobalLockLocked()
 		}
 	})
-}
-
-func (n *Participant) SetGlobalBarrierLeaseTTLForTest(ttl time.Duration) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if ttl > 0 {
-		n.globalBarrierLeaseTTL = ttl
-	}
-}
-
-func (n *Participant) GlobalLockHeldDurationForTest() time.Duration {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.locks.globalLockedAt.IsZero() {
-		return 0
-	}
-	return time.Since(n.locks.globalLockedAt)
 }
 
 func (n *Participant) HoldWriteLockForTest(addr uint64, length uint32) func() {

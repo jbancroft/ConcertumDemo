@@ -13,7 +13,6 @@ type ExecPrepareRequest struct {
 	ReadItems    []ReadItem
 	WriteItems   []WriteItem
 	Epoch        uint64
-	Generation   uint64
 }
 
 // ExecPrepareResponse returns the participant's vote and any bytes it read.
@@ -30,7 +29,6 @@ type CommitRequest struct {
 	TID          TransactionID
 	RequestID    RequestID
 	ActionCommit bool
-	Generation   uint64
 }
 
 // CommitResponse acknowledges a commit or abort request.
@@ -47,7 +45,6 @@ type ExecCommit1PCRequest struct {
 	ReadItems  []ReadItem
 	WriteItems []WriteItem
 	Epoch      uint64
-	Generation uint64
 }
 
 type ExecCommit1PCResponse struct {
@@ -76,191 +73,6 @@ type CommitBatchResponse struct {
 	Acks []bool
 }
 
-type ReplicateRedoEntryRequest struct {
-	Entry RedoEntryPayload
-}
-
-type ReplicateRedoEntryResponse struct {
-	Ack bool
-}
-
-type ReplicateCommitDecisionRequest struct {
-	TID          TransactionID
-	ActionCommit bool
-}
-
-type ReplicateCommitDecisionResponse struct {
-	Ack bool
-}
-
-// ReplayRecordKind says which kind of reply is being saved. Replies are keyed
-// by (TID, Kind), since prepare and single-participant calls have separate paths.
-type ReplayRecordKind string
-
-const (
-	ReplayRecordOnePC   ReplayRecordKind = "one_pc"
-	ReplayRecordPrepare ReplayRecordKind = "prepare"
-)
-
-// ReplicateReplayRecordRequest sends a reply to a synced replica. The replica
-// saves it before acknowledging, so it can return the same vote and data if it
-// takes over and receives a retry.
-type ReplicateReplayRecordRequest struct {
-	TID     TransactionID
-	Kind    ReplayRecordKind
-	Prepare *ExecPrepareResponse
-	OnePC   *ExecCommit1PCResponse
-}
-
-type ReplicateReplayRecordResponse struct {
-	Ack bool
-}
-
-type ReplicationRole string
-
-const (
-	ReplicationRolePrimary ReplicationRole = "primary"
-	ReplicationRoleReplica ReplicationRole = "replica"
-	ReplicationRoleSingle  ReplicationRole = "single"
-)
-
-type ConfigureReplicationRequest struct {
-	Role       ReplicationRole
-	PartnerRPC string
-	MarkSynced bool
-	Generation uint64
-}
-
-type ConfigureReplicationResponse struct {
-	Ack            bool
-	OutcomeUnknown bool
-	Generation     uint64
-}
-
-type ReplicationStatusRequest struct{}
-
-type ReplicationStatusResponse struct {
-	Role          ReplicationRole
-	Ready         bool
-	ReplicaSynced bool
-	PartnerRPC    string
-	LastError     string
-	Generation    uint64
-}
-
-type ListCommittedTIDsRequest struct{}
-
-type ListCommittedTIDsResponse struct {
-	TIDs []TransactionID
-}
-
-type ListRedoEntriesRequest struct{}
-
-type RedoEntryPayload struct {
-	TID          TransactionID
-	Participants []uint32
-	WriteItems   []WriteItem
-}
-
-type ListRedoEntriesResponse struct {
-	Entries []RedoEntryPayload
-}
-
-// ExportReplicationBaselineResponse carries a saved image copied while writes
-// are blocked. BoundaryTID helps diagnose where the copy was taken; the image
-// itself supplies the replica's state.
-type ExportReplicationBaselineRequest struct {
-	BarrierOwner string
-}
-
-type ExportReplicationBaselineResponse struct {
-	Ack         bool
-	Image       []byte
-	SHA256      []byte
-	BoundaryTID TransactionID
-	EpochFloor  uint64
-}
-
-type InstallReplicationBaselineRequest struct {
-	BarrierOwner string
-	Image        []byte
-	SHA256       []byte
-	BoundaryTID  TransactionID
-	EpochFloor   uint64
-}
-
-type InstallReplicationBaselineResponse struct {
-	Ack         bool
-	BoundaryTID TransactionID
-}
-
-type ExportReplicationBaselineChunkRequest struct {
-	BarrierOwner string
-	// Artifact selects the saved memory image (empty or "image") or the
-	// saved reply log ("replay") in this transfer session.
-	Artifact string
-	Offset   uint64
-	MaxBytes uint32
-}
-
-type ExportReplicationBaselineChunkResponse struct {
-	Ack          bool
-	Data         []byte
-	SHA256       []byte
-	TotalSize    uint64
-	ReplaySize   uint64
-	ReplaySHA256 []byte
-	BoundaryTID  TransactionID
-	EpochFloor   uint64
-}
-
-type BeginReplicationBaselineRequest struct {
-	BarrierOwner string
-	SessionID    string
-	TotalSize    uint64
-	SHA256       []byte
-	ReplaySize   uint64
-	ReplaySHA256 []byte
-	BoundaryTID  TransactionID
-	EpochFloor   uint64
-}
-
-type BeginReplicationBaselineResponse struct {
-	Ack bool
-}
-
-type WriteReplicationBaselineChunkRequest struct {
-	BarrierOwner string
-	SessionID    string
-	Artifact     string
-	Offset       uint64
-	SHA256       []byte
-	Data         []byte
-}
-
-type WriteReplicationBaselineChunkResponse struct {
-	Ack bool
-}
-
-type CommitReplicationBaselineRequest struct {
-	BarrierOwner string
-	SessionID    string
-}
-
-type CommitReplicationBaselineResponse struct {
-	Ack         bool
-	BoundaryTID TransactionID
-}
-
-type AbortReplicationBaselineRequest struct {
-	BarrierOwner string
-	SessionID    string
-}
-
-type AbortReplicationBaselineResponse struct {
-	Ack bool
-}
-
 // RecoverForceAbortRequest asks a node to record an abort unless it already voted yes.
 type RecoverForceAbortRequest struct {
 	TID   TransactionID
@@ -269,7 +81,6 @@ type RecoverForceAbortRequest struct {
 
 // RecoverForceAbortResponse returns the participant's vote after that check.
 type RecoverForceAbortResponse struct {
-	Generation     uint64
 	ReadData       map[uint32][]byte
 	Expired        bool
 	Vote           Vote
@@ -279,7 +90,6 @@ type RecoverForceAbortResponse struct {
 
 // RecoverDecideRequest asks the node to apply a recovery decision.
 type RecoverDecideRequest struct {
-	Generation   uint64
 	TID          TransactionID
 	ActionCommit bool
 }
@@ -383,7 +193,3 @@ type CompleteBackupPhaseResponse struct {
 	SnapshotPath   string
 	SnapshotSHA256 string
 }
-
-// Ideas for additional recovery and notification RPCs:
-// - RecoverVoteQuery(tid)
-// - AppliedTidsNotify(fromMemID, tids[])

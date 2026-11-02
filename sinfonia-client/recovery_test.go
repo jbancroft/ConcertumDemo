@@ -71,7 +71,7 @@ func TestBackgroundRecoveryPreservesUnrecordedReads(t *testing.T) {
 				if err := c.Write(ctx, 1, 0, []byte("B")); err != nil {
 					t.Fatal(err)
 				}
-				handle := RecoveryHandle{TID: tid, Participants: []uint32{1}, Reads: []minitxn.RecoveryRead{{ParticipantID: 1, Item: ReadItem{HostId: 1, Length: 1}}}}
+				handle := RecoveryHandle{TID: tid, Participants: []uint32{1}, Reads: []ReadItem{{HostId: 1, Length: 1}}}
 				checkReads := func() {
 					t.Helper()
 					for range 2 {

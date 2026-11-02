@@ -12,156 +12,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
-func TestReplayStoreBytesReturnsDurableSnapshot(t *testing.T) {
-	dir := t.TempDir()
-	store, err := storage.OpenReplayStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	txId := sinfonia.TransactionID{CoordinatorID: 11, Counter: 1, Epoch: 7}
-	resp := sinfonia.ExecPrepareResponse{
-		RequestID:    "prepare-1",
-		Vote:         sinfonia.VoteOk,
-		ReadData:     map[uint32][]byte{1: []byte("alpha")},
-		CurrentEpoch: 13,
-	}
-	if err := store.AppendPrepare(txId, resp); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := os.ReadFile(filepath.Join(dir, "replay.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("snapshot bytes mismatch:\n got %q\nwant %q", string(got), string(want))
-	}
-}
-
-func TestReplayStoreReplaceFromPublishesAndRefreshesIndex(t *testing.T) {
-	dir := t.TempDir()
-	store, err := storage.OpenReplayStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldTID := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}
-	if err := store.AppendPrepare(oldTID, sinfonia.ExecPrepareResponse{RequestID: "old", Vote: sinfonia.VoteOk, ReadData: map[uint32][]byte{1: []byte("old")}}); err != nil {
-		t.Fatal(err)
-	}
-
-	expectedPrepareTID := sinfonia.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2}
-	expectedPrepare := sinfonia.ExecPrepareResponse{
-		RequestID:    "prepare-2",
-		Vote:         sinfonia.VoteBadCmp,
-		ReadData:     map[uint32][]byte{2: []byte("bravo")},
-		CurrentEpoch: 21,
-	}
-	expectedOnePCTID := sinfonia.TransactionID{CoordinatorID: 3, Counter: 3, Epoch: 3}
-	expectedOnePC := sinfonia.ExecCommit1PCResponse{
-		RequestID:    "1pc-3",
-		Vote:         sinfonia.VoteBadLock,
-		ReadData:     map[uint32][]byte{3: []byte("charlie")},
-		CurrentEpoch: 34,
-		LockConflict: &sinfonia.LockConflict{Reason: "held", RequestedStart: 4, RequestedEnd: 9, HeldStart: 10, HeldEnd: 12, HeldWrite: true},
-	}
-	stagedPath, stagedBytes := writeReplayArtifact(t, func(staged *storage.ReplayStore) error {
-		if err := staged.AppendPrepare(expectedPrepareTID, expectedPrepare); err != nil {
-			return err
-		}
-		return staged.AppendOnePC(expectedOnePCTID, expectedOnePC)
-	})
-
-	if err := store.ReplaceFrom(stagedPath); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := store.GetPrepare(oldTID); ok {
-		t.Fatal("old replay record remained after replace")
-	}
-	if got, ok := store.GetPrepare(expectedPrepareTID); !ok || !reflect.DeepEqual(got, expectedPrepare) {
-		t.Fatalf("prepare replay = %+v ok=%v, want %+v", got, ok, expectedPrepare)
-	}
-	if got, ok := store.GetOnePC(expectedOnePCTID); !ok || !reflect.DeepEqual(got, expectedOnePC) {
-		t.Fatalf("1pc replay = %+v ok=%v, want %+v", got, ok, expectedOnePC)
-	}
-
-	gotBytes, err := store.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotBytes, stagedBytes) {
-		t.Fatalf("published replay bytes mismatch:\n got %q\nwant %q", string(gotBytes), string(stagedBytes))
-	}
-
-	reopened, err := storage.OpenReplayStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := reopened.GetPrepare(expectedPrepareTID); !ok || !reflect.DeepEqual(got, expectedPrepare) {
-		t.Fatalf("reopened prepare replay = %+v ok=%v, want %+v", got, ok, expectedPrepare)
-	}
-	if got, ok := reopened.GetOnePC(expectedOnePCTID); !ok || !reflect.DeepEqual(got, expectedOnePC) {
-		t.Fatalf("reopened 1pc replay = %+v ok=%v, want %+v", got, ok, expectedOnePC)
-	}
-}
-
-func TestReplayStoreReplaceFromRejectsIncompleteJSONL(t *testing.T) {
-	dir := t.TempDir()
-	store, err := storage.OpenReplayStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldTID := sinfonia.TransactionID{CoordinatorID: 9, Counter: 1, Epoch: 4}
-	oldResp := sinfonia.ExecPrepareResponse{RequestID: "old", Vote: sinfonia.VoteOk, ReadData: map[uint32][]byte{9: []byte("stable")}}
-	if err := store.AppendPrepare(oldTID, oldResp); err != nil {
-		t.Fatal(err)
-	}
-	before, err := store.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	validPath, validBytes := writeReplayArtifact(t, func(staged *storage.ReplayStore) error {
-		return staged.AppendPrepare(
-			sinfonia.TransactionID{CoordinatorID: 10, Counter: 2, Epoch: 5},
-			sinfonia.ExecPrepareResponse{RequestID: "new", Vote: sinfonia.VoteBadForced, ReadData: map[uint32][]byte{10: []byte("new")}},
-		)
-	})
-	if len(validBytes) < 2 {
-		t.Fatalf("valid staged replay too small: %d", len(validBytes))
-	}
-	truncated := validBytes[:len(validBytes)-2]
-	if err := os.WriteFile(validPath, truncated, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := store.ReplaceFrom(validPath); err == nil {
-		t.Fatal("expected incomplete staged replay to be rejected")
-	}
-
-	after, err := store.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(after, before) {
-		t.Fatalf("failed replace changed durable replay:\n got %q\nwant %q", string(after), string(before))
-	}
-	if got, ok := store.GetPrepare(oldTID); !ok || !reflect.DeepEqual(got, oldResp) {
-		t.Fatalf("failed replace changed in-memory replay: %+v ok=%v", got, ok)
-	}
-
-	reopened, err := storage.OpenReplayStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := reopened.GetPrepare(oldTID); !ok || !reflect.DeepEqual(got, oldResp) {
-		t.Fatalf("failed replace changed reopened replay: %+v ok=%v", got, ok)
-	}
-}
-
 func TestReplayStoreRejectsConflictingDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	store, err := storage.OpenReplayStore(dir)
@@ -191,7 +41,7 @@ func TestReplayStoreOpenTruncatesTornTail(t *testing.T) {
 	if err := stored.AppendPrepare(sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 1}, stable); err != nil {
 		t.Fatal(err)
 	}
-	want, err := stored.Bytes()
+	want, err := os.ReadFile(filepath.Join(dir, "replay.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,19 +203,20 @@ func TestReplayStoreOpenDiscardsValidUnterminatedTail(t *testing.T) {
 	if err := store.AppendPrepare(stableTID, sinfonia.ExecPrepareResponse{RequestID: "stable", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
-	prefix, err := store.Bytes()
+	prefix, err := os.ReadFile(filepath.Join(dir, "replay.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	tailTID := sinfonia.TransactionID{CoordinatorID: 2, Counter: 2, Epoch: 2}
-	tailStore, err := storage.OpenReplayStore(t.TempDir())
+	tailDir := t.TempDir()
+	tailStore, err := storage.OpenReplayStore(tailDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := tailStore.AppendPrepare(tailTID, sinfonia.ExecPrepareResponse{RequestID: "tail", Vote: sinfonia.VoteOk}); err != nil {
 		t.Fatal(err)
 	}
-	tail, err := tailStore.Bytes()
+	tail, err := os.ReadFile(filepath.Join(tailDir, "replay.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,25 +256,4 @@ func TestReplayStoreCompactRetentionAvoidsEpochOverflow(t *testing.T) {
 	if _, ok := store.GetPrepare(txId); !ok {
 		t.Fatal("overflow-safe retention incorrectly dropped a near-maximum epoch")
 	}
-}
-
-func writeReplayArtifact(t *testing.T, fill func(*storage.ReplayStore) error) (string, []byte) {
-	t.Helper()
-	stagedDir := t.TempDir()
-	store, err := storage.OpenReplayStore(stagedDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := fill(store); err != nil {
-		t.Fatal(err)
-	}
-	data, err := store.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "staged-replay.log")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path, data
 }

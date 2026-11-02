@@ -3,7 +3,6 @@ package storage
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -116,116 +115,6 @@ func (d *DiskImage) Snapshot(path string) error {
 func (d *DiskImage) Sync() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.file.Sync()
-}
-
-func (d *DiskImage) Bytes() ([]byte, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if _, err := d.file.Seek(0, io.SeekStart); err != nil {
-		return nil, err
-	}
-	buf := make([]byte, d.size)
-	if _, err := io.ReadFull(d.file, buf); err != nil {
-		return nil, err
-	}
-	return buf, nil
-}
-
-// ReadAt reads part of the saved memory image. To get a consistent copy across
-// several reads, the caller must hold the global write lock for the whole copy.
-func (d *DiskImage) ReadAt(buf []byte, offset int64) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if offset < 0 || offset+int64(len(buf)) > int64(d.size) {
-		return fmt.Errorf("disk image read out of bounds")
-	}
-	_, err := io.ReadFull(io.NewSectionReader(d.file, offset, int64(len(buf))), buf)
-	return err
-}
-
-func (d *DiskImage) Size() int {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.size
-}
-
-// SHA256 hashes the image without loading the whole file into memory.
-func (d *DiskImage) SHA256() ([]byte, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	h := sha256.New()
-	buf := make([]byte, fileCopyBufferSize)
-	for offset := 0; offset < d.size; {
-		want := len(buf)
-		if remaining := d.size - offset; remaining < want {
-			want = remaining
-		}
-		if _, err := io.ReadFull(io.NewSectionReader(d.file, int64(offset), int64(want)), buf[:want]); err != nil {
-			return nil, err
-		}
-		if _, err := h.Write(buf[:want]); err != nil {
-			return nil, err
-		}
-		offset += want
-	}
-	sum := h.Sum(nil)
-	return sum, nil
-}
-
-// Replace writes and syncs a complete memory image. The size must match exactly,
-// and the caller must prevent competing state changes during replacement.
-func (d *DiskImage) Replace(data []byte) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(data) != d.size {
-		return fmt.Errorf("disk image size %d, replacement size %d", d.size, len(data))
-	}
-	n, err := d.file.WriteAt(data, 0)
-	if err != nil {
-		return err
-	}
-	if n != len(data) {
-		return io.ErrShortWrite
-	}
-	return d.file.Sync()
-}
-
-// ReplaceFrom copies a staged image without loading it all into memory. The size
-// must match, and the caller must prevent competing state changes.
-func (d *DiskImage) ReplaceFrom(path string) error {
-	in, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	info, err := in.Stat()
-	if err != nil {
-		return err
-	}
-	if info.Size() != int64(d.size) {
-		return fmt.Errorf("disk image size %d, staged replacement size %d", d.size, info.Size())
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	buf := make([]byte, fileCopyBufferSize)
-	for offset := int64(0); offset < int64(d.size); {
-		want := len(buf)
-		if remaining := int64(d.size) - offset; remaining < int64(want) {
-			want = int(remaining)
-		}
-		if _, err := io.ReadFull(in, buf[:want]); err != nil {
-			return err
-		}
-		n, err := d.file.WriteAt(buf[:want], offset)
-		if err != nil {
-			return err
-		}
-		if n != want {
-			return io.ErrShortWrite
-		}
-		offset += int64(want)
-	}
 	return d.file.Sync()
 }
 
@@ -477,17 +366,6 @@ func (r *RedoLog) TruncateHead(count int) error {
 	return syncDir(filepath.Dir(r.path))
 }
 
-// Reset clears and syncs the redo log when a replica installs a replacement image.
-func (r *RedoLog) Reset() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if err := rewriteRedoLogFile(r.path, nil); err != nil {
-		return err
-	}
-	r.entries = nil
-	return syncDir(filepath.Dir(r.path))
-}
-
 // publishLogFile replaces a log with a complete, synced file. The caller must
 // serialize appends, update its in-memory state after publication, and sync the
 // directory before acknowledging success. A later directory-sync error does not
@@ -626,14 +504,6 @@ func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]sinfonia.TransactionI
 		return nil, err
 	}
 	return removed, nil
-}
-
-// Reset clears and syncs the forced-abort log when replacing a replica's history.
-// Keeping an old marker could incorrectly reject a later transaction.
-func (s *ForcedAbortLog) Reset() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.rewriteLocked(map[string]struct{}{})
 }
 
 func (s *ForcedAbortLog) rewriteLocked(retained map[string]struct{}) error {
@@ -783,14 +653,6 @@ func (s *DecidedTransactionLog) rewriteLocked(retained map[string]bool) error {
 	return syncDir(filepath.Dir(s.path))
 }
 
-// Reset clears the saved decisions. The caller must prevent participant
-// operations from running during the reset.
-func (s *DecidedTransactionLog) Reset() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.rewriteLocked(map[string]bool{})
-}
-
 func LoadProcessedPointer(dir string) (int, error) {
 	p := filepath.Join(dir, "processed.ptr")
 	b, err := os.ReadFile(p)
@@ -867,4 +729,17 @@ func parseTidKey(k string) (sinfonia.TransactionID, bool) {
 		return sinfonia.TransactionID{}, false
 	}
 	return sinfonia.TransactionID{CoordinatorID: coord, Counter: counter, Epoch: epoch}, true
+}
+
+func syncDir(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }

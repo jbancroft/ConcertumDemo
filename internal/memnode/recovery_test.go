@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -409,91 +410,6 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 	}
 }
 
-type gatedRecoveryReplica struct {
-	*memnode.Participant
-	entered chan struct{}
-	release chan struct{}
-}
-
-func (p *gatedRecoveryReplica) ReplicateRedoEntry(ctx context.Context, req sinfonia.ReplicateRedoEntryRequest) (sinfonia.ReplicateRedoEntryResponse, error) {
-	close(p.entered)
-	select {
-	case <-ctx.Done():
-		return sinfonia.ReplicateRedoEntryResponse{}, ctx.Err()
-	case <-p.release:
-	}
-	return p.Participant.ReplicateRedoEntry(ctx, req)
-}
-
-func TestRecoveryDoesNotForceAbortAnInFlightRequest(t *testing.T) {
-	for _, onePhase := range []bool{false, true} {
-		t.Run(map[bool]string{false: "prepare", true: "one-phase"}[onePhase], func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			dir := t.TempDir()
-			primary, err := memnode.NewDurableParticipant(1, 16, filepath.Join(dir, "primary"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer primary.Close()
-			replica, err := memnode.NewDurableParticipant(2, 16, filepath.Join(dir, "replica"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer replica.Close()
-			replica.ConfigureAsReplica(1)
-			gate := &gatedRecoveryReplica{Participant: replica, entered: make(chan struct{}), release: make(chan struct{})}
-			release := sync.OnceFunc(func() { close(gate.release) })
-			defer release()
-			primary.ConfigureAsPrimary(2, gate)
-			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
-			done := make(chan error, 1)
-			go func() {
-				writes := []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}}
-				var vote sinfonia.Vote
-				var err error
-				if onePhase {
-					resp, e := primary.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, WriteItems: writes})
-					vote, err = resp.Vote, e
-				} else {
-					resp, e := primary.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1}, WriteItems: writes})
-					vote, err = resp.Vote, e
-				}
-				if err == nil && vote != sinfonia.VoteOk {
-					err = errors.New("request rejected after recovery race")
-				}
-				done <- err
-			}()
-			select {
-			case <-gate.entered:
-			case <-ctx.Done():
-				t.Fatal(ctx.Err())
-			}
-			short, stop := context.WithTimeout(ctx, 20*time.Millisecond)
-			_, err = primary.RecoveryForceAbort(short, sinfonia.RecoverForceAbortRequest{TID: tid})
-			stop()
-			if !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("recovery should wait for the original request: %v", err)
-			}
-			release()
-			if err := <-done; err != nil {
-				t.Fatal(err)
-			}
-			vote, err := primary.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: tid})
-			if err != nil || vote.Vote != sinfonia.VoteOk {
-				t.Fatalf("recovery reversed successful request: %+v, %v", vote, err)
-			}
-			if resp, err := primary.RecoveryDecide(ctx, sinfonia.RecoverDecideRequest{TID: tid, ActionCommit: true, Generation: vote.Generation}); err != nil || !resp.Ack {
-				t.Fatalf("decision: %+v, %v", resp, err)
-			}
-			got, err := primary.ReadBytesForTest(0, 1)
-			if err != nil || string(got) != "A" {
-				t.Fatalf("recovered value=%q, %v", got, err)
-			}
-		})
-	}
-}
-
 func TestRecoveryAbortRejectsLateOnePhaseRequestOnRAMNode(t *testing.T) {
 	node := memnode.NewParticipantWithId(1, 16)
 	ctx := context.Background()
@@ -521,40 +437,6 @@ func (unavailableRecoveryPeer) QueryTidStatus(ctx context.Context, _ sinfonia.Qu
 
 func (unavailableRecoveryPeer) NotifyApplied(context.Context, sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error) {
 	return sinfonia.NotifyAppliedResponse{}, errors.New("peer is still recovering")
-}
-
-type abortRecoveryPeer struct{}
-
-func (abortRecoveryPeer) QueryTidStatus(context.Context, sinfonia.QueryTidStatusRequest) (sinfonia.QueryTidStatusResponse, error) {
-	return sinfonia.QueryTidStatusResponse{KnownDecision: true, Outcome: sinfonia.TidOutcomeAbort}, nil
-}
-
-func (abortRecoveryPeer) NotifyApplied(context.Context, sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error) {
-	return sinfonia.NotifyAppliedResponse{Ack: true}, nil
-}
-
-type blockingDecisionReplica struct {
-	node    *memnode.Participant
-	started chan struct{}
-	release chan struct{}
-}
-
-func (r *blockingDecisionReplica) ReplicateRedoEntry(ctx context.Context, req sinfonia.ReplicateRedoEntryRequest) (sinfonia.ReplicateRedoEntryResponse, error) {
-	return r.node.ReplicateRedoEntry(ctx, req)
-}
-
-func (r *blockingDecisionReplica) ReplicateCommitDecision(ctx context.Context, req sinfonia.ReplicateCommitDecisionRequest) (sinfonia.ReplicateCommitDecisionResponse, error) {
-	close(r.started)
-	select {
-	case <-r.release:
-	case <-ctx.Done():
-		return sinfonia.ReplicateCommitDecisionResponse{Ack: false}, ctx.Err()
-	}
-	return r.node.ReplicateCommitDecision(ctx, req)
-}
-
-func (r *blockingDecisionReplica) ReplicateReplayRecord(ctx context.Context, req sinfonia.ReplicateReplayRecordRequest) (sinfonia.ReplicateReplayRecordResponse, error) {
-	return r.node.ReplicateReplayRecord(ctx, req)
 }
 
 func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
@@ -798,99 +680,6 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 	}
 }
 
-func TestReplicatedCommitDecisionIsDurableBeforeRecoveryRace(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	primary, err := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "primary"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = primary.Close() })
-	replica, err := memnode.NewDurableParticipant(2, 64, filepath.Join(root, "replica"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = replica.Close() })
-	replica.ConfigureAsReplica(1)
-	blocking := &blockingDecisionReplica{
-		node:    replica,
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	primary.ConfigureAsPrimary(2, blocking)
-
-	txId := sinfonia.TransactionID{CoordinatorID: 43, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
-	if prep, err := primary.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-		TID:          txId,
-		Participants: []uint32{1, 3},
-		WriteItems:   []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("C")}},
-	}); err != nil || prep.Vote != sinfonia.VoteOk {
-		t.Fatalf("ExecAndPrepare() resp=%+v err=%v", prep, err)
-	}
-	primary.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{3: abortRecoveryPeer{}})
-	replayBlocked := make(chan struct{})
-	releaseReplay := make(chan struct{})
-	primary.SetRecoverBoundaryHookForTest(func(phase string, hookTID sinfonia.TransactionID) error {
-		if phase == "replay-before" && hookTID == txId {
-			close(replayBlocked)
-			<-releaseReplay
-		}
-		return nil
-	})
-	recoverDone := make(chan error, 1)
-	go func() { recoverDone <- primary.Recover(ctx) }()
-	select {
-	case <-replayBlocked:
-	case <-time.After(2 * time.Second):
-		t.Fatal("recovery did not reach replay boundary")
-	}
-
-	type commitResult struct {
-		resp sinfonia.CommitResponse
-		err  error
-	}
-	commitDone := make(chan commitResult, 1)
-	go func() {
-		resp, err := primary.Commit(ctx, sinfonia.CommitRequest{TID: txId, RequestID: "replicated-race", ActionCommit: true})
-		commitDone <- commitResult{resp: resp, err: err}
-	}()
-	select {
-	case <-blocking.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Commit did not reach blocking replica")
-	}
-	close(releaseReplay)
-	if err := <-recoverDone; err != nil {
-		t.Fatal(err)
-	}
-	primaryStatus, err := primary.QueryTidStatus(ctx, sinfonia.QueryTidStatusRequest{TID: txId})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !primaryStatus.KnownDecision || primaryStatus.Outcome != sinfonia.TidOutcomeCommit {
-		t.Fatalf("primary recovery changed replicated decision: %+v", primaryStatus)
-	}
-	close(blocking.release)
-	result := <-commitDone
-	if result.err != nil || !result.resp.Ack {
-		t.Fatalf("Commit() resp=%+v err=%v", result.resp, result.err)
-	}
-	replicaStatus, err := replica.QueryTidStatus(ctx, sinfonia.QueryTidStatusRequest{TID: txId})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !replicaStatus.KnownDecision || replicaStatus.Outcome != sinfonia.TidOutcomeCommit {
-		t.Fatalf("replica decision disagrees with primary: %+v", replicaStatus)
-	}
-	got, err := primary.ReadBytesForTest(8, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "C" {
-		t.Fatalf("primary recovered value = %q, want C", got)
-	}
-}
-
 func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -922,7 +711,7 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = restarted.Close() })
-	restarted.SetPeerDialer(nil, 10*time.Millisecond)
+	restarted.SetRecoveryTimeoutForTest(10 * time.Millisecond)
 	restarted.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: unavailableRecoveryPeer{}})
 	if err := restarted.Recover(ctx); !errors.Is(err, memnode.ErrRecoveryPending) {
 		t.Fatalf("Recover() error = %v, want ErrRecoveryPending", err)
@@ -968,8 +757,8 @@ func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
 		t.Fatalf("Read before recovery error = %v, want ErrRecoveryPending", err)
 	}
 
-	var entries sinfonia.ListRedoEntriesResponse
-	if err := client.Call(ctx, sinfonia.MethodListRedoEntries, sinfonia.ListRedoEntriesRequest{}, &entries); err != nil {
+	var entries sinfonia.QueryInDoubtResponse
+	if err := client.Call(ctx, sinfonia.MethodQueryInDoubt, sinfonia.QueryInDoubtRequest{}, &entries); err != nil {
 		t.Fatalf("recovery-safe RPC failed while unready: %v", err)
 	}
 
@@ -978,5 +767,79 @@ func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
 	}
 	if err := client.Call(ctx, sinfonia.MethodExecCommit1PC, sinfonia.ExecCommit1PCRequest{TID: sinfonia.TransactionID{CoordinatorID: 17, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}, ReadItems: []sinfonia.ReadItem{{Addr: 0, Len: 1}}}, &read); err != nil {
 		t.Fatalf("Read after recovery failed: %v", err)
+	}
+}
+
+func TestRecoveryAndDuplicateWaitForDurableVote(t *testing.T) {
+	for _, onePC := range []bool{false, true} {
+		t.Run(fmt.Sprintf("onePC=%t", onePC), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			node := newRecoveredFailureTestNode(t, 1, t.TempDir())
+			entered, release := make(chan struct{}), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(release) })
+			defer unblock()
+			node.SetRedoFsyncHookForTest(func(f *os.File) error {
+				close(entered)
+				select {
+				case <-release:
+					return f.Sync()
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			})
+			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+			execute := func(requestID sinfonia.RequestID) error {
+				reads := []sinfonia.ReadItem{{MemID: 1, Len: 1}}
+				writes := []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}}
+				var vote sinfonia.Vote
+				var data map[uint32][]byte
+				var err error
+				if onePC {
+					resp, callErr := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, RequestID: requestID, ReadItems: reads, WriteItems: writes})
+					vote, data, err = resp.Vote, resp.ReadData, callErr
+				} else {
+					resp, callErr := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, RequestID: requestID, Participants: []uint32{1}, HasWrites: true, ReadItems: reads, WriteItems: writes})
+					vote, data, err = resp.Vote, resp.ReadData, callErr
+				}
+				if err != nil || vote != sinfonia.VoteOk || string(data[0]) != "\x00" {
+					return fmt.Errorf("%s: vote=%v data=%q err=%v", requestID, vote, data[0], err)
+				}
+				return nil
+			}
+			original := make(chan error, 1)
+			go func() { original <- execute("original") }()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			results := make(chan error, 2)
+			go func() { results <- execute("duplicate") }()
+			go func() {
+				vote, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: tid})
+				if err == nil && vote.Vote != sinfonia.VoteOk {
+					err = fmt.Errorf("recovery changed the vote: %+v", vote)
+				}
+				results <- err
+			}()
+			select {
+			case err := <-results:
+				t.Fatalf("request bypassed pending persistence: %v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+			unblock()
+			if err := <-original; err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := <-results; err != nil {
+					t.Fatal(err)
+				}
+			}
+			if node.HasForcedAbortForTest(tid) {
+				t.Fatal("recovery persisted a conflicting abort")
+			}
+		})
 	}
 }

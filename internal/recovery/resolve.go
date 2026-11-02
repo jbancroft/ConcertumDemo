@@ -115,14 +115,14 @@ collect:
 		}
 		pending++
 		calls.Add(1)
-		go func(id uint32, generation uint64) {
+		go func(id uint32) {
 			defer calls.Done()
-			resp, err := peers[id].RecoveryDecide(ctx, sinfonia.RecoverDecideRequest{TID: tid, ActionCommit: out.Committed, Generation: generation})
+			resp, err := peers[id].RecoveryDecide(ctx, sinfonia.RecoverDecideRequest{TID: tid, ActionCommit: out.Committed})
 			if err == nil && !resp.Ack {
 				err = fmt.Errorf("participant %d did not acknowledge recovery", id)
 			}
 			deliveries <- err
-		}(id, vote.Generation)
+		}(id)
 	}
 	for range pending {
 		select {

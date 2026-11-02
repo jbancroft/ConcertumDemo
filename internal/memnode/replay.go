@@ -1,7 +1,6 @@
 package memnode
 
 import (
-	"context"
 	"errors"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
@@ -18,20 +17,14 @@ type onePCOutcome struct {
 	resp sinfonia.ExecCommit1PCResponse
 }
 
-// gcReplayLocked expires the same history in memory and on disk. Requests and
-// replication hold this mutex while saving replies, so none can race compaction.
+// gcReplayLocked expires the same history in memory and on disk.
+// Saving replies holds the same mutex, so it cannot race compaction.
 func (n *Participant) gcReplayLocked() error {
 	retention := storage.ReplayRetention{
 		CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.PublicRetryHorizon,
 		Keep: make(map[sinfonia.TransactionID]struct{}),
 	}
 	for tid := range n.inDoubt {
-		retention.Keep[tid] = struct{}{}
-	}
-	for tid := range n.prepareFlights {
-		retention.Keep[tid] = struct{}{}
-	}
-	for tid := range n.onePCFlights {
 		retention.Keep[tid] = struct{}{}
 	}
 	if err := n.persistEpochFloorLocked(retention.CurrentEpoch); err != nil {
@@ -121,69 +114,61 @@ func (n *Participant) callOutcomeReplayBoundaryHookLocked(phase string, txId sin
 	return n.outcomeReplayBoundaryHook(phase, txId)
 }
 
-func (n *Participant) rememberPrepareOutcomeLocked(ctx context.Context, txId sinfonia.TransactionID, resp sinfonia.ExecPrepareResponse) (sinfonia.ExecPrepareResponse, error) {
+func (n *Participant) rememberPrepareOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecPrepareResponse) (sinfonia.ExecPrepareResponse, error) {
 	if n.replay != nil {
 		if err := n.replay.AppendPrepare(txId, resp); err != nil {
 			return sinfonia.ExecPrepareResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 		}
 	}
-	if err := n.replicateReplayRecordLocked(ctx, txId, sinfonia.ReplayRecordPrepare, &resp, nil); err != nil {
-		return sinfonia.ExecPrepareResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
-	}
+
 	n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(resp)}
 	return resp, nil
 }
 
-func (n *Participant) replayPrepareOutcomeLocked(ctx context.Context, txId sinfonia.TransactionID, requestID sinfonia.RequestID, currentEpoch uint64) (sinfonia.ExecPrepareResponse, bool, error) {
+func (n *Participant) replayPrepareOutcomeLocked(txId sinfonia.TransactionID, requestID sinfonia.RequestID, currentEpoch uint64) (sinfonia.ExecPrepareResponse, bool) {
 	var original sinfonia.ExecPrepareResponse
 	if out, ok := n.prepareOutcomes[txId]; ok {
 		original = clonePrepareResponse(out.resp)
 	} else {
 		if n.replay == nil {
-			return sinfonia.ExecPrepareResponse{}, false, nil
+			return sinfonia.ExecPrepareResponse{}, false
 		}
 		var ok bool
 		original, ok = n.replay.GetPrepare(txId)
 		if !ok {
-			return sinfonia.ExecPrepareResponse{}, false, nil
+			return sinfonia.ExecPrepareResponse{}, false
 		}
 		n.prepareOutcomes[txId] = prepareOutcome{resp: clonePrepareResponse(original)}
 	}
-	if err := n.replicateReplayRecordLocked(ctx, txId, sinfonia.ReplayRecordPrepare, &original, nil); err != nil {
-		return sinfonia.ExecPrepareResponse{RequestID: requestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, false, err
-	}
+
 	resp := original
 	resp.RequestID = requestID
 	resp.CurrentEpoch = currentEpoch
-	return resp, true, nil
+	return resp, true
 }
 
-func (n *Participant) rememberOnePCOutcomeLocked(ctx context.Context, txId sinfonia.TransactionID, resp sinfonia.ExecCommit1PCResponse) (sinfonia.ExecCommit1PCResponse, error) {
+func (n *Participant) rememberOnePCOutcomeLocked(txId sinfonia.TransactionID, resp sinfonia.ExecCommit1PCResponse) (sinfonia.ExecCommit1PCResponse, error) {
 	if n.replay != nil {
 		if err := n.replay.AppendOnePC(txId, resp); err != nil {
 			return sinfonia.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
 		}
 	}
-	if err := n.replicateReplayRecordLocked(ctx, txId, sinfonia.ReplayRecordOnePC, nil, &resp); err != nil {
-		return sinfonia.ExecCommit1PCResponse{RequestID: resp.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: resp.CurrentEpoch}, err
-	}
+
 	n.onePCOutcomes[txId] = onePCOutcome{resp: clone1PCResponse(resp)}
 	return resp, nil
 }
 
 // rememberPendingResponseLocked preserves the original reply before recovery
 // discards its only remaining copy. The existing replay store rejects overwrites.
-// Replication may release the mutex, so callers must look up pending work again
-// afterward instead of applying writes through the supplied transaction pointer.
-func (n *Participant) rememberPendingResponseLocked(ctx context.Context, txId sinfonia.TransactionID, txn *preparedTxn, commit bool) error {
+func (n *Participant) rememberPendingResponseLocked(txId sinfonia.TransactionID, txn *preparedTxn, commit bool) error {
 	if txn.prepareResponse != nil {
-		if _, err := n.rememberPrepareOutcomeLocked(ctx, txId, *txn.prepareResponse); err != nil {
+		if _, err := n.rememberPrepareOutcomeLocked(txId, *txn.prepareResponse); err != nil {
 			return err
 		}
 		txn.prepareResponse = nil
 	}
 	if commit && txn.onePCResponse != nil {
-		if _, err := n.rememberOnePCOutcomeLocked(ctx, txId, *txn.onePCResponse); err != nil {
+		if _, err := n.rememberOnePCOutcomeLocked(txId, *txn.onePCResponse); err != nil {
 			return err
 		}
 		txn.onePCResponse = nil

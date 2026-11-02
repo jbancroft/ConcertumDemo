@@ -136,7 +136,6 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 		delete(n.inDoubt, entry.TransactionId)
 		delete(n.appliedLocal, entry.TransactionId)
 		delete(n.appliedRemote, entry.TransactionId)
-		delete(n.logParticipants, entry.TransactionId)
 		for pid, txIds := range n.pendingNotify {
 			delete(txIds, entry.TransactionId)
 			if len(txIds) == 0 {
@@ -187,7 +186,6 @@ func (n *Participant) BeginBackupPhase(ctx context.Context, req sinfonia.BeginBa
 	if n.redoLog != nil {
 		boundary = n.redoLog.LastTID()
 	}
-	n.lastBackupBoundary = boundary
 	n.backupMode = true
 	if err := n.diskImage.Sync(); err != nil {
 		return sinfonia.BeginBackupPhaseResponse{Ack: false}, err

@@ -16,7 +16,7 @@ const (
 )
 
 // RunRecovery finishes old prepared transactions and expires saved replies until
-// ctx is cancelled. Replica nodes expire replies but do not coordinate recovery.
+// ctx is cancelled.
 // Concurrent recovery coordinators are safe: participants never reverse votes.
 // Call after startup recovery, and wait for it to stop before closing the node.
 func (n *Participant) RunRecovery(ctx context.Context, remote map[uint32]recovery.Participant) {
@@ -37,7 +37,6 @@ func (n *Participant) RunRecovery(ctx context.Context, remote map[uint32]recover
 		}
 		n.mu.Lock()
 		ready := n.recoveryComplete && n.restartRequired == nil
-		// A baseline transfer reads the replay file in chunks under this barrier.
 		if ready && !tick.Before(nextGC) && !n.locks.globalWriteLock && !n.backupMode {
 			if err := n.gcReplayLocked(); err != nil {
 				n.failUncertainLocked("expire transaction replies", err)
@@ -45,7 +44,6 @@ func (n *Participant) RunRecovery(ctx context.Context, remote map[uint32]recover
 			}
 			nextGC = tick.Add(replayGCInterval)
 		}
-		ready = ready && n.mode != ModeReplReplica
 		now := n.nowFn()
 		n.mu.Unlock()
 		if !ready {

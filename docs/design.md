@@ -23,8 +23,8 @@ are internal implementation packages.
 
 `sinfonia-client.NewClient` takes a map from memory node IDs to `NodeConfig`
 values and creates the coordinator for those nodes. Each configuration supplies
-an RPC address and optional fencing generation. Nodes serve TCP RPC; no HTTP
-administration or metrics endpoints are exposed.
+an RPC address. Nodes serve TCP RPC; no HTTP administration or metrics endpoints
+are exposed.
 
 The client owns its coordinator workers and RPC connections. `Client.Close`
 drains queued decisions, joins the workers, and closes connections. Callers must
@@ -41,8 +41,8 @@ there's no global list of hosts. Public items use `HostId`, `Address`, and
 
 All application data access uses minitransactions. `Client.Read` and
 `Client.Write` submit one read or write item through the coordinator's
-single-participant path. Both respect prepared transaction locks, fencing, and
-RPC readiness. Writes work on RAM and durable nodes. Raw read/write RPCs and
+single-participant path. Both respect prepared transaction locks and RPC
+readiness. Writes work on RAM and durable nodes. Raw read/write RPCs and
 public participant access methods are removed; private byte-access helpers are
 used only inside node operations.
 
@@ -67,9 +67,6 @@ the same state and mutex; the split adds no package or API boundary.
 | [commit.go](../internal/memnode/commit.go) | Applying commit/abort decisions and single-participant execution |
 | [replay.go](../internal/memnode/replay.go) | Remembering and replaying exact transaction replies |
 | [recovery.go](../internal/memnode/recovery.go) | Epoch floors, recovery evidence, and unfinished transactions |
-| [replication.go](../internal/memnode/replication.go) | Roles, fencing checks, and replication of redo entries, decisions, and replies |
-| [replication_sync.go](../internal/memnode/replication_sync.go) | Synchronizing a replica from a primary's saved state |
-| [replication_baseline.go](../internal/memnode/replication_baseline.go) | Transferring and installing that state in chunks |
 | [maintenance.go](../internal/memnode/maintenance.go) | Applied notifications, log cleanup, and backup phases |
 
 For the main walkthrough, follow `ExecAndPrepare` in `prepare.go` and then
@@ -166,12 +163,11 @@ locks and returns an error so the caller can resolve the same attempt. RAM nodes
 cannot preserve data or transaction evidence across a process restart.
 
 A redo append error is ambiguous: bytes can reach disk before `fsync` reports
-failure, leaving the log's in-memory index incomplete. Likewise, a replica may
-save redo or apply a decision before its acknowledgement is lost. These errors
-retain the full pending operation and locks and set a separate, sticky
-`ErrRestartRequired` fault. New execution, duplicate replay, commit delivery,
-recovery probes/decisions, and baseline/role changes cannot bypass it. Requests
-already waiting on replication recheck the fault after reacquiring the mutex.
+failure, leaving the log's in-memory index incomplete. This retains the full
+pending operation and locks and sets a sticky `ErrRestartRequired` fault.
+New execution, duplicate replay, commit delivery, and recovery probes/decisions
+cannot bypass it. Prepare and commit hold the participant mutex throughout local
+persistence; duplicate requests and recovery probes observe the completed vote.
 The node stays unready, and `Recover` on that instance cannot clear the fault.
 Ordinary startup recovery is different: newly opened participants can exchange
 evidence before readiness, so nodes can recover together.
@@ -180,14 +176,7 @@ This deliberately trades availability for a small failure protocol. Reopen the
 storage and recover from the files before resolving the caller's saved handle.
 A surviving complete redo entry can still commit; an absent record can establish
 an abort; malformed or incomplete records keep startup from succeeding. Original
-reads retained only in memory may be unavailable after restart. For replication
-failures, keep application traffic stopped during primary restart/recovery and
-replica baseline synchronization (`SyncFromPrimary`), restarting a faulted replica
-too before synchronizing it. Restore traffic or allow promotion only after that
-sync succeeds. Roles and this operator procedure are not persisted or automated;
-successful primary restart alone says nothing about replica catch-up. Failed
-exact-reply replication remains retryable through the existing idempotent replay
-path when no redo/decision fault has occurred.
+reads retained only in memory may be unavailable after restart.
 
 Old redo entries can be removed once there's enough evidence that the committed
 updates reached all required participants. Cleanup requires completed startup recovery,
@@ -199,10 +188,10 @@ Tests cover full and partial cleanup after a nonzero checkpoint, interrupted
 recovery, failed writes, duplicate requests, and forced aborts.
 
 Before discarding old replies or forced-abort records, a durable node saves an
-epoch floor. Restarts and replication baselines preserve that floor so a clock
-rollback cannot make a forgotten transaction eligible to execute again.
+epoch floor. Restarts preserve that floor so a clock rollback cannot make a
+forgotten transaction eligible to execute again.
 Forced-abort and decision logs use the same replacement procedure to preserve
-retained records during cleanup and to reset their contents safely.
+retained records during cleanup.
 
 Both demos launch the standalone `cmd/memnode` executable in separate processes.
 Client requests and recovery peer requests use TCP on local, automatically
@@ -238,7 +227,7 @@ after resolving an uncertain `CREATE TABLE` to reload its catalog cache.
 A commit decision and its read payload are separate facts. Recovery returns saved
 reads from the original attempt; it never substitutes a new read of current data.
 Before clearing a live pending transaction, recovery saves any missing original
-response through the replay store and replication path. If saving fails, it
+response through the replay store. If saving fails, it
 retains the response and locks for another attempt. A successful recovery leaves
 the original reads available for repeated resolution and durable restarts.
 If a crash preserved the commit but lost its exact read response, the result has
@@ -346,6 +335,11 @@ exhaust a region without changing stored bytes, and reopen those tables after
 restarting the durable memnode processes.
 
 ## What's left out
+
+Memory nodes are not replicated. There are no primary/replica roles, promotion,
+or automatic failover; an unavailable participant can block progress until it
+returns with its durable state. Distinct nodes still participate in distributed
+transactions and exchange recovery evidence.
 
 This sample keeps the Go transaction and index core. It leaves out the larger
 project's Rust code, filesystem adapters, other storage services, operator

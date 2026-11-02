@@ -59,22 +59,18 @@ type Client struct {
 
 type NodeConfig struct {
 	RPCAddress string
-	Generation uint64 // Fencing generation expected by the node.
 }
 
 // NewClient configures the coordinator from explicit memory node addresses.
 func NewClient(config map[uint32]NodeConfig) *Client {
 	c := &Client{}
 	nodes := make(map[uint32]client.Participant, len(config))
-	generations := make(map[uint32]uint64, len(config))
 	for id, node := range config {
-		participant := client.NewRPCParticipantWithGeneration(node.RPCAddress, nil, defaultNodeTimeout, node.Generation)
+		participant := client.NewRPCParticipant(node.RPCAddress, nil, defaultNodeTimeout)
 		nodes[id] = participant
 		c.nodes = append(c.nodes, participant)
-		generations[id] = node.Generation
 	}
 	coord := client.NewCoordinator(nodes)
-	coord.SetGenerations(generations)
 	c.coordinator = coord
 	return c
 }

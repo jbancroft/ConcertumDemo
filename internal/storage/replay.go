@@ -3,7 +3,6 @@ package storage
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,59 +85,6 @@ func (r ReplayRetention) Expired(txId sinfonia.TransactionID) bool {
 	return txId.Epoch <= r.CurrentEpoch-r.RetryHorizon
 }
 
-// Bytes reads the saved reply log while holding the store's lock.
-func (s *ReplayStore) Bytes() ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return os.ReadFile(s.path)
-}
-
-// Size returns the log size without reading its contents.
-func (s *ReplayStore) Size() (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	info, err := os.Stat(s.path)
-	if err != nil {
-		return 0, err
-	}
-	return info.Size(), nil
-}
-
-// ReadAt reads part of the reply log. To get a consistent copy across several
-// reads, the caller must hold the replication barrier for the whole sequence.
-func (s *ReplayStore) ReadAt(buf []byte, offset int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if offset < 0 {
-		return fmt.Errorf("replay read offset %d is negative", offset)
-	}
-	f, err := os.Open(s.path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if _, err := io.ReadFull(io.NewSectionReader(f, offset, int64(len(buf))), buf); err != nil {
-		return err
-	}
-	return nil
-}
-
-// SHA256 hashes the log without loading the whole file into memory.
-func (s *ReplayStore) SHA256() ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	f, err := os.Open(s.path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.CopyBuffer(h, f, make([]byte, fileCopyBufferSize)); err != nil {
-		return nil, err
-	}
-	return h.Sum(nil), nil
-}
-
 func (s *ReplayStore) GetPrepare(txId sinfonia.TransactionID) (sinfonia.ExecPrepareResponse, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -167,55 +113,6 @@ func (s *ReplayStore) AppendPrepare(txId sinfonia.TransactionID, response sinfon
 func (s *ReplayStore) AppendOnePC(txId sinfonia.TransactionID, response sinfonia.ExecCommit1PCResponse) error {
 	record := replayRecord{TID: txId, Kind: replayKindOnePC, OnePC: onePCReplayPtr(response)}
 	return s.append(record)
-}
-
-// ReplaceFrom checks and installs a staged reply log, then updates the in-memory
-// index once the file is durable. The caller must prevent competing state changes.
-func (s *ReplayStore) ReplaceFrom(path string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	staged, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer staged.Close()
-	info, err := staged.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("staged replay artifact %q is not a regular file", path)
-	}
-	records, err := loadReplayRecords(staged)
-	if err != nil {
-		return err
-	}
-	if _, err := staged.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), replayTempPrefix)
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-	if err := copyReaderDurable(tmp, staged, 0o644); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, s.path); err != nil {
-		return err
-	}
-	if err := syncDir(filepath.Dir(s.path)); err != nil {
-		return err
-	}
-	s.records = records
-	return nil
 }
 
 // Compact drops replies that are too old to retry. It writes a temporary file
@@ -389,44 +286,6 @@ func truncateDurableReplay(path string, length int64) error {
 		return err
 	}
 	return syncDir(filepath.Dir(path))
-}
-
-func loadReplayRecords(r io.Reader) (map[string]replayRecord, error) {
-	records := make(map[string]replayRecord)
-	reader := bufio.NewReader(r)
-	for {
-		line, err := reader.ReadBytes('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, err
-		}
-		trimmed := bytes.TrimSpace(line)
-		if len(trimmed) != 0 {
-			var record replayRecord
-			if err := json.Unmarshal(trimmed, &record); err != nil {
-				return nil, err
-			}
-			if err := validateReplayRecord(record); err != nil {
-				return nil, err
-			}
-			key := replayKey(record.TID, record.Kind)
-			if existing, exists := records[key]; exists {
-				if !reflect.DeepEqual(existing, record) {
-					return nil, fmt.Errorf("%w: %s", ErrReplayConflict, key)
-				}
-			} else {
-				records[key] = cloneReplayRecord(record)
-			}
-		}
-		// Every record needs a newline. A staged log must already be complete;
-		// only the live log loader repairs a partial tail.
-		if len(line) > 0 && line[len(line)-1] != '\n' {
-			return nil, errors.New("incomplete replay JSONL record")
-		}
-		if errors.Is(err, io.EOF) {
-			break
-		}
-	}
-	return records, nil
 }
 
 func validateReplayRecord(record replayRecord) error {

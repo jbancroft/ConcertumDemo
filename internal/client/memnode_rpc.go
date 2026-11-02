@@ -11,8 +11,7 @@ import (
 )
 
 type RPCParticipant struct {
-	rpc        *rpcwire.Client
-	generation uint64
+	rpc *rpcwire.Client
 }
 
 func (n *RPCParticipant) Close() error {
@@ -20,47 +19,31 @@ func (n *RPCParticipant) Close() error {
 }
 
 func NewRPCParticipant(addr string, tlsConfig *tls.Config, timeout time.Duration) *RPCParticipant {
-	return NewRPCParticipantWithGeneration(addr, tlsConfig, timeout, 0)
-}
-
-func NewRPCParticipantWithGeneration(addr string, tlsConfig *tls.Config, timeout time.Duration, generation uint64) *RPCParticipant {
 	return &RPCParticipant{
-		rpc:        rpcwire.NewClient(strings.TrimSpace(addr), rpcwire.ClientOptions{TLS: tlsConfig, DialTimeout: timeout, CallTimeout: timeout}),
-		generation: generation,
+		rpc: rpcwire.NewClient(strings.TrimSpace(addr), rpcwire.ClientOptions{TLS: tlsConfig, DialTimeout: timeout, CallTimeout: timeout}),
 	}
 }
 
 func (n *RPCParticipant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
 	var out sinfonia.ExecPrepareResponse
-	if req.Generation == 0 {
-		req.Generation = n.generation
-	}
+
 	return out, n.rpc.Call(ctx, sinfonia.MethodExecPrepare, req, &out)
 }
 
 func (n *RPCParticipant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
 	var out sinfonia.ExecCommit1PCResponse
-	if req.Generation == 0 {
-		req.Generation = n.generation
-	}
+
 	return out, n.rpc.Call(ctx, sinfonia.MethodExecCommit1PC, req, &out)
 }
 
 func (n *RPCParticipant) Commit(ctx context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
 	var out sinfonia.CommitResponse
-	if req.Generation == 0 {
-		req.Generation = n.generation
-	}
+
 	return out, n.rpc.Call(ctx, sinfonia.MethodCommit, req, &out)
 }
 
 func (n *RPCParticipant) CommitBatch(ctx context.Context, req sinfonia.CommitBatchRequest) (sinfonia.CommitBatchResponse, error) {
 	var out sinfonia.CommitBatchResponse
-	for i := range req.Decisions {
-		if req.Decisions[i].Generation == 0 {
-			req.Decisions[i].Generation = n.generation
-		}
-	}
 	return out, n.rpc.Call(ctx, sinfonia.MethodCommitBatch, req, &out)
 }
 

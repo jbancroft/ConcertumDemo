@@ -2,19 +2,12 @@ package memnode
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
-
-type prepareFlight struct {
-	done chan struct{}
-	resp sinfonia.ExecPrepareResponse
-	err  error
-}
 
 // preparedTxn keeps the writes and locks until a commit or abort decision arrives.
 // Durable nodes also log prepared writes so they can recover after a restart.
@@ -30,7 +23,7 @@ type preparedTxn struct {
 	onePCResponse   *sinfonia.ExecCommit1PCResponse
 }
 
-func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (resp sinfonia.ExecPrepareResponse, err error) {
+func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
 	if !n.allowRate(n.prepareLimiter, "prepare") {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrResourceExhausted
 	}
@@ -58,41 +51,11 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	if n.restartRequired != nil {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, n.restartRequired
 	}
-	if n.mode == ModeReplReplica {
-		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, ErrReplicaRejectsCoordinator
-	}
-	if err := n.checkGenerationLocked(req.Generation); err != nil {
-		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, err
-	}
+
 	currentEpoch := n.currentEpochLocked()
-	if resp, ok, replayErr := n.replayPrepareOutcomeLocked(ctx, req.TID, req.RequestID, currentEpoch); ok || replayErr != nil {
-		if replayErr != nil {
-			return resp, replayErr
-		}
+	if resp, ok := n.replayPrepareOutcomeLocked(req.TID, req.RequestID, currentEpoch); ok {
 		return resp, nil
 	}
-	if flight, ok := n.prepareFlights[req.TID]; ok {
-		n.mu.Unlock()
-		select {
-		case <-flight.done:
-			n.mu.Lock()
-			resp := clonePrepareResponse(flight.resp)
-			resp.RequestID = req.RequestID
-			resp.CurrentEpoch = currentEpoch
-			return resp, flight.err
-		case <-ctx.Done():
-			n.mu.Lock()
-			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, ctx.Err()
-		}
-	}
-	flight := &prepareFlight{done: make(chan struct{})}
-	n.prepareFlights[req.TID] = flight
-	defer func() {
-		flight.resp = clonePrepareResponse(resp)
-		flight.err = err
-		delete(n.prepareFlights, req.TID)
-		close(flight.done)
-	}()
 
 	if n.hasDurableTransactionLocked(req.TID) {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: prepare transaction %v", ErrReplayUnavailable, req.TID)
@@ -104,10 +67,10 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch}, nil
 	}
 	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
-		return n.rememberPrepareOutcomeLocked(ctx, req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 	if out, ok := n.commitOutcomes[req.TID]; ok && !out.actionCommit {
-		return n.rememberPrepareOutcomeLocked(ctx, req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
+		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch})
 	}
 	if txn, ok := n.inDoubt[req.TID]; ok {
 		resp := sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(txn.readData), CurrentEpoch: currentEpoch}
@@ -125,7 +88,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	acquired, conflict := n.tryTransactionLocksLocked(req.CmpItems, req.ReadItems, req.WriteItems)
 	if conflict != nil {
 		delete(n.inDoubt, req.TID)
-		return n.rememberPrepareOutcomeLocked(ctx, req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
+		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadLock, CurrentEpoch: currentEpoch, LockConflict: conflict})
 	}
 
 	for _, item := range req.CmpItems {
@@ -133,7 +96,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 		if err != nil || string(actual) != string(item.Data) {
 			n.releaseLocks(acquired)
 			delete(n.inDoubt, req.TID)
-			return n.rememberPrepareOutcomeLocked(ctx, req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadCmp, CurrentEpoch: currentEpoch})
+			return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadCmp, CurrentEpoch: currentEpoch})
 		}
 	}
 
@@ -164,31 +127,13 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, n.failUncertainLocked("append prepare redo", err)
 		}
 		n.allLogTxIds[req.TID] = struct{}{}
-		n.logParticipants[req.TID] = participants
 		txn.redoLoggedTid = true
-		if n.mode == ModeReplPrimary && n.replica != nil {
-			peer := n.replica
-			n.mu.Unlock()
-			replResp, replErr := peer.ReplicateRedoEntry(ctx, sinfonia.ReplicateRedoEntryRequest{Entry: sinfonia.RedoEntryPayload{TID: req.TID, Participants: participants, WriteItems: clonedWrites}})
-			n.mu.Lock()
-			if replErr != nil || !replResp.Ack {
-				if replErr == nil {
-					replErr = errors.New("replication redo entry not acknowledged")
-				}
-				n.setReplicationErrorLocked(replErr)
-				return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, n.failUncertainLocked("replicate prepare redo", replErr)
-			}
-			if n.restartRequired != nil {
-				return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, n.restartRequired
-			}
-			n.setReplicationErrorLocked(nil)
-		}
 	}
-	resp = clonePrepareResponse(original)
+	resp := clonePrepareResponse(original)
 	if err := n.callOutcomeReplayBoundaryHookLocked("prepare-before-response", req.TID); err != nil {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
-	resp, err = n.rememberPrepareOutcomeLocked(ctx, req.TID, resp)
+	resp, err := n.rememberPrepareOutcomeLocked(req.TID, resp)
 	if err == nil {
 		txn.prepareResponse = nil
 	}

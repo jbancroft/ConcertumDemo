@@ -15,7 +15,7 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
-func accessClient(t *testing.T, node *memnode.Participant, generation uint64) (*Client, func()) {
+func accessClient(t *testing.T, node *memnode.Participant) (*Client, func()) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -30,7 +30,7 @@ func accessClient(t *testing.T, node *memnode.Participant, generation uint64) (*
 		}
 	})
 	t.Cleanup(stop)
-	c := NewClient(map[uint32]NodeConfig{1: {RPCAddress: listener.Addr().String(), Generation: generation}})
+	c := NewClient(map[uint32]NodeConfig{1: {RPCAddress: listener.Addr().String()}})
 	t.Cleanup(func() { _ = c.Close() })
 	if err := c.SetRetryPolicy(0, time.Millisecond, time.Millisecond); err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestClientReadAndWriteRespectPreparedLocks(t *testing.T) {
 			if mode == "durable" {
 				n = durableAccessNode(t, t.TempDir())
 			}
-			c, _ := accessClient(t, n, 0)
+			c, _ := accessClient(t, n)
 			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 			prepared, err := n.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 				TID: tid, Participants: []uint32{1}, HasWrites: true,
@@ -97,32 +97,22 @@ func TestClientReadAndWriteRespectPreparedLocks(t *testing.T) {
 	}
 }
 
-func TestClientWritePersistsAndUsesFencingGeneration(t *testing.T) {
+func TestClientWritePersists(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	dir := filepath.Join(t.TempDir(), "node")
 	n := durableAccessNode(t, dir)
-	const generation = 42
-	if _, err := n.ConfigureReplication(ctx, sinfonia.ConfigureReplicationRequest{Role: sinfonia.ReplicationRoleSingle, Generation: generation}); err != nil {
-		t.Fatal(err)
-	}
-	c, stop := accessClient(t, n, generation)
+
+	c, stop := accessClient(t, n)
 	if err := c.Write(ctx, 1, 4, []byte("saved")); err != nil {
 		t.Fatal(err)
-	}
-	stale, _ := accessClient(t, n, generation-1)
-	if err := stale.Write(ctx, 1, 4, []byte("wrong")); err == nil {
-		t.Fatal("stale generation wrote data")
-	}
-	if data, err := stale.Read(ctx, 1, 4, 5); err == nil || data != nil {
-		t.Fatalf("stale generation read data: %q, %v", data, err)
 	}
 	stop()
 	if err := n.Close(); err != nil {
 		t.Fatal(err)
 	}
 	reopened := durableAccessNode(t, dir)
-	c, _ = accessClient(t, reopened, generation)
+	c, _ = accessClient(t, reopened)
 	if data, err := c.Read(ctx, 1, 4, 5); err != nil || string(data) != "saved" {
 		t.Fatalf("recovered write = %q, %v", data, err)
 	}
@@ -138,7 +128,7 @@ func TestClientWriteResolvesDecisionAfterServerCommitError(t *testing.T) {
 		attempts.Add(1)
 		return errors.New("injected failure after commit decision")
 	})
-	c, stop := accessClient(t, n, 0)
+	c, stop := accessClient(t, n)
 	if err := c.SetRetryPolicy(3, time.Millisecond, time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +148,7 @@ func TestClientWriteResolvesDecisionAfterServerCommitError(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened := durableAccessNode(t, dir)
-	c, _ = accessClient(t, reopened, 0)
+	c, _ = accessClient(t, reopened)
 	if data, err := c.Read(ctx, 1, 4, 5); err != nil || string(data) != "saved" {
 		t.Fatalf("committed write did not recover: %q, %v", data, err)
 	}
@@ -167,7 +157,7 @@ func TestClientWriteResolvesDecisionAfterServerCommitError(t *testing.T) {
 func TestClientAccessRejectsInvalidRanges(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, _ := accessClient(t, memnode.NewParticipantWithId(1, 16), 0)
+	c, _ := accessClient(t, memnode.NewParticipantWithId(1, 16))
 	for _, addr := range []uint64{15, math.MaxUint64} {
 		if data, err := c.Read(ctx, 1, addr, 2); err == nil || data != nil {
 			t.Fatalf("read at %d = %v, %v", addr, data, err)
