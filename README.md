@@ -69,6 +69,8 @@ without resizing the image. Resizing existing images is not supported.
 
 Malformed decision-log records block startup with an error identifying the file
 and line. The log is preserved for manual repair; automatic repair is not implemented.
+An uncertain redo or forced-abort append faults the node until storage is reopened
+and recovery succeeds; retrying recovery on the same participant cannot clear it.
 Embedded participants use `RunRecovery` for background recovery and reply expiration.
 Stop serving requests and join that worker before calling `Participant.Close()`.
 Redo cleanup preserves recent transaction decisions through the retry window,

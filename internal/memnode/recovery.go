@@ -139,7 +139,7 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 	}
 	if n.forcedAborts != nil {
 		if err := n.forcedAborts.AddItem(tid); err != nil {
-			return out, err
+			return out, n.failUncertainLocked("append forced abort", err)
 		}
 	} else {
 		// RAM nodes also have to reject a late request for this same attempt.

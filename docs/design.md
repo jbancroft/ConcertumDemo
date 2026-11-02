@@ -168,6 +168,8 @@ New execution, duplicate replay, commit delivery, and recovery probes/decisions
 cannot bypass it. Prepare and commit hold the participant mutex throughout local
 persistence; duplicate requests and recovery probes observe the completed vote.
 The node stays unready, and `Recover` on that instance cannot clear the fault.
+Forced-abort append errors set the same sticky fault: an abort may be on disk
+but absent from the in-memory set, so a late prepare must not be allowed to vote yes.
 Ordinary startup recovery is different: newly opened participants can exchange
 evidence before readiness, so nodes can recover together.
 

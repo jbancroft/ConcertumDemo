@@ -383,6 +383,48 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 	}
 }
 
+func TestUncertainForcedAbortRequiresRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	node := newRecoveredFailureTestNode(t, 1, dir)
+	injected := errors.New("acknowledgement lost after forced-abort persistence")
+	node.SetForcedAbortFsyncHookForTest(func(f *os.File) error {
+		if err := f.Sync(); err != nil {
+			return err
+		}
+		return injected
+	})
+	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+	vote, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: tid})
+	if !errors.Is(err, injected) || !errors.Is(err, memnode.ErrRestartRequired) || vote.Vote != sinfonia.VoteUnknown {
+		t.Fatalf("uncertain forced abort = %+v, %v; want unknown vote and restart-required error wrapping the failure", vote, err)
+	}
+	// Removing the injected failure must not let this instance forget an abort
+	// that reached disk but was never published in the log's in-memory index.
+	node.SetForcedAbortFsyncHookForTest(nil)
+	assertFaultedParticipantRejectsRequests(t, node, tid)
+	if err := node.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := newRecoveredFailureTestNode(t, 1, dir)
+	prepare := sinfonia.ExecPrepareRequest{
+		TID: tid, Participants: []uint32{1}, HasWrites: true,
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
+	}
+	response, err := restarted.ExecAndPrepare(ctx, prepare)
+	if err != nil || response.Vote != sinfonia.VoteBadForced {
+		t.Fatalf("late prepare after restart = %+v, %v; want forced abort", response, err)
+	}
+	resolved := recovery.Resolve(ctx, tid, []uint32{1}, map[uint32]recovery.Participant{1: restarted})
+	if !resolved.Known || resolved.Committed || resolved.Err != nil {
+		t.Fatalf("persisted forced abort did not resolve after restart: %+v", resolved)
+	}
+	if got, err := restarted.ReadBytesForTest(0, 1); err != nil || string(got) != "\x00" {
+		t.Fatalf("late prepare changed data: %q, %v", got, err)
+	}
+}
+
 func TestRedoFailureBeforeWriteResolvesAbortAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -436,7 +478,6 @@ func newRecoveredFailureTestNode(t *testing.T, id uint32, dir string) *memnode.P
 func assertParticipantFaulted(t *testing.T, node *memnode.Participant, tid sinfonia.TransactionID) {
 	t.Helper()
 	ctx := context.Background()
-	assertParticipantReady(t, node, false)
 	pending, err := node.QueryInDoubt(ctx, sinfonia.QueryInDoubtRequest{})
 	if err != nil || len(pending.Entries) != 1 || pending.Entries[0].TID != tid {
 		t.Fatalf("fault discarded pending transaction: %+v, %v", pending, err)
@@ -444,6 +485,13 @@ func assertParticipantFaulted(t *testing.T, node *memnode.Participant, tid sinfo
 	if node.ActiveLockCountForTest() == 0 {
 		t.Fatal("fault released transaction locks")
 	}
+	assertFaultedParticipantRejectsRequests(t, node, tid)
+}
+
+func assertFaultedParticipantRejectsRequests(t *testing.T, node *memnode.Participant, tid sinfonia.TransactionID) {
+	t.Helper()
+	ctx := context.Background()
+	assertParticipantReady(t, node, false)
 	unknown := sinfonia.TransactionID{CoordinatorID: 42, Epoch: sinfonia.EpochAt(time.Now())}
 	for _, probe := range []sinfonia.TransactionID{tid, unknown} {
 		if vote, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: probe}); err == nil {

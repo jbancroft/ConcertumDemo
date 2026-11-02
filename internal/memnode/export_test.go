@@ -1,6 +1,15 @@
 package memnode
 
-import "time"
+import (
+	"os"
+	"time"
+)
+
+func (n *Participant) SetForcedAbortFsyncHookForTest(fn func(*os.File) error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.forcedAborts.SetFsyncHookForTest(fn)
+}
 
 func (n *Participant) SetClockForTest(now func() time.Time) {
 	n.mu.Lock()

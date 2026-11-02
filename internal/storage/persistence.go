@@ -269,9 +269,10 @@ func OpenDecidedTransactionLog(dir string) (*DecidedTransactionLog, error) {
 }
 
 type ForcedAbortLog struct {
-	mu   sync.Mutex
-	path string
-	set  map[string]struct{}
+	mu      sync.Mutex
+	path    string
+	set     map[string]struct{}
+	fsyncFn func(*os.File) error
 }
 
 func OpenForcedAbortLog(dir string) (*ForcedAbortLog, error) {
@@ -295,7 +296,16 @@ func OpenForcedAbortLog(dir string) (*ForcedAbortLog, error) {
 	if err := s.Err(); err != nil {
 		return nil, err
 	}
-	return &ForcedAbortLog{path: p, set: out}, nil
+	return &ForcedAbortLog{path: p, set: out, fsyncFn: (*os.File).Sync}, nil
+}
+
+func (s *ForcedAbortLog) SetFsyncHookForTest(fn func(*os.File) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if fn == nil {
+		fn = (*os.File).Sync
+	}
+	s.fsyncFn = fn
 }
 
 func (s *ForcedAbortLog) IsForcedAbort(txId sinfonia.TransactionID) bool {
@@ -320,7 +330,7 @@ func (s *ForcedAbortLog) AddItem(txId sinfonia.TransactionID) error {
 	if _, err := f.WriteString(k + "\n"); err != nil {
 		return err
 	}
-	if err := f.Sync(); err != nil {
+	if err := s.fsyncFn(f); err != nil {
 		return err
 	}
 	s.set[k] = struct{}{}
