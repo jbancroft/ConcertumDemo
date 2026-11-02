@@ -142,13 +142,9 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 				delete(n.pendingNotify, pid)
 			}
 		}
-		if n.decided != nil {
-			if err := n.decided.Remove(entry.TransactionId); err != nil {
-				n.recoveryComplete = false
-				return err
-			}
-		}
 	}
+	// Leave decisions for epoch-based replay cleanup: a decision may be the
+	// only durable outcome evidence when a crash lost the exact reply.
 	return nil
 }
 

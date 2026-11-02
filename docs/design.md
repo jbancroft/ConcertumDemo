@@ -237,8 +237,10 @@ participant has already applied it; background recovery finishes delivery.
 
 Replay records are retained for the current and previous UTC-hour epochs.
 `RunRecovery` also expires saved replies from memory and disk once per minute,
-preserving in-flight and unresolved transactions. Decisions needed by retained
-redo entries remain until redo cleanup; read-only decisions expire with replies. Once
+preserving in-flight and unresolved transactions. Decisions remain for the same
+retry window even after redo cleanup, since they may be the only durable outcome
+evidence when a crash lost the exact reply. Retained redo entries pin their
+decisions beyond that window until redo cleanup. Once
 old evidence is removed, resolution returns unknown with `ErrOutcomeExpired`,
 not a fabricated abort. Save and resolve handles promptly; the demo does not keep
 an indefinite application-level transaction history. An unreachable participant

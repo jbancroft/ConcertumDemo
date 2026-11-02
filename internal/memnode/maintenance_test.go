@@ -44,8 +44,8 @@ func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 	if a.RedoEntryCountForTest() != 0 {
 		t.Fatalf("expected redo gc to truncate committed entry")
 	}
-	if a.HasDecidedForTest(txId) {
-		t.Fatalf("expected decided entry cleaned")
+	if !a.HasDecidedForTest(txId) {
+		t.Fatalf("expected recent decision retained after redo cleanup")
 	}
 	if a.HasAppliedTrackingForTest(txId) {
 		t.Fatalf("expected applied tracking cleaned")
@@ -90,6 +90,21 @@ func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
 	}
 	if a.RedoEntryCountForTest() != 0 {
 		t.Fatalf("expected abort entry gc immediately")
+	}
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	if err := restarted.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	vote, err := restarted.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: txId})
+	if err != nil || !vote.KnownDecision || vote.DecisionCommit {
+		t.Fatalf("aborted outcome after redo cleanup and restart = %+v, %v", vote, err)
 	}
 }
 

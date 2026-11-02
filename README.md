@@ -66,6 +66,9 @@ and line. The log is preserved for manual repair; automatic repair is not implem
 Embedded participants use `RunRecovery` for background recovery and reply expiration.
 Stop serving requests and join that worker before calling `Participant.Close()`,
 which drains and stops the redo appender.
+Redo cleanup preserves recent transaction decisions through the retry window,
+even when a crash lost the exact reply, so a restart cannot turn a known commit
+into an abort or execute it again.
 
 ## Minuet
 
