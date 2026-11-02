@@ -2,7 +2,6 @@ package memnode
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -14,11 +13,8 @@ import (
 
 var ErrOutOfBounds = errors.New("out of bounds")
 
-const defaultGlobalBarrierLeaseTTL = 30 * time.Second
-
 type Participant struct {
 	mu           sync.Mutex
-	cond         *sync.Cond
 	hostId       uint32
 	memory       []byte
 	storageDir   string
@@ -42,12 +38,7 @@ type Participant struct {
 	onePCOutcomes   map[sinfonia.TransactionID]onePCOutcome
 	commitOutcomes  map[sinfonia.TransactionID]commitOutcome
 
-	backupMode        bool
-	pendingDiskWrites []sinfonia.WriteItem
-
-	peerTimeout           time.Duration
-	localBarrierOwner     string
-	globalBarrierLeaseTTL time.Duration
+	peerTimeout time.Duration
 
 	recoveryComplete bool
 	restartRequired  error
@@ -96,9 +87,6 @@ func NewParticipant(size int) *Participant {
 	n.recoveryComplete = true
 	n.peerTimeout = defaultPeerTimeout
 	n.initSafetyDefaults()
-	n.cond = sync.NewCond(&n.mu)
-	n.localBarrierOwner = fmt.Sprintf("node/%p", n)
-	n.globalBarrierLeaseTTL = defaultGlobalBarrierLeaseTTL
 	return n
 }
 
@@ -175,9 +163,6 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 		peerTimeout:      defaultPeerTimeout,
 	}
 	n.initSafetyDefaults()
-	n.cond = sync.NewCond(&n.mu)
-	n.localBarrierOwner = fmt.Sprintf("node/%p", n)
-	n.globalBarrierLeaseTTL = defaultGlobalBarrierLeaseTTL
 	for _, e := range redoLog.Entries() {
 		n.allLogTxIds[e.TransactionId] = struct{}{}
 		if committed, ok := decided.Get(e.TransactionId); ok {
@@ -236,10 +221,6 @@ func (n *Participant) write(addr uint64, data []byte) error {
 		}
 	}
 	if n.diskImage != nil {
-		if n.backupMode {
-			n.pendingDiskWrites = append(n.pendingDiskWrites, sinfonia.WriteItem{MemID: n.hostId, Addr: addr, Data: append([]byte(nil), data...)})
-			return nil
-		}
 		if err := n.diskImage.ApplyWrite(addr, data); err != nil {
 			return err
 		}

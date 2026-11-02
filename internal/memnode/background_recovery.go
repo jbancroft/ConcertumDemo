@@ -37,7 +37,7 @@ func (n *Participant) RunRecovery(ctx context.Context, remote map[uint32]recover
 		}
 		n.mu.Lock()
 		ready := n.recoveryComplete && n.restartRequired == nil
-		if ready && !tick.Before(nextGC) && !n.locks.globalWriteLock && !n.backupMode {
+		if ready && !tick.Before(nextGC) {
 			if err := n.gcReplayLocked(); err != nil {
 				n.failUncertainLocked("expire transaction replies", err)
 				ready = false

@@ -62,12 +62,12 @@ the same state and mutex; the split adds no package or API boundary.
 | File | Responsibility |
 | --- | --- |
 | [participant.go](../internal/memnode/participant.go) | Shared state, construction, readiness, shutdown, and private byte-access helpers |
-| [locking.go](../internal/memnode/locking.go) | Range locks and the leased global barrier |
+| [locking.go](../internal/memnode/locking.go) | Transaction range locks |
 | [prepare.go](../internal/memnode/prepare.go) | Comparisons, reads, prepared writes, and yes/no votes |
 | [commit.go](../internal/memnode/commit.go) | Applying commit/abort decisions and single-participant execution |
 | [replay.go](../internal/memnode/replay.go) | Remembering and replaying exact transaction replies |
 | [recovery.go](../internal/memnode/recovery.go) | Epoch floors, recovery evidence, and unfinished transactions |
-| [maintenance.go](../internal/memnode/maintenance.go) | Applied notifications, log cleanup, and backup phases |
+| [maintenance.go](../internal/memnode/maintenance.go) | Applied notifications and log cleanup |
 
 For the main walkthrough, follow `ExecAndPrepare` in `prepare.go` and then
 `Commit` in `commit.go`. `ExecCommit1PC` handles the single-participant shortcut.
@@ -338,10 +338,10 @@ restarting the durable memnode processes.
 
 ## What's left out
 
-Memory nodes are not replicated. There are no primary/replica roles, promotion,
-or automatic failover; an unavailable participant can block progress until it
-returns with its durable state. Distinct nodes still participate in distributed
-transactions and exchange recovery evidence.
+Backup and restore are not implemented. Memory nodes are not replicated; there
+are no primary/replica roles, promotion, or automatic failover. An unavailable
+participant can block progress until it returns with its durable state. Distinct
+nodes still participate in distributed transactions and exchange recovery evidence.
 
 This sample keeps the Go transaction and index core. It leaves out the larger
 project's Rust code, filesystem adapters, other storage services, operator

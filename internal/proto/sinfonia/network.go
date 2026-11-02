@@ -30,16 +30,6 @@ func registerGobTypes() {
 		RunRedoLogGCResponse{},
 		RunForcedAbortGCRequest{},
 		RunForcedAbortGCResponse{},
-		BackupLockAllRequest{},
-		BackupLockAllResponse{},
-		BackupRenewLockRequest{},
-		BackupRenewLockResponse{},
-		BackupUnlockAllRequest{},
-		BackupUnlockAllResponse{},
-		BeginBackupPhaseRequest{},
-		BeginBackupPhaseResponse{},
-		CompleteBackupPhaseRequest{},
-		CompleteBackupPhaseResponse{},
 	} {
 		gob.Register(body)
 	}

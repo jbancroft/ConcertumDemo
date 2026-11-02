@@ -22,7 +22,6 @@ const (
 	decidedTempPrefix      = ".decided.log.tmp-"
 	defaultRedoBatchSize   = 32
 	defaultRedoBatchWindow = 2 * time.Millisecond
-	fileCopyBufferSize     = 1 << 20
 	forcedAbortTempPrefix  = ".forced_abort.log.tmp-"
 	redoAppendQueueSize    = 4096
 	redoBatchCapacity      = 64
@@ -93,28 +92,6 @@ func (d *DiskImage) ApplyWrite(addr uint64, data []byte) error {
 	if _, err := d.file.WriteAt(data, int64(addr)); err != nil {
 		return err
 	}
-	return d.file.Sync()
-}
-
-func (d *DiskImage) Snapshot(path string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if _, err := d.file.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	data := make([]byte, d.size)
-	if _, err := io.ReadFull(d.file, data); err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (d *DiskImage) Sync() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	return d.file.Sync()
 }
 
@@ -332,14 +309,6 @@ func (r *RedoLog) flushBatch(batch []appendReq) error {
 	r.entries = append(r.entries, entries...)
 	r.mu.Unlock()
 	return nil
-}
-func (r *RedoLog) LastTID() sinfonia.TransactionID {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.entries) == 0 {
-		return sinfonia.TransactionID{}
-	}
-	return r.entries[len(r.entries)-1].TransactionId
 }
 
 func (r *RedoLog) TruncateHead(count int) error {

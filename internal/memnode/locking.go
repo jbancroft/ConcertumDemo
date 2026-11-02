@@ -1,15 +1,9 @@
 package memnode
 
 import (
-	"context"
-	"errors"
-	"time"
-
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
-
-var ErrBackupLockLease = errors.New("backup global lock lease is invalid")
 
 type RangeLock struct {
 	start uint64
@@ -31,11 +25,7 @@ func (rl RangeLock) OverlapsWith(other RangeLock) bool {
 }
 
 type LockManager struct {
-	locks                 []RangeLock
-	globalWriteLock       bool
-	globalOwner           string
-	globalLeaseUntil      time.Time
-	globalLeaseGeneration uint64
+	locks []RangeLock
 }
 
 func (m *LockManager) tryLock(start, end uint64, write bool) bool {
@@ -67,9 +57,6 @@ func (m *LockManager) tryLockRanges(requested []RangeLock) *sinfonia.LockConflic
 }
 
 func (m *LockManager) findConflict(start, end uint64, write bool) *sinfonia.LockConflict {
-	if m.globalWriteLock {
-		return &sinfonia.LockConflict{Reason: "global_write_lock", RequestedStart: start, RequestedEnd: end, RequestedWrite: write}
-	}
 	idx := lowerBoundLock(m.locks, start)
 	for i := idx; i < len(m.locks); i++ {
 		l := m.locks[i]
@@ -158,124 +145,6 @@ func (n *Participant) releaseLocks(locks []RangeLock) {
 	for i := len(locks) - 1; i >= 0; i-- {
 		n.locks.unlock(locks[i])
 	}
-	n.cond.Broadcast()
-}
-
-func (n *Participant) LockAllBlocking(ctx context.Context) error {
-	return n.LockAllBlockingOwned(ctx, n.localBarrierOwner)
-}
-
-func (n *Participant) LockAllBlockingOwned(ctx context.Context, owner string) error {
-	if owner == "" {
-		return ErrBackupLockLease
-	}
-	// sync.Cond doesn't understand contexts. Wake it on cancellation; the timer
-	// below also wakes it when an abandoned owner's lease expires.
-	wakeDone := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			n.mu.Lock()
-			n.cond.Broadcast()
-			n.mu.Unlock()
-		case <-wakeDone:
-		}
-	}()
-	defer close(wakeDone)
-
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	for {
-		if n.restartRequired != nil {
-			return n.restartRequired
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		n.expireGlobalLockLocked()
-		if !n.locks.globalWriteLock && len(n.locks.locks) == 0 {
-			n.locks.globalWriteLock = true
-			n.locks.globalOwner = owner
-			n.locks.globalLeaseGeneration++
-			n.renewGlobalLeaseLocked()
-			return nil
-		}
-		n.cond.Wait()
-	}
-}
-
-func (n *Participant) UnlockAll() {
-	n.UnlockAllOwned(n.localBarrierOwner)
-}
-
-func (n *Participant) UnlockAllOwned(owner string) {
-	if owner == "" {
-		return
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.expireGlobalLockLocked()
-	if n.locks.globalOwner != owner {
-		return
-	}
-	n.clearGlobalLockLocked()
-	n.cond.Broadcast()
-}
-
-func (n *Participant) RenewAllOwned(ctx context.Context, owner string) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if err := n.touchGlobalLockLocked(owner); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (n *Participant) expireGlobalLockLocked() {
-	if !n.locks.globalWriteLock || n.locks.globalLeaseUntil.IsZero() {
-		return
-	}
-	if time.Now().Before(n.locks.globalLeaseUntil) {
-		return
-	}
-	n.clearGlobalLockLocked()
-	n.cond.Broadcast()
-}
-
-func (n *Participant) clearGlobalLockLocked() {
-
-	n.locks.globalWriteLock = false
-	n.locks.globalOwner = ""
-	n.locks.globalLeaseUntil = time.Time{}
-}
-
-func (n *Participant) touchGlobalLockLocked(owner string) error {
-	if n.restartRequired != nil {
-		return n.restartRequired
-	}
-	n.expireGlobalLockLocked()
-	if owner == "" || !n.locks.globalWriteLock || n.locks.globalOwner != owner {
-		return ErrBackupLockLease
-	}
-	n.renewGlobalLeaseLocked()
-	return nil
-}
-
-func (n *Participant) renewGlobalLeaseLocked() {
-	ttl := n.globalBarrierLeaseTTL
-	if ttl <= 0 {
-		ttl = defaultGlobalBarrierLeaseTTL
-	}
-	n.locks.globalLeaseUntil = time.Now().Add(ttl)
-	generation := n.locks.globalLeaseGeneration
-	owner := n.locks.globalOwner
-	time.AfterFunc(ttl, func() {
-		n.mu.Lock()
-		defer n.mu.Unlock()
-		if n.locks.globalWriteLock && n.locks.globalOwner == owner && n.locks.globalLeaseGeneration == generation {
-			n.expireGlobalLockLocked()
-		}
-	})
 }
 
 func (n *Participant) HoldWriteLockForTest(addr uint64, length uint32) func() {

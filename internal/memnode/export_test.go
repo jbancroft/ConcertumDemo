@@ -33,7 +33,7 @@ func (n *Participant) ActiveLockCountForTest() int {
 func (n *Participant) ReadyForTest() bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.restartRequired == nil && n.recoveryComplete && !n.backupMode
+	return n.restartRequired == nil && n.recoveryComplete
 }
 func (n *Participant) SetRecoveryTimeoutForTest(timeout time.Duration) {
 	n.mu.Lock()

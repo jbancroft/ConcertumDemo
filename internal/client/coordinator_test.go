@@ -158,17 +158,22 @@ func TestCoordinatorRetriesSingleParticipantLockConflict(t *testing.T) {
 			ctx := context.Background()
 			node := memnode.NewParticipant(16)
 			defer node.Close()
-			if err := node.LockAllBlocking(ctx); err != nil {
-				t.Fatal(err)
+			holder := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+			if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
+				TID: holder, Participants: []uint32{1},
+				WriteItems: []sinfonia.WriteItem{{MemID: 1, Data: []byte("held")}},
+			}); err != nil || resp.Vote != sinfonia.VoteOk {
+				t.Fatalf("holder prepare: %+v, %v", resp, err)
 			}
-			defer node.UnlockAll()
 			recorded := &recordingParticipant{Participant: node}
 			coord := NewCoordinator(map[uint32]Participant{1: recorded})
 			defer coord.Close()
 			coord.maxRetries = 1
 			coord.backoff = retryBackoffFunc(func(context.Context, int) {
 				if release {
-					node.UnlockAll()
+					if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: holder, ActionCommit: false}); err != nil || !resp.Ack {
+						t.Fatalf("holder abort: %+v, %v", resp, err)
+					}
 				}
 			})
 			result := coord.ExecuteAndCommit(ctx, nil, nil, []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}})

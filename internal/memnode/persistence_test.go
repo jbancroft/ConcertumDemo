@@ -515,8 +515,4 @@ func assertParticipantFaulted(t *testing.T, node *memnode.Participant, tid sinfo
 	if err := node.Recover(ctx); !errors.Is(err, memnode.ErrRestartRequired) {
 		t.Errorf("same-instance recovery cleared a fault without rereading storage: %v", err)
 	}
-
-	if err := node.LockAllBlockingOwned(ctx, "fault-test"); !errors.Is(err, memnode.ErrRestartRequired) {
-		t.Errorf("faulted node allowed a backup: %v", err)
-	}
 }

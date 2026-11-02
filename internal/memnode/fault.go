@@ -15,6 +15,5 @@ func (n *Participant) failUncertainLocked(operation string, cause error) error {
 		n.restartRequired = fmt.Errorf("%w: %s: %w", ErrRestartRequired, operation, cause)
 	}
 	n.recoveryComplete = false
-	n.cond.Broadcast()
 	return n.restartRequired
 }

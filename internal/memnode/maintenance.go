@@ -2,9 +2,6 @@ package memnode
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"io"
 	"os"
 	"time"
 
@@ -170,73 +167,6 @@ func (n *Participant) RunForcedAbortGC() error {
 func (n *Participant) RunForcedAbortGCRPC(ctx context.Context, _ sinfonia.RunForcedAbortGCRequest) (sinfonia.RunForcedAbortGCResponse, error) {
 	err := n.RunForcedAbortGC()
 	return sinfonia.RunForcedAbortGCResponse{Ack: err == nil}, err
-}
-
-func (n *Participant) BeginBackupPhase(ctx context.Context, req sinfonia.BeginBackupPhaseRequest) (sinfonia.BeginBackupPhaseResponse, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.diskImage == nil {
-		return sinfonia.BeginBackupPhaseResponse{Ack: true}, nil
-	}
-	boundary := sinfonia.TransactionID{}
-	if n.redoLog != nil {
-		boundary = n.redoLog.LastTID()
-	}
-	n.backupMode = true
-	if err := n.diskImage.Sync(); err != nil {
-		return sinfonia.BeginBackupPhaseResponse{Ack: false}, err
-	}
-	return sinfonia.BeginBackupPhaseResponse{Ack: true, BoundaryTID: boundary}, nil
-}
-
-func (n *Participant) CompleteBackupPhase(ctx context.Context, req sinfonia.CompleteBackupPhaseRequest) (sinfonia.CompleteBackupPhaseResponse, error) {
-	n.mu.Lock()
-	if n.diskImage == nil {
-		n.backupMode = false
-		n.pendingDiskWrites = nil
-		n.mu.Unlock()
-		return sinfonia.CompleteBackupPhaseResponse{Ack: true}, nil
-	}
-	snapshotPath := ""
-	if n.storageDir != "" {
-		snapshotPath = n.storageDir + "/backup-" + req.BackupID + ".img"
-	}
-	n.mu.Unlock()
-
-	if snapshotPath != "" {
-		if err := n.diskImage.Snapshot(snapshotPath); err != nil {
-			return sinfonia.CompleteBackupPhaseResponse{Ack: false}, err
-		}
-	}
-	n.mu.Lock()
-	pending := append([]sinfonia.WriteItem(nil), n.pendingDiskWrites...)
-	n.pendingDiskWrites = nil
-	n.backupMode = false
-	n.mu.Unlock()
-
-	for _, w := range pending {
-		if err := n.diskImage.ApplyWrite(w.Addr, w.Data); err != nil {
-			return sinfonia.CompleteBackupPhaseResponse{Ack: false}, err
-		}
-	}
-	snapshotSHA256 := ""
-	if snapshotPath != "" {
-		snapshot, err := os.Open(snapshotPath)
-		if err != nil {
-			return sinfonia.CompleteBackupPhaseResponse{Ack: false}, err
-		}
-		hash := sha256.New()
-		_, copyErr := io.Copy(hash, snapshot)
-		closeErr := snapshot.Close()
-		if copyErr != nil {
-			return sinfonia.CompleteBackupPhaseResponse{Ack: false}, copyErr
-		}
-		if closeErr != nil {
-			return sinfonia.CompleteBackupPhaseResponse{Ack: false}, closeErr
-		}
-		snapshotSHA256 = hex.EncodeToString(hash.Sum(nil))
-	}
-	return sinfonia.CompleteBackupPhaseResponse{Ack: true, SnapshotPath: snapshotPath, SnapshotSHA256: snapshotSHA256}, nil
 }
 
 func (n *Participant) SetRedoBatchingForTest(window time.Duration, max int) {

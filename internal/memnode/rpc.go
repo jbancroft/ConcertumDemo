@@ -38,20 +38,6 @@ func (n *Participant) RPCServer() *rpcwire.Server {
 	rpcwire.RegisterTyped(srv, sinfonia.MethodQueryInDoubt, n.QueryInDoubt)
 	rpcwire.RegisterTyped(srv, sinfonia.MethodRecoveryForceAbort, n.RecoveryForceAbort)
 	rpcwire.RegisterTyped(srv, sinfonia.MethodRecoveryDecide, n.RecoveryDecide)
-	rpcwire.RegisterTyped(srv, sinfonia.MethodBackupLockAll, func(ctx context.Context, req sinfonia.BackupLockAllRequest) (sinfonia.BackupLockAllResponse, error) {
-		err := n.LockAllBlockingOwned(ctx, req.Owner)
-		return sinfonia.BackupLockAllResponse{Ack: err == nil}, err
-	})
-	rpcwire.RegisterTyped(srv, sinfonia.MethodBackupRenewLock, func(ctx context.Context, req sinfonia.BackupRenewLockRequest) (sinfonia.BackupRenewLockResponse, error) {
-		err := n.RenewAllOwned(ctx, req.Owner)
-		return sinfonia.BackupRenewLockResponse{Ack: err == nil}, err
-	})
-	rpcwire.RegisterTyped(srv, sinfonia.MethodBackupUnlockAll, func(ctx context.Context, req sinfonia.BackupUnlockAllRequest) (sinfonia.BackupUnlockAllResponse, error) {
-		n.UnlockAllOwned(req.Owner)
-		return sinfonia.BackupUnlockAllResponse{Ack: true}, nil
-	})
-	rpcwire.RegisterTyped(srv, sinfonia.MethodBeginBackupPhase, n.BeginBackupPhase)
-	rpcwire.RegisterTyped(srv, sinfonia.MethodCompleteBackupPhase, n.CompleteBackupPhase)
 	rpcwire.RegisterTyped(srv, sinfonia.MethodNotifyApplied, n.NotifyApplied)
 	rpcwire.RegisterTyped(srv, sinfonia.MethodRunRedoLogGC, n.RunRedoLogGCRPC)
 	rpcwire.RegisterTyped(srv, sinfonia.MethodRunForcedAbortGC, n.RunForcedAbortGCRPC)
