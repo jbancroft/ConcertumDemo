@@ -64,27 +64,41 @@ type table struct {
 
 type keyLocker struct {
 	mu    sync.Mutex
-	locks map[uint64]*sync.Mutex
+	locks map[uint64]*keyLock
+}
+
+type keyLock struct {
+	mu   sync.Mutex
+	refs int // Holders and waiters; protected by keyLocker.mu.
 }
 
 func (k *keyLocker) withLock(key uint64, fn func() (QueryResult, error)) (QueryResult, error) {
 	l := k.lockFor(key)
-	l.Lock()
-	defer l.Unlock()
+	l.mu.Lock()
+	defer func() {
+		l.mu.Unlock()
+		k.mu.Lock()
+		defer k.mu.Unlock()
+		l.refs--
+		if l.refs == 0 {
+			delete(k.locks, key)
+		}
+	}()
 	return fn()
 }
 
-func (k *keyLocker) lockFor(key uint64) *sync.Mutex {
+func (k *keyLocker) lockFor(key uint64) *keyLock {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.locks == nil {
-		k.locks = map[uint64]*sync.Mutex{}
+		k.locks = map[uint64]*keyLock{}
 	}
 	l, ok := k.locks[key]
 	if !ok {
-		l = &sync.Mutex{}
+		l = &keyLock{}
 		k.locks[key] = l
 	}
+	l.refs++
 	return l
 }
 

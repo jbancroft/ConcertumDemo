@@ -3,7 +3,9 @@ package minuetsql
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -181,6 +183,57 @@ func TestEngineRejectsDuplicatePrimaryKey(t *testing.T) {
 	_, err := e.Exec(ctx, "INSERT INTO t VALUES (7, 71)")
 	if !errors.Is(err, ErrDuplicateKey) {
 		t.Fatalf("duplicate insert err=%v want=%v", err, ErrDuplicateKey)
+	}
+}
+
+func TestEngineMissingDeletesReleaseKeyLocks(t *testing.T) {
+	ctx := context.Background()
+	e := newTestEngine(t)
+	if _, err := e.Exec(ctx, "CREATE TABLE t"); err != nil {
+		t.Fatal(err)
+	}
+	for id := 0; id < 256; id++ {
+		if _, err := e.Exec(ctx, fmt.Sprintf("DELETE FROM t WHERE id = %d", id)); !errors.Is(err, ErrRowNotFound) {
+			t.Fatalf("delete id %d: %v, want ErrRowNotFound", id, err)
+		}
+	}
+	if retained := len(e.tables["t"].keyLocks.locks); retained != 0 {
+		t.Fatalf("retained %d key locks after missing deletes", retained)
+	}
+}
+
+func TestKeyLockerConcurrentAccess(t *testing.T) {
+	const (
+		iterations = 100
+		workers    = 16
+	)
+	var locker keyLocker
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	count := 0
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < iterations; i++ {
+				_, _ = locker.withLock(7, func() (QueryResult, error) {
+					previous := count
+					// Let waiters contend while the callback owns the lock.
+					runtime.Gosched()
+					count = previous + 1
+					return QueryResult{}, nil
+				})
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if count != workers*iterations {
+		t.Fatalf("serialized increments = %d, want %d", count, workers*iterations)
+	}
+	if retained := len(locker.locks); retained != 0 {
+		t.Fatalf("retained %d key locks after concurrent calls", retained)
 	}
 }
 
