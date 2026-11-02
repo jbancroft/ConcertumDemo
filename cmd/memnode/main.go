@@ -100,7 +100,7 @@ func run(ctx context.Context, args []string, input io.Reader, out, errOut io.Wri
 	recoveryWorkers := make(map[uint32]recovery.Participant)
 	recoveryPeers := make(map[uint32]memnode.RecoveryPeer)
 	for peerID, addr := range peers {
-		peer := memnode.NewRPCPeer(addr, nil, peerTimeout)
+		peer := memnode.NewRPCPeer(addr, peerTimeout)
 		recoveryPeers[peerID] = peer
 		recoveryWorkers[peerID] = peer
 	}

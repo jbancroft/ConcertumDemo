@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"crypto/tls"
 	"strings"
 	"time"
 
@@ -18,9 +17,9 @@ func (n *RPCParticipant) Close() error {
 	return n.rpc.Close()
 }
 
-func NewRPCParticipant(addr string, tlsConfig *tls.Config, timeout time.Duration) *RPCParticipant {
+func NewRPCParticipant(addr string, timeout time.Duration) *RPCParticipant {
 	return &RPCParticipant{
-		rpc: rpcwire.NewClient(strings.TrimSpace(addr), rpcwire.ClientOptions{TLS: tlsConfig, DialTimeout: timeout, CallTimeout: timeout}),
+		rpc: rpcwire.NewClient(strings.TrimSpace(addr), rpcwire.ClientOptions{DialTimeout: timeout, CallTimeout: timeout}),
 	}
 }
 

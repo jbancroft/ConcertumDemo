@@ -12,17 +12,12 @@ import (
 type Handler func(context.Context, any) (any, error)
 
 type Server struct {
-	connContext func(net.Conn) context.Context
-
 	mu      sync.RWMutex
 	methods map[string]Handler
 }
 
-func NewServer(connContext func(net.Conn) context.Context) *Server {
-	return &Server{
-		connContext: connContext,
-		methods:     map[string]Handler{},
-	}
+func NewServer() *Server {
+	return &Server{methods: map[string]Handler{}}
 }
 
 func (s *Server) Register(method string, handler Handler) {
@@ -65,13 +60,7 @@ func (s *Server) Serve(listener net.Listener) error {
 			}
 			return err
 		}
-		ctx := context.Background()
-		if s.connContext != nil {
-			if connCtx := s.connContext(conn); connCtx != nil {
-				ctx = connCtx
-			}
-		}
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithCancel(context.Background())
 		mu.Lock()
 		connections[conn] = cancel
 		mu.Unlock()

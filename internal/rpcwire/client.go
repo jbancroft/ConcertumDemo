@@ -3,7 +3,6 @@ package rpcwire
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/binary"
 	"encoding/gob"
 	"errors"
@@ -48,7 +47,6 @@ func (e *RemoteError) Error() string {
 }
 
 type ClientOptions struct {
-	TLS         *tls.Config
 	DialTimeout time.Duration
 	CallTimeout time.Duration
 	MaxIdle     int
@@ -179,10 +177,6 @@ func (c *Client) release(conn net.Conn, reusable bool) {
 
 func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: c.opts.DialTimeout}
-	if c.opts.TLS != nil {
-		tlsDialer := &tls.Dialer{NetDialer: dialer, Config: c.opts.TLS}
-		return tlsDialer.DialContext(ctx, "tcp", c.addr)
-	}
 	return dialer.DialContext(ctx, "tcp", c.addr)
 }
 

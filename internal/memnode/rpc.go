@@ -20,7 +20,7 @@ func (n *Participant) requireRecoveryComplete() error {
 }
 
 func (n *Participant) RPCServer() *rpcwire.Server {
-	srv := rpcwire.NewServer(nil)
+	srv := rpcwire.NewServer()
 	// Admit execution before the readiness mutex. Commit and recovery bypass
 	// this limit so existing transactions can finish when execution is full.
 	rpcwire.RegisterTyped(srv, sinfonia.MethodExecPrepare, func(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {

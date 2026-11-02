@@ -2,7 +2,6 @@ package memnode
 
 import (
 	"context"
-	"crypto/tls"
 	"strings"
 	"time"
 
@@ -18,12 +17,12 @@ type RPCPeer struct {
 	rpc *rpcwire.Client
 }
 
-func NewRPCPeer(addr string, tlsConfig *tls.Config, timeout time.Duration) *RPCPeer {
+func NewRPCPeer(addr string, timeout time.Duration) *RPCPeer {
 	if timeout <= 0 {
 		timeout = defaultPeerTimeout
 	}
 	addr = strings.TrimSpace(addr)
-	return &RPCPeer{rpc: rpcwire.NewClient(addr, rpcwire.ClientOptions{TLS: tlsConfig, DialTimeout: timeout, CallTimeout: timeout})}
+	return &RPCPeer{rpc: rpcwire.NewClient(addr, rpcwire.ClientOptions{DialTimeout: timeout, CallTimeout: timeout})}
 }
 
 func (p *RPCPeer) NotifyApplied(ctx context.Context, req sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error) {

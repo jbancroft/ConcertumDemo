@@ -9,44 +9,18 @@ import (
 )
 
 func TestServeCancelsAndDrainsHandlers(t *testing.T) {
-	type contextKey struct{}
-	for _, test := range []struct {
-		name        string
-		connContext func(net.Conn) context.Context
-		wantValue   any
-	}{
-		{name: "default context"},
-		{
-			name: "custom connection context",
-			connContext: func(net.Conn) context.Context {
-				return context.WithValue(context.Background(), contextKey{}, "connection value")
-			},
-			wantValue: "connection value",
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			testServeShutdown(t, test.connContext, contextKey{}, test.wantValue)
-		})
-	}
-}
-
-func testServeShutdown(t *testing.T, connContext func(net.Conn) context.Context, key, wantValue any) {
-	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	server := NewServer(connContext)
+	server := NewServer()
 	entered := make(chan struct{})
 	canceled := make(chan error, 1)
 	release := make(chan struct{})
 	defer close(release)
 	server.Register("ping", func(context.Context, any) (any, error) { return "pong", nil })
 	server.Register("block", func(ctx context.Context, _ any) (any, error) {
-		if got := ctx.Value(key); got != wantValue {
-			t.Errorf("handler context value = %v, want %v", got, wantValue)
-		}
 		close(entered)
 		select {
 		case <-ctx.Done():

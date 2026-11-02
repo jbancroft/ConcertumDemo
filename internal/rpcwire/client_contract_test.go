@@ -14,7 +14,7 @@ import (
 )
 
 func TestClientNormalizesServerErrors(t *testing.T) {
-	server := NewServer(nil)
+	server := NewServer()
 	server.Register("test.fail", func(context.Context, any) (any, error) {
 		return nil, errors.New("request rejected")
 	})
@@ -93,7 +93,7 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 }
 
 func TestClientRejectsUnexpectedSuccessBody(t *testing.T) {
-	server := NewServer(nil)
+	server := NewServer()
 	server.Register("test.wrong_response", func(context.Context, any) (any, error) {
 		return sinfonia.CommitResponse{Ack: true}, nil
 	})
@@ -166,7 +166,7 @@ func TestClientRetiresConnectionAfterMalformedResponse(t *testing.T) {
 }
 
 func TestServerDoesNotDispatchMalformedRequest(t *testing.T) {
-	server := NewServer(nil)
+	server := NewServer()
 	var called atomic.Bool
 	server.Register("test.read", func(context.Context, any) (any, error) {
 		called.Store(true)

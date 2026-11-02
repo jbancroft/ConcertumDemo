@@ -66,7 +66,7 @@ func NewClient(config map[uint32]NodeConfig) *Client {
 	c := &Client{}
 	nodes := make(map[uint32]client.Participant, len(config))
 	for id, node := range config {
-		participant := client.NewRPCParticipant(node.RPCAddress, nil, defaultNodeTimeout)
+		participant := client.NewRPCParticipant(node.RPCAddress, defaultNodeTimeout)
 		nodes[id] = participant
 		c.nodes = append(c.nodes, participant)
 	}
