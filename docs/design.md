@@ -176,10 +176,10 @@ with a newline; decision records also require a `commit` or `abort` outcome.
 Malformed or unterminated records block startup with a file-and-line error; the
 log is preserved for manual repair.
 
-The shared [recovery coordinator](../internal/recovery/resolve.go) asks participants
-for their existing votes. A node that has not voted records a forced abort and
-rejects a late request for that transaction ID. A saved
-decision takes precedence; otherwise all yes votes establish commit and any no
+Startup replay and the background [recovery coordinator](../internal/recovery/resolve.go)
+use the same concurrent vote discovery and decision selection. A node that has
+not voted records a forced abort and rejects a late request for that transaction
+ID. A saved decision takes precedence; otherwise all yes votes establish commit and any no
 vote establishes abort. An unreachable participant is never counted as a no.
 Missing evidence for a stale transaction returns `ErrRecoveryPending`:
 collection removes transaction history, so absence alone does not establish an
@@ -188,6 +188,10 @@ retains enough evidence, such a transaction can remain unresolved.
 Probes and decision deliveries run concurrently, with time reserved for delivery
 so an unreachable peer cannot block progress at reachable nodes. Recovery waits
 for an in-flight prepare or one-node request before determining its vote.
+Startup uses the discovered outcome to save its local decision and replay writes
+in redo order before advancing the checkpoint. It can finish with a known outcome
+even when another peer is unavailable. Background recovery additionally delivers
+the decision to reachable participants.
 
 After startup recovery, each standalone memnode runs a scan every 250 ms for
 prepared transactions at least one second old. It runs the same recovery protocol

@@ -51,6 +51,7 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	if _, err := b.Commit(ctx, sinfonia.CommitRequest{TID: txId, ActionCommit: true}); err != nil {
 		t.Fatal(err)
 	}
+	b.FlushAppliedNotifications(ctx)
 
 	_ = a.Close()
 	a2, err := memnode.NewParticipant(1, 64, aDir)
@@ -62,6 +63,7 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	if err := a2.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
+	a2.FlushAppliedNotifications(ctx)
 	got, err := a2.ReadBytesForTest(0, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -439,13 +441,105 @@ func TestRecoveryAbortRejectsLateOnePhaseRequest(t *testing.T) {
 
 type unavailableRecoveryPeer struct{}
 
-func (unavailableRecoveryPeer) QueryTidStatus(ctx context.Context, _ sinfonia.QueryTidStatusRequest) (sinfonia.QueryTidStatusResponse, error) {
+func (unavailableRecoveryPeer) RecoveryForceAbort(ctx context.Context, _ sinfonia.RecoverForceAbortRequest) (sinfonia.RecoverForceAbortResponse, error) {
 	<-ctx.Done()
-	return sinfonia.QueryTidStatusResponse{}, ctx.Err()
+	return sinfonia.RecoverForceAbortResponse{}, ctx.Err()
+}
+
+func (unavailableRecoveryPeer) RecoveryDecide(context.Context, sinfonia.RecoverDecideRequest) (sinfonia.RecoverDecideResponse, error) {
+	return sinfonia.RecoverDecideResponse{}, errors.New("peer unavailable")
 }
 
 func (unavailableRecoveryPeer) NotifyApplied(context.Context, sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error) {
 	return sinfonia.NotifyAppliedResponse{}, errors.New("peer is still recovering")
+}
+
+func TestStartupRecoveryUsesAvailableEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		decision    string
+		unavailable bool
+		wantPending bool
+	}{
+		{name: "commit/missing peer", decision: "commit"},
+		{name: "abort/missing peer", decision: "abort"},
+		{name: "commit/unreachable peer", decision: "commit", unavailable: true},
+		{name: "abort/unreachable peer", decision: "abort", unavailable: true},
+		{name: "no vote/unreachable peer", decision: "never voted", unavailable: true},
+		{name: "yes votes/unreachable peer", unavailable: true, wantPending: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			local := newRecoveredFailureTestNode(t, 1, dir)
+			peer := newTestParticipant(t, 2, 16)
+			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+			// Put the unavailable participant before the useful evidence.
+			request := sinfonia.ExecPrepareRequest{
+				TID: tid, Participants: []uint32{1, 3, 2},
+				WriteItems: []sinfonia.WriteItem{{Addr: 0, Data: []byte("A")}},
+			}
+			for _, node := range []*memnode.Participant{local, peer} {
+				if node == peer && tc.decision == "never voted" {
+					continue
+				}
+				if resp, err := node.ExecAndPrepare(ctx, request); err != nil || resp.Vote != sinfonia.VoteOk {
+					t.Fatalf("prepare = %+v, %v", resp, err)
+				}
+			}
+			if tc.decision == "commit" || tc.decision == "abort" {
+				if resp, err := peer.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: tc.decision == "commit"}); err != nil || !resp.Ack {
+					t.Fatalf("peer decision = %+v, %v", resp, err)
+				}
+			}
+			if err := local.Close(); err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := memnode.NewParticipant(1, 16, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = restarted.Close() })
+			peers := map[uint32]memnode.RecoveryPeer{2: peer}
+			if tc.unavailable {
+				peers[3] = unavailableRecoveryPeer{}
+			}
+			restarted.SetRecoveryPeers(peers)
+			// Discovery must leave application to the ordered replay loop.
+			restarted.SetRecoverBoundaryHookForTest(func(phase string, _ sinfonia.TransactionID) error {
+				if phase == "apply-before" {
+					image, err := os.ReadFile(filepath.Join(dir, "image.bin"))
+					if err != nil {
+						return err
+					}
+					if image[0] != 0 {
+						return errors.New("discovery applied the write before ordered replay")
+					}
+				}
+				return nil
+			})
+			attempt, cancel := context.WithTimeout(ctx, time.Second)
+			err = restarted.Recover(attempt)
+			cancel()
+			if tc.wantPending {
+				if !errors.Is(err, memnode.ErrRecoveryPending) || restarted.HasDecidedForTest(tid) {
+					t.Fatalf("insufficient evidence = %v; must stay undecided", err)
+				}
+			} else if err != nil {
+				t.Fatalf("sufficient evidence did not finish startup: %v", err)
+			}
+			assertParticipantReady(t, restarted, !tc.wantPending)
+			want := byte(0)
+			if tc.decision == "commit" {
+				want = 'A'
+			}
+			if got, err := restarted.ReadBytesForTest(0, 1); err != nil || got[0] != want {
+				t.Fatalf("recovered data = %q, %v; want %q", got, err, want)
+			}
+			// Drain receipt writes before temporary-directory cleanup.
+			restarted.FlushAppliedNotifications(ctx)
+		})
+	}
 }
 
 func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
@@ -723,9 +817,11 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = restarted.Close() })
-	restarted.SetRecoveryTimeoutForTest(10 * time.Millisecond)
 	restarted.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: unavailableRecoveryPeer{}})
-	if err := restarted.Recover(ctx); !errors.Is(err, memnode.ErrRecoveryPending) {
+	attempt, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	err = restarted.Recover(attempt)
+	cancel()
+	if !errors.Is(err, memnode.ErrRecoveryPending) {
 		t.Fatalf("Recover() error = %v, want ErrRecoveryPending", err)
 	}
 	if restarted.HasDecidedForTest(txId) {

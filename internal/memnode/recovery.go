@@ -6,13 +6,14 @@ import (
 	"fmt"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
+	"github.com/jbancroft/ConcertumDemo/internal/recovery"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
 var ErrRecoveryPending = errors.New("participant recovery pending peer evidence")
 
 type RecoveryPeer interface {
-	QueryTidStatus(ctx context.Context, req sinfonia.QueryTidStatusRequest) (sinfonia.QueryTidStatusResponse, error)
+	recovery.Participant
 	NotifyApplied(ctx context.Context, req sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error)
 }
 
@@ -153,10 +154,11 @@ func (n *Participant) Recover(ctx context.Context) error {
 	if ptr < 0 {
 		ptr = 0
 	}
-	peers := make(map[uint32]RecoveryPeer, len(n.participants))
+	peers := make(map[uint32]recovery.Participant, len(n.participants)+1)
 	for k, v := range n.participants {
 		peers[k] = v
 	}
+	peers[n.hostId] = n
 	n.mu.Unlock()
 
 	for i := ptr; i < len(entries); i++ {
@@ -180,10 +182,14 @@ func (n *Participant) Recover(ctx context.Context) error {
 		n.mu.Unlock()
 
 		if !known {
-			outcomeCommit, err = n.discoverOutcome(ctx, peers, entry)
-			if err != nil {
+			result := recovery.Discover(ctx, entry.TransactionId, entry.HostIds, peers)
+			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if !result.Known {
+				return fmt.Errorf("recover transaction %v: %w", entry.TransactionId, errors.Join(ErrRecoveryPending, result.Err))
+			}
+			outcomeCommit = result.Committed
 		}
 
 		n.mu.Lock()
@@ -277,72 +283,6 @@ func (n *Participant) callRecoverBoundaryHookLocked(phase string, txId sinfonia.
 		return nil
 	}
 	return n.recoverBoundaryHook(phase, txId)
-}
-
-func (n *Participant) discoverOutcome(ctx context.Context, peers map[uint32]RecoveryPeer, entry storage.RedoLogItem) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	n.mu.Lock()
-	peerTimeout := n.peerTimeout
-	forcedAbort := n.forcedAborts.IsForcedAbort(entry.TransactionId)
-	n.mu.Unlock()
-
-	knownDecision := false
-	knownCommit := false
-	negativeVote := forcedAbort
-	for _, pid := range entry.HostIds {
-		if pid == n.hostId {
-			continue
-		}
-		if peers[pid] == nil {
-			return false, fmt.Errorf("%w: transaction %v participant %d is not configured", ErrRecoveryPending, entry.TransactionId, pid)
-		}
-	}
-	for _, pid := range entry.HostIds {
-		if pid == n.hostId {
-			continue
-		}
-		peer := peers[pid]
-		queryCtx, cancel := context.WithTimeout(ctx, peerTimeout)
-		resp, err := peer.QueryTidStatus(queryCtx, sinfonia.QueryTidStatusRequest{TID: entry.TransactionId})
-		cancel()
-		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return false, ctxErr
-			}
-			return false, fmt.Errorf("%w: transaction %v participant %d: %v", ErrRecoveryPending, entry.TransactionId, pid, err)
-		}
-		if resp.KnownDecision {
-			switch resp.Outcome {
-			case sinfonia.TidOutcomeCommit:
-				if knownDecision && !knownCommit {
-					return false, fmt.Errorf("%w: transaction %v has conflicting durable decisions", ErrRecoveryPending, entry.TransactionId)
-				}
-				knownDecision = true
-				knownCommit = true
-			case sinfonia.TidOutcomeAbort:
-				if knownDecision && knownCommit {
-					return false, fmt.Errorf("%w: transaction %v has conflicting durable decisions", ErrRecoveryPending, entry.TransactionId)
-				}
-				knownDecision = true
-				knownCommit = false
-			default:
-				return false, fmt.Errorf("%w: transaction %v participant %d reported an unknown decision", ErrRecoveryPending, entry.TransactionId, pid)
-			}
-			continue
-		}
-		if !resp.VotedOK || resp.Outcome == sinfonia.TidOutcomeAbort {
-			negativeVote = true
-		}
-	}
-	if knownDecision {
-		return knownCommit, nil
-	}
-	if negativeVote {
-		return false, nil
-	}
-	return true, nil
 }
 
 func (n *Participant) SetRecoverBoundaryHookForTest(fn func(phase string, txId sinfonia.TransactionID) error) {

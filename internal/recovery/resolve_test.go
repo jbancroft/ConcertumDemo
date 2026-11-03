@@ -2,6 +2,7 @@ package recovery_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -59,5 +60,37 @@ func TestKnownDecisionStillReachesPreparedNodeWithAnotherPeerUnavailable(t *test
 	response, err := prepared.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: sinfonia.TransactionID{CoordinatorID: 2, Counter: 1, Epoch: tid.Epoch}, ReadItems: []sinfonia.ReadItem{{Len: 1}}})
 	if err != nil || response.Vote != sinfonia.VoteOk || string(response.ReadData[0]) != "A" {
 		t.Fatalf("prepared write not visible: %+v, %v", response, err)
+	}
+}
+
+func TestDiscoverRejectsConflictingDecisions(t *testing.T) {
+	ctx := context.Background()
+	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+	committed, aborted := newTestParticipant(t, 1, 16), newTestParticipant(t, 2, 16)
+	for _, node := range []*memnode.Participant{committed, aborted} {
+		if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
+			TID: tid, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{Data: []byte("A")}},
+		}); err != nil || resp.Vote != sinfonia.VoteOk {
+			t.Fatalf("prepare = %+v, %v", resp, err)
+		}
+		// Inject contradictory durable decisions to verify fail-closed discovery.
+		if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: node == committed}); err != nil || !resp.Ack {
+			t.Fatalf("decision = %+v, %v", resp, err)
+		}
+	}
+	result := recovery.Discover(ctx, tid, []uint32{1, 2}, map[uint32]recovery.Participant{1: committed, 2: aborted})
+	if result.Known || result.Err == nil {
+		t.Fatalf("conflicting evidence produced a decision: %+v", result)
+	}
+}
+
+func TestCanceledDiscoveryDoesNotForceAnAbort(t *testing.T) {
+	node := newTestParticipant(t, 1, 16)
+	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := recovery.Discover(ctx, tid, []uint32{1}, map[uint32]recovery.Participant{1: node})
+	if result.Known || !errors.Is(result.Err, context.Canceled) || node.HasForcedAbortForTest(tid) {
+		t.Fatalf("canceled discovery changed transaction evidence: %+v", result)
 	}
 }

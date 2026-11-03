@@ -101,6 +101,9 @@ requests. Readiness is checked under the execution mutex, preventing new executi
 from overtaking recovery's redo snapshot. Commit and recovery RPCs remain available.
 Stop serving requests and join that worker before calling `Participant.Close()`.
 Recovery treats expired transactions without retained evidence as unknown.
+Startup and background recovery share concurrent vote discovery. A retained
+decision or an abort vote can resolve a transaction even when another peer is
+unavailable; insufficient evidence still leaves startup pending.
 Redo cleanup removes each decision after durably removing its redo entry.
 Committed entries remain until all participants have applied their writes.
 Startup finishes decision cleanup if a crash interrupts those steps. Collected

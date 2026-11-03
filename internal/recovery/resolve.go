@@ -31,20 +31,28 @@ type voteResult struct {
 	err  error
 }
 
-// Resolve makes one pass. A known decision remains known even if delivery fails;
-// another recovery pass can deliver it later. Unreachable participants are
-// never treated as abort votes. Calls run concurrently so an unavailable node
-// cannot prevent us from obtaining evidence or delivering decisions elsewhere.
-func Resolve(ctx context.Context, tid sinfonia.TransactionID, ids []uint32, peers map[uint32]Participant) Result {
-	out := Result{}
-	votes := make(map[uint32]sinfonia.RecoverForceAbortResponse)
-	if len(ids) == 0 {
-		out.Err = errors.New("recovery has no participants")
-		return out
-	}
-	// Join calls before returning so a shutdown can safely close its local node.
+// Discover collects votes and chooses an outcome without delivering decisions.
+// Startup uses it before applying local redo in log order. A known outcome is
+// usable even when Err reports an unavailable peer; missing votes are not aborts.
+func Discover(ctx context.Context, tid sinfonia.TransactionID, ids []uint32, peers map[uint32]Participant) Result {
 	var calls sync.WaitGroup
 	defer calls.Wait()
+	out, _ := discover(ctx, tid, ids, peers, &calls)
+	return out
+}
+
+func discover(ctx context.Context, tid sinfonia.TransactionID, ids []uint32, peers map[uint32]Participant, calls *sync.WaitGroup) (Result, map[uint32]sinfonia.RecoverForceAbortResponse) {
+	out := Result{}
+	votes := make(map[uint32]sinfonia.RecoverForceAbortResponse)
+	if err := ctx.Err(); err != nil {
+		return Result{Err: err}, votes
+	}
+	if len(ids) == 0 {
+		out.Err = errors.New("recovery has no participants")
+		return out, votes
+	}
+	// The caller joins probes before returning. Resolve can deliver a known
+	// decision while a timed-out probe is still finishing.
 	// Reserve time for decision delivery even when one probe is unreachable.
 	probeTimeout := defaultProbeTimeout
 	if deadline, ok := ctx.Deadline(); ok {
@@ -84,7 +92,7 @@ collect:
 	for _, vote := range votes {
 		if vote.KnownDecision {
 			if out.Known && out.Committed != vote.DecisionCommit {
-				return Result{Err: errors.New("conflicting transaction decisions")}
+				return Result{Err: errors.New("conflicting transaction decisions")}, votes
 			}
 			out.Known, out.Committed = true, vote.DecisionCommit
 		}
@@ -98,6 +106,16 @@ collect:
 	if !out.Known && (allYes || negative) {
 		out.Known, out.Committed = true, allYes
 	}
+	return out, votes
+}
+
+// Resolve discovers an outcome and delivers it to reachable participants.
+// A known decision remains known even if delivery fails; another recovery pass
+// can deliver it later. All probe and delivery calls finish before returning.
+func Resolve(ctx context.Context, tid sinfonia.TransactionID, ids []uint32, peers map[uint32]Participant) Result {
+	var calls sync.WaitGroup
+	defer calls.Wait()
+	out, votes := discover(ctx, tid, ids, peers, &calls)
 	if !out.Known {
 		return out
 	}

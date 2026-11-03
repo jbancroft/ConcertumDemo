@@ -59,8 +59,3 @@ func (n *Participant) ReadyForTest() bool {
 	defer n.mu.Unlock()
 	return n.restartRequired == nil && n.recoveryComplete
 }
-func (n *Participant) SetRecoveryTimeoutForTest(timeout time.Duration) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.peerTimeout = timeout
-}

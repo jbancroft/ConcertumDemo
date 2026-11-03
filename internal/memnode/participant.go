@@ -41,8 +41,6 @@ type Participant struct {
 	onePCOutcomes   map[sinfonia.TransactionID]onePCOutcome
 	commitOutcomes  map[sinfonia.TransactionID]commitOutcome
 
-	peerTimeout time.Duration
-
 	executionSlots chan struct{}
 
 	recoveryComplete bool
@@ -116,7 +114,6 @@ func NewParticipant(hostId uint32, size int, dir string) (_ *Participant, err er
 		onePCOutcomes:    map[sinfonia.TransactionID]onePCOutcome{},
 		commitOutcomes:   map[sinfonia.TransactionID]commitOutcome{},
 		recoveryComplete: false,
-		peerTimeout:      defaultPeerTimeout,
 	}
 	n.executionSlots = make(chan struct{}, maxConcurrentExecutions)
 	for _, e := range redoLog.Entries() {
