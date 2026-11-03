@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
 func newTestParticipant(t testing.TB, id uint32, size int) *Participant {
@@ -63,4 +65,54 @@ func (n *Participant) ReadyForTest() bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.restartRequired == nil && n.recoveryComplete
+}
+
+// SetWriteApplyFaultForTest lets recovery tests fail a write after memory changes
+// but before the disk image is updated.
+func (n *Participant) SetWriteApplyFaultForTest(fn func(addr uint64, data []byte) error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.writeApplyFaultHook = fn
+}
+
+func (n *Participant) SetRedoFsyncHookForTest(fn func(*os.File) error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.redoLog.SetFsyncHookForTest(fn)
+}
+
+func (n *Participant) HasAppliedTrackingForTest(txId sinfonia.TransactionID) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.appliedLocal[txId] {
+		return true
+	}
+	if rem := n.appliedRemote[txId]; len(rem) > 0 {
+		return true
+	}
+	for _, txIds := range n.pendingNotify {
+		if _, ok := txIds[txId]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (n *Participant) SetRecoverBoundaryHookForTest(fn func(phase string, txId sinfonia.TransactionID) error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.recoverBoundaryHook = fn
+}
+
+func (n *Participant) HasDecidedForTest(txId sinfonia.TransactionID) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	_, ok := n.decided.Get(txId)
+	return ok
+}
+
+func (n *Participant) ForceAbortForTest(txId sinfonia.TransactionID) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.forcedAborts.AddItem(txId)
 }

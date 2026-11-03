@@ -178,11 +178,3 @@ func (n *Participant) write(addr uint64, data []byte) error {
 	}
 	return n.diskImage.ApplyWrite(addr, data)
 }
-
-// SetWriteApplyFaultForTest lets recovery tests fail a write after memory changes
-// but before the disk image is updated.
-func (n *Participant) SetWriteApplyFaultForTest(fn func(addr uint64, data []byte) error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.writeApplyFaultHook = fn
-}

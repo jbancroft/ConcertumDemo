@@ -278,29 +278,10 @@ func (n *Participant) callRecoverBoundaryHookLocked(phase string, txId sinfonia.
 	return n.recoverBoundaryHook(phase, txId)
 }
 
-func (n *Participant) SetRecoverBoundaryHookForTest(fn func(phase string, txId sinfonia.TransactionID) error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.recoverBoundaryHook = fn
-}
-
-func (n *Participant) HasDecidedForTest(txId sinfonia.TransactionID) bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	_, ok := n.decided.Get(txId)
-	return ok
-}
-
 func (n *Participant) HasForcedAbortForTest(txId sinfonia.TransactionID) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.forcedAborts.IsForcedAbort(txId)
-}
-
-func (n *Participant) ForceAbortForTest(txId sinfonia.TransactionID) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.forcedAborts.AddItem(txId)
 }
 
 func (n *Participant) QueryInDoubt(ctx context.Context, _ sinfonia.QueryInDoubtRequest) (sinfonia.QueryInDoubtResponse, error) {

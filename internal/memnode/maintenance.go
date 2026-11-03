@@ -3,7 +3,6 @@ package memnode
 import (
 	"context"
 	"maps"
-	"os"
 	"slices"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
@@ -206,31 +205,8 @@ func (n *Participant) RunForcedAbortGCRPC(ctx context.Context, _ sinfonia.RunFor
 	return sinfonia.RunForcedAbortGCResponse{Ack: err == nil}, err
 }
 
-func (n *Participant) SetRedoFsyncHookForTest(fn func(*os.File) error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.redoLog.SetFsyncHookForTest(fn)
-}
-
 func (n *Participant) RedoEntryCountForTest() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return len(n.redoLog.Entries())
-}
-
-func (n *Participant) HasAppliedTrackingForTest(txId sinfonia.TransactionID) bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.appliedLocal[txId] {
-		return true
-	}
-	if rem := n.appliedRemote[txId]; len(rem) > 0 {
-		return true
-	}
-	for _, txIds := range n.pendingNotify {
-		if _, ok := txIds[txId]; ok {
-			return true
-		}
-	}
-	return false
 }
