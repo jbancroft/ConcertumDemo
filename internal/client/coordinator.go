@@ -58,11 +58,12 @@ func (b RandomBackoff) Wait(ctx context.Context, attempt int) {
 	if r == nil {
 		r = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
-	delay := b.Base << attempt
-	if delay > b.Max {
-		delay = b.Max
+	// Check the cap before shifting so large retry counts cannot overflow.
+	delay := b.Max
+	if b.Base <= b.Max>>attempt {
+		delay = b.Base << attempt
 	}
-	jitter := time.Duration(r.Int63n(int64(delay) + 1))
+	jitter := time.Duration(r.Int63n(int64(delay)))
 	t := time.NewTimer(jitter)
 	defer t.Stop()
 	select {
