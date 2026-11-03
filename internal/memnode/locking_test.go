@@ -10,6 +10,16 @@ import (
 
 // Range overlap, atomic transaction lock acquisition, and lock release.
 
+func (m *LockManager) tryLock(start, end uint64, write bool) bool {
+	ok, _ := m.tryLockWithConflict(start, end, write)
+	return ok
+}
+
+func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, *sinfonia.LockConflict) {
+	conflict := m.tryLockRanges([]RangeLock{{start: start, end: end, write: write}})
+	return conflict == nil, conflict
+}
+
 // The zero-length, same-offset, overlapping, and disjoint cases come from
 // gofonia/mutex/range_lock_test.go, using the retained endpoint representation.
 func TestRangeLockOverlapsWith(t *testing.T) {

@@ -196,42 +196,94 @@ func TestCoordinatorRetriesStaleEpochWithFreshID(t *testing.T) {
 	}
 }
 
-func TestCoordinatorRetriesSingleParticipantLockConflict(t *testing.T) {
-	for _, release := range []bool{false, true} {
-		t.Run(fmt.Sprintf("release=%t", release), func(t *testing.T) {
-			ctx := t.Context()
-			node := newTestParticipant(t, 1, 16)
-			defer node.Close()
-			holder := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
-			if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-				TID: holder, Participants: []uint32{1},
-				WriteItems: []sinfonia.WriteItem{{MemID: 1, Data: []byte("held")}},
-			}); err != nil || resp.Vote != sinfonia.VoteOk {
-				t.Fatalf("holder prepare: %+v, %v", resp, err)
-			}
-			recorded := &recordingParticipant{Participant: node}
-			coord := NewCoordinator(map[uint32]Participant{1: recorded})
-			defer coord.Close()
-			coord.maxRetries = 1
-			coord.backoff = retryBackoffFunc(func(context.Context, int) {
-				if release {
-					if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: holder, ActionCommit: false}); err != nil || !resp.Ack {
+func TestCoordinatorRetriesLockConflicts(t *testing.T) {
+	for _, participants := range []int{1, 2} {
+		for _, tc := range []struct {
+			name    string
+			release bool
+			cancel  bool
+		}{
+			{name: "held"},
+			{name: "released", release: true},
+			{name: "cancelled", release: true, cancel: true},
+		} {
+			t.Run(fmt.Sprintf("participants=%d/%s", participants, tc.name), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				node := newTestParticipant(t, 1, 16)
+				holder := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+				if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
+					TID: holder, Participants: []uint32{1},
+					WriteItems: []sinfonia.WriteItem{{MemID: 1, Data: []byte("held")}},
+				}); err != nil || resp.Vote != sinfonia.VoteOk {
+					t.Fatalf("holder prepare: %+v, %v", resp, err)
+				}
+				recorded := &recordingParticipant{Participant: node}
+				nodes := map[uint32]Participant{1: recorded}
+				writes := []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}}
+				if participants == 2 {
+					nodes[2] = newTestParticipant(t, 2, 16)
+					writes = append(writes, sinfonia.WriteItem{MemID: 2, Data: []byte("B")})
+				}
+				coord := NewCoordinator(nodes)
+				defer coord.Close()
+				coord.maxRetries = 1
+				backoffs := 0
+				coord.backoff = retryBackoffFunc(func(context.Context, int) {
+					backoffs++
+					// Complete the failed attempt's abort before the next attempt.
+					if err := coord.FlushPendingCommits(t.Context()); err != nil {
+						t.Fatal(err)
+					}
+					if tc.release {
+						if resp, err := node.Commit(t.Context(), sinfonia.CommitRequest{TID: holder}); err != nil || !resp.Ack {
+							t.Fatalf("holder abort: %+v, %v", resp, err)
+						}
+					}
+					if tc.cancel {
+						// The conflict is gone, but cancellation must prevent a retry.
+						cancel()
+					}
+				})
+				result := coord.ExecuteAndCommit(ctx, nil, nil, writes)
+				if err := coord.FlushPendingCommits(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				committed := tc.release && !tc.cancel
+				want := sinfonia.VoteBadLock
+				if committed {
+					want = sinfonia.VoteOk
+				}
+				if result.Status != want || result.Committed != committed || result.UnknownOutcome || result.TransportErr != nil {
+					t.Errorf("unexpected result: %+v", result)
+				}
+				attempts := 2
+				if tc.cancel {
+					attempts = 1
+				}
+				if backoffs != 1 || len(recorded.tids) != attempts {
+					t.Errorf("backoffs=%d, attempts=%d; want 1, %d", backoffs, len(recorded.tids), attempts)
+				}
+				if len(recorded.tids) == 2 && recorded.tids[0] == recorded.tids[1] {
+					t.Error("retry reused the rejected transaction ID")
+				}
+				if !tc.release {
+					if resp, err := node.Commit(t.Context(), sinfonia.CommitRequest{TID: holder}); err != nil || !resp.Ack {
 						t.Fatalf("holder abort: %+v, %v", resp, err)
 					}
 				}
+				for _, write := range writes {
+					want := byte(0)
+					if committed {
+						want = write.Data[0]
+					}
+					got, err := coord.Read(t.Context(), write.MemID, write.Addr, 1)
+					if err != nil || len(got) != 1 || got[0] != want {
+						t.Errorf("node %d: got=%v, err=%v; want [%d]", write.MemID, got, err, want)
+					}
+				}
 			})
-			result := coord.ExecuteAndCommit(ctx, nil, nil, []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}})
-			want := sinfonia.VoteBadLock
-			if release {
-				want = sinfonia.VoteOk
-			}
-			if result.Status != want || result.Committed != release || result.UnknownOutcome || result.TransportErr != nil {
-				t.Fatalf("unexpected result: %+v", result)
-			}
-			if len(recorded.tids) != 2 || recorded.tids[0] == recorded.tids[1] {
-				t.Fatalf("expected one retry with a fresh transaction ID: %v", recorded.tids)
-			}
-		})
+		}
 	}
 }
 
@@ -317,7 +369,7 @@ func TestCoordinatorLogsReadOnlyProjectionWhenTransactionHasWrites(t *testing.T)
 func readParticipant(ctx context.Context, node Participant, addr uint64, length uint32) ([]byte, error) {
 	c := NewCoordinator(map[uint32]Participant{1: node})
 	defer c.Close()
-	c.SetMaxRetriesForTest(0)
+	c.maxRetries = 0
 	return c.Read(ctx, 1, addr, length)
 }
 

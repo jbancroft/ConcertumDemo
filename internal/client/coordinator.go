@@ -126,14 +126,6 @@ func newCoordinatorID() uint64 {
 	return cmp.Or(id, 1)
 }
 
-func (c *Coordinator) SetBackoffForTest(backoff BackoffStrategy) {
-	c.backoff = backoff
-}
-
-func (c *Coordinator) SetMaxRetriesForTest(max int) {
-	c.maxRetries = max
-}
-
 func (c *Coordinator) nextTID() sinfonia.TransactionID {
 	c.genMu.Lock()
 	defer c.genMu.Unlock()
@@ -208,6 +200,10 @@ func (c *Coordinator) ExecuteAndCommit(ctx context.Context, compares []sinfonia.
 			return res
 		}
 		c.backoff.Wait(ctx, attempt)
+		if ctx.Err() != nil {
+			// Preserve the known abort instead of starting a cancelled attempt.
+			return res
+		}
 		attempt++
 	}
 }

@@ -58,6 +58,7 @@ Canceling `FlushPendingCommits` stops waiting; unreported delivery errors remain
 available to a later flush or `Close()`.
 
 Transactions retry lock conflicts and stale epochs within a bounded retry budget.
+Cancellation during backoff stops retries and preserves the last abort result.
 A failed comparison or other non-retryable rejection aborts without retry, even
 when another participant reports a lock conflict or stale epoch.
 A rejection received by the coordinator remains an abort if another prepare call

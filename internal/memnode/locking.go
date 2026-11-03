@@ -30,16 +30,6 @@ type LockManager struct {
 	locks []RangeLock
 }
 
-func (m *LockManager) tryLock(start, end uint64, write bool) bool {
-	ok, _ := m.tryLockWithConflict(start, end, write)
-	return ok
-}
-
-func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, *sinfonia.LockConflict) {
-	conflict := m.tryLockRanges([]RangeLock{{start: start, end: end, write: write}})
-	return conflict == nil, conflict
-}
-
 // tryLockRanges acquires the whole transaction's lock set or leaves it untouched.
 // Check only existing locks: overlaps within this request belong to one transaction.
 // The caller must hold the participant mutex through both checking and insertion.
@@ -146,19 +136,5 @@ func (n *Participant) tryTransactionLocksLocked(compares []sinfonia.CmpItem, rea
 func (n *Participant) releaseLocks(locks []RangeLock) {
 	for _, lock := range slices.Backward(locks) {
 		n.locks.unlock(lock)
-	}
-}
-
-func (n *Participant) HoldWriteLockForTest(addr uint64, length uint32) func() {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	l := RangeLock{start: addr, end: addr + uint64(length), write: true}
-	if !n.locks.tryLock(l.start, l.end, true) {
-		return func() {}
-	}
-	return func() {
-		n.mu.Lock()
-		defer n.mu.Unlock()
-		n.locks.unlock(l)
 	}
 }

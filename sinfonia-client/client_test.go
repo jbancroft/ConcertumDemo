@@ -59,10 +59,6 @@ func TestClientCloseReleasesWorkers(t *testing.T) {
 	}
 }
 
-type backoffFunc func(context.Context, int)
-
-func (f backoffFunc) Wait(ctx context.Context, attempt int) { f(ctx, attempt) }
-
 func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -180,47 +176,6 @@ func TestCompareAbortNoWritesApplied(t *testing.T) {
 	if string(data) != "seed" {
 		t.Fatalf("write applied on abort, got %q", string(data))
 	}
-}
-
-func TestBadLockRetryThenSuccess(t *testing.T) {
-	n1 := newTestParticipant(t, 1, 16)
-	n2 := newTestParticipant(t, 2, 16)
-	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
-	defer coord.Close()
-	c := &Client{coordinator: coord}
-
-	if err := c.Write(t.Context(), 1, 0, []byte("ab")); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Write(t.Context(), 2, 0, []byte("xy")); err != nil {
-		t.Fatal(err)
-	}
-
-	release := n1.HoldWriteLockForTest(0, 2)
-	released := false
-	coord.SetBackoffForTest(backoffFunc(func(_ context.Context, _ int) {
-		if !released {
-			release()
-			released = true
-		}
-		time.Sleep(5 * time.Millisecond)
-	}))
-	coord.SetMaxRetriesForTest(3)
-
-	execution := c.NewMiniTransaction().
-		Compare(1, 0, []byte("ab")).
-		Compare(2, 0, []byte("xy")).
-		Write(1, 0, []byte("cd")).
-		Write(2, 0, []byte("zw")).
-		ExecuteAndCommit(t.Context())
-
-	committed, status := execution.Committed, execution.Status
-
-	if !committed || status != StatusCommitted {
-		t.Fatalf("expected commit after retry, got committed=%v status=%v", committed, status)
-	}
-	awaitValue(t, c, 1, 0, []byte("cd"))
-	awaitValue(t, c, 2, 0, []byte("zw"))
 }
 
 func awaitValue(t *testing.T, c *Client, hostId uint32, addr uint64, expected []byte) {
