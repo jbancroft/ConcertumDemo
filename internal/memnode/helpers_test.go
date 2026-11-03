@@ -20,6 +20,15 @@ func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant 
 	return node
 }
 
+func recoverTestParticipants(t testing.TB, nodes ...*memnode.Participant) {
+	t.Helper()
+	for _, node := range nodes {
+		if err := node.Recover(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func assertParticipantReady(t *testing.T, node *memnode.Participant, want bool) {
 	t.Helper()
 	if got := node.ReadyForTest(); got != want {

@@ -139,6 +139,18 @@ func NewParticipant(hostId uint32, size int, dir string) (_ *Participant, err er
 	return n, nil
 }
 
+// Check readiness under the execution mutex so Recover cannot take its redo
+// snapshot between admitting a request and executing it.
+func (n *Participant) requireRecoveryCompleteLocked() error {
+	if n.restartRequired != nil {
+		return n.restartRequired
+	}
+	if !n.recoveryComplete {
+		return ErrRecoveryPending
+	}
+	return nil
+}
+
 // Close releases the disk image. Callers must first stop
 // serving requests and join any externally started recovery workers.
 func (n *Participant) Close() error {

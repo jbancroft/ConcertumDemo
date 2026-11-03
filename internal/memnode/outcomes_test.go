@@ -139,6 +139,7 @@ func TestPrepareCrashAfterRedoBeforeResponseDoesNotReexecuteKnownTID(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	recoverTestParticipants(t, n)
 	if err := n.ApplyWriteForTest(0, []byte("seed")); err != nil {
 		t.Fatal(err)
 	}
@@ -206,6 +207,7 @@ func TestOnePCCrashAfterDecisionBeforeResponseDoesNotReexecuteKnownTID(t *testin
 		t.Fatal(err)
 	}
 	n.SetClockForTest(func() time.Time { return now })
+	recoverTestParticipants(t, n)
 	crash := errors.New("crash after decision")
 	n.SetResponseBoundaryHookForTest(func(phase string, _ sinfonia.TransactionID) error {
 		if phase == "one-pc-before-response" {
@@ -279,7 +281,7 @@ func TestOnePCCrashAfterDecisionBeforeResponseDoesNotReexecuteKnownTID(t *testin
 	}
 }
 
-func TestOnePCRetryFinishesPendingRecoveryWrites(t *testing.T) {
+func TestOnePCRetryWaitsForPendingRecoveryWrites(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	node := newRecoveredFailureTestNode(t, 1, dir)
@@ -296,6 +298,13 @@ func TestOnePCRetryFinishesPendingRecoveryWrites(t *testing.T) {
 		t.Fatalf("recovery: %v", err)
 	}
 	node.SetWriteApplyFaultForTest(nil)
+	if _, err := node.ExecCommit1PC(ctx, req); !errors.Is(err, memnode.ErrRecoveryPending) {
+		t.Fatalf("retry before recovery = %v, want ErrRecoveryPending", err)
+	}
+	if node.ActiveLockCountForTest() == 0 {
+		t.Fatal("failed recovery released pending write locks")
+	}
+	recoverTestParticipants(t, node)
 	if resp, err := node.ExecCommit1PC(ctx, req); err != nil || resp.Vote != sinfonia.VoteOk || string(resp.ReadData[0]) != "\x00" {
 		t.Fatalf("retry = %+v, %v", resp, err)
 	}

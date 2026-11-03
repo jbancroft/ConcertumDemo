@@ -218,6 +218,7 @@ func TestOnePCOutOfBoundsWriteDoesNotPersistSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = n.Close() })
+	recoverTestParticipants(t, n)
 	txId := sinfonia.TransactionID{CoordinatorID: 77, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	resp, err := n.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: txId, RequestID: "invalid", WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 31, Data: []byte("XX")}}})
 	if !errors.Is(err, memnode.ErrOutOfBounds) || resp.Vote != sinfonia.VoteBadInternal {
@@ -344,8 +345,8 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 		ReadItems: []sinfonia.ReadItem{{Addr: 0, Len: 1}},
 	}
 	blocked, err := node.ExecCommit1PC(ctx, probe)
-	if err != nil || blocked.Vote != sinfonia.VoteBadLock {
-		t.Errorf("pending write lost its lock: %+v, %v", blocked, err)
+	if !errors.Is(err, memnode.ErrRecoveryPending) || node.ActiveLockCountForTest() == 0 {
+		t.Errorf("pending write must keep execution blocked and locks held: %+v, %v", blocked, err)
 	}
 
 	// Resolve without using the original response, as after a lost reply.
@@ -354,6 +355,12 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 	if !resolved.Known || !resolved.Committed || resolved.Err != nil {
 		t.Fatalf("resolution failed: %+v", resolved)
 	}
+	if got, err := node.ReadBytesForTest(0, 1); err != nil || string(got) != "A" || node.ActiveLockCountForTest() != 0 {
+		t.Fatalf("decision delivery must apply the write and release its lock: %q, %v", got, err)
+	}
+	// Decision delivery can finish while unready; only Recover restores readiness.
+	assertParticipantReady(t, node, false)
+	recoverTestParticipants(t, node)
 
 	probe.TID.Counter++
 	applied, err := node.ExecCommit1PC(ctx, probe)

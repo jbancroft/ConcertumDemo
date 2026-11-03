@@ -216,9 +216,7 @@ func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 	t.Cleanup(func() { _ = b.Close() })
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
-	if err := a.Recover(ctx); err != nil {
-		t.Fatal(err)
-	}
+	recoverTestParticipants(t, a, b)
 
 	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 11, Epoch: sinfonia.EpochAt(time.Now())}
 	parts := []uint32{1, 2}
@@ -398,9 +396,7 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 	t.Cleanup(func() { _ = b.Close() })
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
-	if err := a.Recover(ctx); err != nil {
-		t.Fatal(err)
-	}
+	recoverTestParticipants(t, a, b)
 	txId := sinfonia.TransactionID{CoordinatorID: 5, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	parts := []uint32{1, 2}
 	_, _ = a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: parts, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 7, Data: []byte("x")}}})
@@ -535,6 +531,7 @@ func TestRedoLogGCRejectsConcurrentStartupRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close()
+	recoverTestParticipants(t, node)
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	if resp, err := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, WriteItems: []sinfonia.WriteItem{{Data: []byte("A")}}}); err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("initial commit: %+v, %v", resp, err)

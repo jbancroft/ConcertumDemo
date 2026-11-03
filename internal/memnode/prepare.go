@@ -26,8 +26,8 @@ type preparedTxn struct {
 func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.restartRequired != nil {
-		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, n.restartRequired
+	if err := n.requireRecoveryCompleteLocked(); err != nil {
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, err
 	}
 
 	currentEpoch := n.currentEpochLocked()

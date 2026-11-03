@@ -39,6 +39,7 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
 	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
 
+	recoverTestParticipants(t, a, b)
 	txId := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: participants, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}); err != nil {
@@ -164,6 +165,7 @@ func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = b.Close() })
+	recoverTestParticipants(t, a, b)
 	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 4, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: txId, Participants: participants, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 5, Data: []byte("K")}}}); err != nil {
@@ -211,6 +213,7 @@ func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = b.Close() })
 
+	recoverTestParticipants(t, a, b)
 	txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if resp, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
@@ -238,6 +241,9 @@ func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
 	if err := a2.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// Persist the peer receipt before TempDir cleanup; background duplicates
+	// then need no disk writes after this test finishes.
+	a2.FlushAppliedNotifications(ctx)
 
 	got, err := a2.ReadBytesForTest(0, 1)
 	if err != nil {
@@ -263,6 +269,7 @@ func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = b.Close() })
 
+	recoverTestParticipants(t, a, b)
 	txId := sinfonia.TransactionID{CoordinatorID: 44, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	for _, prepared := range []struct {
@@ -332,6 +339,7 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = node.Close() })
+			recoverTestParticipants(t, node)
 			txId := sinfonia.TransactionID{CoordinatorID: 80, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 			if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 				TID: txId, Participants: []uint32{1, 2}, HasWrites: true,
@@ -373,6 +381,7 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 	before := time.Unix(3600, 0)
 	now := before
 	node.SetClockForTest(func() time.Time { return now })
+	recoverTestParticipants(t, node)
 	txId := sinfonia.TransactionID{CoordinatorID: 81, Counter: 1, Epoch: sinfonia.EpochAt(before)}
 	if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
 		TID: txId, Participants: []uint32{1, 2}, HasWrites: true,
@@ -454,6 +463,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = b.Close() })
 
+	recoverTestParticipants(t, a, b)
 	txId := sinfonia.TransactionID{CoordinatorID: 41, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
@@ -600,6 +610,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = b.Close() })
 
+			recoverTestParticipants(t, a, b)
 			txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 			participants := []uint32{1, 2}
 			if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
@@ -690,6 +701,7 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 	}
 	b := newTestParticipant(t, 2, 64)
 
+	recoverTestParticipants(t, a)
 	txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if _, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
@@ -767,6 +779,109 @@ func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
 	}
 	if err := client.Call(ctx, sinfonia.MethodExecCommit1PC, sinfonia.ExecCommit1PCRequest{TID: sinfonia.TransactionID{CoordinatorID: 17, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}, ReadItems: []sinfonia.ReadItem{{Addr: 0, Len: 1}}}, &read); err != nil {
 		t.Fatalf("Read after recovery failed: %v", err)
+	}
+}
+
+func TestExecutionCannotOvertakeRecoverySnapshot(t *testing.T) {
+	for _, onePC := range []bool{false, true} {
+		t.Run(fmt.Sprintf("onePC=%t", onePC), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			node := newRecoveredFailureTestNode(t, 1, t.TempDir())
+			original := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+			execute := func(tid sinfonia.TransactionID, value string) error {
+				writes := []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte(value)}}
+				var vote sinfonia.Vote
+				var err error
+				if onePC {
+					resp, callErr := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, WriteItems: writes})
+					vote, err = resp.Vote, callErr
+				} else {
+					resp, callErr := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1}, WriteItems: writes})
+					vote, err = resp.Vote, callErr
+				}
+				if err != nil {
+					return err
+				}
+				if vote != sinfonia.VoteOk {
+					return fmt.Errorf("execution vote = %v", vote)
+				}
+				if !onePC {
+					resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: true})
+					if err != nil || !resp.Ack {
+						return fmt.Errorf("commit = %+v, %v", resp, err)
+					}
+				}
+				return nil
+			}
+			if err := execute(original, "old"); err != nil {
+				t.Fatal(err)
+			}
+			// An unrelated image failure makes this same participant need recovery.
+			fault := errors.New("injected image write failure")
+			node.SetWriteApplyFaultForTest(func(uint64, []byte) error { return fault })
+			failed := original
+			failed.Counter++
+			if _, err := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{
+				TID: failed, WriteItems: []sinfonia.WriteItem{{Addr: 8, Data: []byte("X")}},
+			}); !errors.Is(err, fault) {
+				t.Fatalf("image failure = %v, want %v", err, fault)
+			}
+			node.SetWriteApplyFaultForTest(nil)
+			entered, release := make(chan struct{}), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(release) })
+			node.SetRecoverBoundaryHookForTest(func(phase string, tid sinfonia.TransactionID) error {
+				if phase == "replay-before" && tid == original {
+					close(entered)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+				return nil
+			})
+			done := make(chan struct{})
+			var recoveryErr error
+			go func() {
+				defer close(done)
+				recoveryErr = node.Recover(ctx)
+			}()
+			defer func() { unblock(); <-done }()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			// Recovery has its redo snapshot but holds no mutex here. Both new
+			// execution and cached replies must remain gated inside execution.
+			fresh := original
+			fresh.Counter += 2
+			if err := execute(fresh, "new"); !errors.Is(err, memnode.ErrRecoveryPending) {
+				t.Errorf("new execution during recovery = %v, want ErrRecoveryPending", err)
+			}
+			if err := execute(original, "old"); !errors.Is(err, memnode.ErrRecoveryPending) {
+				t.Errorf("cached execution during recovery = %v, want ErrRecoveryPending", err)
+			}
+			unblock()
+			<-done
+			if recoveryErr != nil {
+				t.Fatal(recoveryErr)
+			}
+			node.SetRecoverBoundaryHookForTest(nil)
+			if err := execute(fresh, "new"); err != nil {
+				t.Fatalf("execution after recovery = %v", err)
+			}
+			if got, err := node.ReadBytesForTest(0, 3); err != nil || string(got) != "new" {
+				t.Fatalf("acknowledged write = %q, %v; want new", got, err)
+			}
+			if err := node.Recover(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := node.ReadBytesForTest(0, 3); err != nil || string(got) != "new" {
+				t.Fatalf("recovered acknowledged write = %q, %v; want new", got, err)
+			}
+		})
 	}
 }
 

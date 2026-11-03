@@ -96,6 +96,9 @@ An uncertain redo or forced-abort append, or a failed applied-receipt write,
 faults the node until storage is reopened
 and recovery succeeds; retrying recovery on the same participant cannot clear it.
 Embedded participants use `RunRecovery` for background recovery and reply expiration.
+Both direct and RPC execution require completed `Recover`, including duplicate
+requests. Readiness is checked under the execution mutex, preventing new execution
+from overtaking recovery's redo snapshot. Commit and recovery RPCs remain available.
 Stop serving requests and join that worker before calling `Participant.Close()`.
 Recovery treats expired transactions without retained evidence as unknown.
 Redo cleanup removes each decision after durably removing its redo entry.

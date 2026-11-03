@@ -130,8 +130,8 @@ func (n *Participant) commitLocked(req sinfonia.CommitRequest) (sinfonia.CommitR
 func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.restartRequired != nil {
-		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, n.restartRequired
+	if err := n.requireRecoveryCompleteLocked(); err != nil {
+		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal}, err
 	}
 
 	currentEpoch := n.currentEpochLocked()

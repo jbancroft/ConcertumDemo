@@ -55,6 +55,9 @@ func TestEpochFloorProtectsDiscardedHistory(t *testing.T) {
 			defer node.Close()
 			now := time.Unix(100*3600, 0)
 			node.nowFn = func() time.Time { return now }
+			if err := node.Recover(ctx); err != nil {
+				t.Fatal(err)
+			}
 			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 100}
 			req := sinfonia.ExecPrepareRequest{TID: tid, CmpItems: []sinfonia.CmpItem{{MemID: 1, Addr: 0, Data: []byte("X")}}}
 			gc := node.RunForcedAbortGC
@@ -73,6 +76,9 @@ func TestEpochFloorProtectsDiscardedHistory(t *testing.T) {
 			now = now.Add(3 * time.Hour)
 			// Prevent publishing the floor. History must remain until it is durable.
 			floorPath := filepath.Join(dir, "epoch.floor")
+			if err := os.Remove(floorPath); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.Mkdir(floorPath, 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -403,6 +409,9 @@ func TestRecoveryOfOldTransaction(t *testing.T) {
 			defer b.Close()
 			for _, node := range []*Participant{a, b} {
 				node.nowFn = func() time.Time { return now }
+				if err := node.Recover(ctx); err != nil {
+					t.Fatal(err)
+				}
 				if node == a && state == "never voted" {
 					continue
 				}

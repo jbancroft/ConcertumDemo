@@ -131,6 +131,13 @@ entries, decisions, forced-abort records, and applied-notification receipts to i
 required data directory.
 `memnode.NewParticipant` takes the node ID, image size, and directory. Callers
 configure peers and complete `Recover` before serving application requests.
+Both execution methods check readiness while holding the participant mutex,
+before consulting cached replies, and hold that mutex through execution.
+Recovery marks the node unready and snapshots redo under the same mutex. An
+execution therefore finishes before that snapshot or is rejected until recovery
+finishes; it cannot append a new write that an older replay then overwrites.
+This applies to direct calls and RPCs. Commit delivery and recovery requests
+remain available while the node is unready.
 On restart the node uses those records and asks recovery
 peers for evidence about unfinished transactions. Missing evidence can keep it
 from finishing recovery or serving requests. A coordinator disappearing doesn't
