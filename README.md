@@ -51,6 +51,10 @@ decisions and release RPC workers and connections. Check its error for failed
 delivery; closing does not undo a known commit. Only repeated `Close` calls are
 allowed afterward. The demos and REPL close their clients automatically.
 
+Transactions retry lock conflicts and stale epochs within a bounded retry budget.
+A failed comparison or other non-retryable rejection aborts without retry, even
+when another participant reports a lock conflict or stale epoch.
+
 To run a [memnode](cmd/memnode/main.go) independently:
 
 ```sh

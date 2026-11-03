@@ -447,7 +447,8 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 
 	decideCommit := true
 	status := sinfonia.VoteOk
-	retry := false
+	// Retry an aborted attempt only if every rejection is transient.
+	retry := true
 	aggregatedReads := map[sinfonia.ReadItem][]byte{}
 	participantVotes := map[uint32]sinfonia.Vote{}
 	var prepareErr error
@@ -469,9 +470,14 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 		if r.resp.Vote != sinfonia.VoteOk {
 			c.observeEpoch(r.resp.CurrentEpoch)
 			decideCommit = false
-			status = r.resp.Vote
-			if r.resp.Vote == sinfonia.VoteBadLock || r.resp.Vote == sinfonia.VoteBadStaleEpoch {
-				retry = true
+			switch r.resp.Vote {
+			case sinfonia.VoteBadLock, sinfonia.VoteBadStaleEpoch:
+				if retry {
+					status = r.resp.Vote
+				}
+			default:
+				retry = false
+				status = r.resp.Vote
 			}
 			continue
 		}

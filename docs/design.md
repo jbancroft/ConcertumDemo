@@ -92,7 +92,10 @@ locks. Successful prepares retain the set until commit or abort.
 The lock scan checks all earlier readers that might overlap, including a long
 reader hidden behind a shorter one. A lock conflict triggers backoff and a
 bounded number of retries with fresh transaction IDs, for both single-participant
-and multi-participant transactions. A failed comparison aborts.
+and multi-participant transactions. A failed comparison or other non-retryable
+rejection aborts without retry, even if another participant reports a lock
+conflict or stale epoch. The result preserves a non-retryable rejection as its
+status regardless of reply order.
 
 For ordinary transactions, everyone's yes vote establishes the commit decision.
 The coordinator has no durable transaction log. Workers send decisions in the

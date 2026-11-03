@@ -185,6 +185,58 @@ func TestCoordinatorRetriesSingleParticipantLockConflict(t *testing.T) {
 	}
 }
 
+func TestCoordinatorDoesNotRetryComparisonFailureWithLockConflict(t *testing.T) {
+	ctx := context.Background()
+	n1, n2 := memnode.NewParticipant(16), memnode.NewParticipant(16)
+	defer n1.Close()
+	defer n2.Close()
+	holder := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+	if resp, err := n2.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
+		TID: holder, Participants: []uint32{2},
+		WriteItems: []sinfonia.WriteItem{{MemID: 2, Data: []byte("held")}},
+	}); err != nil || resp.Vote != sinfonia.VoteOk {
+		t.Fatalf("holder prepare: %+v, %v", resp, err)
+	}
+	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
+	defer coord.Close()
+	coord.maxRetries = 1
+	retried := false
+	coord.backoff = retryBackoffFunc(func(ctx context.Context, _ int) {
+		retried = true
+		if err := coord.FlushPendingCommits(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if resp, err := n2.Commit(ctx, sinfonia.CommitRequest{TID: holder}); err != nil || !resp.Ack {
+			t.Fatalf("holder abort: %+v, %v", resp, err)
+		}
+		// Both rejection causes disappear, so an incorrect retry would commit.
+		if err := coord.Write(ctx, 1, 0, []byte("A")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	result := coord.ExecuteAndCommit(ctx,
+		[]sinfonia.CmpItem{{MemID: 1, Data: []byte("A")}}, nil,
+		[]sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("X")}, {MemID: 2, Data: []byte("Y")}},
+	)
+	if err := coord.FlushPendingCommits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if retried || result.Committed || result.UnknownOutcome || result.TransportErr != nil || result.Status != sinfonia.VoteBadCmp {
+		t.Fatalf("comparison failure must abort without retry: retried=%t, result=%+v", retried, result)
+	}
+	if result.ParticipantVotes[1] != sinfonia.VoteBadCmp || result.ParticipantVotes[2] != sinfonia.VoteBadLock {
+		t.Fatalf("expected mixed comparison and lock rejections: %v", result.ParticipantVotes)
+	}
+	if resp, err := n2.Commit(ctx, sinfonia.CommitRequest{TID: holder}); err != nil || !resp.Ack {
+		t.Fatalf("holder abort: %+v, %v", resp, err)
+	}
+	for _, item := range []sinfonia.ReadItem{{MemID: 1, Addr: 1, Len: 1}, {MemID: 2, Len: 1}} {
+		if got, err := coord.Read(ctx, item.MemID, item.Addr, item.Len); err != nil || len(got) != 1 || got[0] != 0 {
+			t.Fatalf("aborted write on node %d: got=%v, err=%v", item.MemID, got, err)
+		}
+	}
+}
+
 func TestCoordinatorLogsReadOnlyProjectionWhenTransactionHasWrites(t *testing.T) {
 	root := t.TempDir()
 	n1, err := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "n1"))
