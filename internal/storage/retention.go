@@ -2,8 +2,8 @@ package storage
 
 import "github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 
-// PublicRetryHorizon rejects transaction IDs two UTC-hour epochs behind the node.
-const PublicRetryHorizon uint64 = 2
+// TransactionEpochWindow admits unfamiliar IDs from the current and previous UTC hour.
+const TransactionEpochWindow uint64 = 2
 
 // TransactionRetention decides which transaction outcomes are too old to keep.
 // An unpinned outcome can be dropped when Epoch + RetryHorizon <= CurrentEpoch,

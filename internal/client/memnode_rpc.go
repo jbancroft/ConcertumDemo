@@ -45,12 +45,3 @@ func (n *RPCParticipant) CommitBatch(ctx context.Context, req sinfonia.CommitBat
 	var out sinfonia.CommitBatchResponse
 	return out, n.rpc.Call(ctx, sinfonia.MethodCommitBatch, req, &out)
 }
-
-func (p *RPCParticipant) RecoveryForceAbort(ctx context.Context, req sinfonia.RecoverForceAbortRequest) (sinfonia.RecoverForceAbortResponse, error) {
-	var out sinfonia.RecoverForceAbortResponse
-	return out, p.rpc.Call(ctx, sinfonia.MethodRecoveryForceAbort, req, &out)
-}
-func (p *RPCParticipant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDecideRequest) (sinfonia.RecoverDecideResponse, error) {
-	var out sinfonia.RecoverDecideResponse
-	return out, p.rpc.Call(ctx, sinfonia.MethodRecoveryDecide, req, &out)
-}

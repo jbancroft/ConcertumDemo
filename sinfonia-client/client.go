@@ -33,11 +33,6 @@ type CompareItem = minitxn.CompareItem
 type ReadItem = minitxn.ReadItem
 type WriteItem = minitxn.WriteItem
 type ExecResult = minitxn.ExecResult
-type RecoveryHandle = minitxn.RecoveryHandle
-type UnknownOutcomeError = minitxn.UnknownOutcomeError
-
-var ErrOutcomeExpired = minitxn.ErrOutcomeExpired
-var ErrReadResultsUnavailable = minitxn.ErrReadResultsUnavailable
 
 type MiniTransaction = minitxn.MiniTransaction
 
@@ -99,11 +94,6 @@ func (c *Client) Write(ctx context.Context, hostId uint32, addr uint64, data []b
 	return c.coordinator.Write(ctx, hostId, addr, data)
 }
 
-// Resolve checks an uncertain attempt using its original participant evidence.
-func (c *Client) Resolve(ctx context.Context, handle RecoveryHandle) ExecResult {
-	return publicResult(c.coordinator.Resolve(ctx, handle))
-}
-
 func (c *Client) SetRetryPolicy(maxRetries int, baseBackoff, maxBackoff time.Duration) error {
 	return c.coordinator.SetRetryPolicy(maxRetries, baseBackoff, maxBackoff)
 }
@@ -143,12 +133,12 @@ func publicResult(res client.ExecResult) ExecResult {
 		votes[hostId] = int(vote)
 	}
 	if res.UnknownOutcome {
-		return ExecResult{Recovery: res.Recovery, Err: res.TransportErr, Committed: false, UnknownOutcome: true, ReadResults: map[ReadKey][]byte{}, Status: StatusUnknown, ParticipantVotes: votes}
+		return ExecResult{Err: res.TransportErr, Committed: false, UnknownOutcome: true, ReadResults: map[ReadKey][]byte{}, Status: StatusUnknown, ParticipantVotes: votes}
 	}
 	if !res.Committed {
-		return ExecResult{Recovery: res.Recovery, Err: res.TransportErr, Committed: false, ReadResults: map[ReadKey][]byte{}, Status: StatusAborted, ParticipantVotes: votes}
+		return ExecResult{Err: res.TransportErr, Committed: false, ReadResults: map[ReadKey][]byte{}, Status: StatusAborted, ParticipantVotes: votes}
 	}
-	return ExecResult{Recovery: res.Recovery, Err: res.TransportErr, Committed: true, ReadResults: readsOut, Status: StatusCommitted, ParticipantVotes: votes}
+	return ExecResult{Err: res.TransportErr, Committed: true, ReadResults: readsOut, Status: StatusCommitted, ParticipantVotes: votes}
 }
 
 func (c *Client) NewMiniTransaction() *MiniTransaction {

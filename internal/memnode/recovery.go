@@ -54,9 +54,6 @@ func (n *Participant) QueryTidStatus(ctx context.Context, req sinfonia.QueryTidS
 	if err != nil {
 		return sinfonia.QueryTidStatusResponse{}, err
 	}
-	if vote.Expired {
-		return sinfonia.QueryTidStatusResponse{}, fmt.Errorf("%w: transaction evidence expired", ErrRecoveryPending)
-	}
 	outcome := sinfonia.TidOutcomeUnknown
 	if vote.KnownDecision {
 		outcome = sinfonia.TidOutcomeAbort
@@ -89,16 +86,13 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 	one, oneOK := n.onePCOutcomes[tid]
 	prep, prepOK := n.prepareOutcomes[tid]
 	if oneOK {
-		out.Vote, out.ReadData = one.resp.Vote, cloneReadData(one.resp.ReadData)
+		out.Vote = one.resp.Vote
 		out.KnownDecision, out.DecisionCommit = true, one.resp.Vote == sinfonia.VoteOk
 	} else if prepOK {
-		out.Vote, out.ReadData = prep.resp.Vote, cloneReadData(prep.resp.ReadData)
+		out.Vote = prep.resp.Vote
 	}
 	if tx := n.inDoubt[tid]; tx != nil {
 		out.Vote = sinfonia.VoteOk
-		if out.ReadData == nil {
-			out.ReadData = cloneReadData(tx.readData)
-		}
 	}
 	if decision, ok := n.commitOutcomes[tid]; ok {
 		out.KnownDecision, out.DecisionCommit = true, decision.actionCommit
@@ -124,10 +118,10 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 	if out.Vote != sinfonia.VoteUnknown {
 		return out, nil
 	}
-	// Missing evidence after retention is not evidence of an abort.
-	if (storage.TransactionRetention{CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.PublicRetryHorizon}).Expired(tid) {
-		out.Expired = true
-		return out, nil
+	// A RAM node may have committed and expired its cached decision while a
+	// peer is still prepared. Missing old evidence cannot establish an abort.
+	if (storage.TransactionRetention{CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.TransactionEpochWindow}).Expired(tid) {
+		return out, fmt.Errorf("%w: transaction %v has no retained vote", ErrRecoveryPending, tid)
 	}
 	if n.forcedAborts != nil {
 		if err := n.forcedAborts.AddItem(tid); err != nil {
@@ -269,6 +263,12 @@ func (n *Participant) Recover(ctx context.Context) error {
 		err := n.restartRequired
 		n.mu.Unlock()
 		return err
+	}
+	if n.decided != nil {
+		if err := n.decided.Retain(n.allLogTxIds); err != nil {
+			n.mu.Unlock()
+			return err
+		}
 	}
 	if err := n.gcOutcomesLocked(); err != nil {
 		n.mu.Unlock()

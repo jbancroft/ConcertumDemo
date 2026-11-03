@@ -35,7 +35,7 @@ func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, re
 		return resp, nil
 	}
 	currentEpoch := n.currentEpochLocked()
-	expired := (storage.TransactionRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID)
+	expired := (storage.TransactionRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.TransactionEpochWindow}).Expired(req.TID)
 	if expired && n.inDoubt[req.TID] == nil && !n.hasDurableTransactionLocked(req.TID) {
 		// Acknowledge harmless abort delivery without recreating forgotten evidence.
 		if err := n.persistEpochFloorLocked(currentEpoch); err != nil {
@@ -157,7 +157,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	if out, decided := n.commitOutcomes[req.TID]; n.hasDurableTransactionLocked(req.TID) || n.inDoubt[req.TID] != nil || (decided && out.actionCommit) {
 		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: one-phase transaction %v", ErrResponseUnavailable, req.TID)
 	}
-	if (storage.TransactionRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
+	if (storage.TransactionRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.TransactionEpochWindow}).Expired(req.TID) {
 		if err := n.persistEpochFloorLocked(currentEpoch); err != nil {
 			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 		}

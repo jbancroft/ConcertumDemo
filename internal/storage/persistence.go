@@ -323,10 +323,10 @@ func (s *ForcedAbortLog) AddItem(txId sinfonia.TransactionID) error {
 func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]sinfonia.TransactionID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if currentEpoch <= PublicRetryHorizon {
+	if currentEpoch <= TransactionEpochWindow {
 		return nil, nil
 	}
-	threshold := currentEpoch - PublicRetryHorizon
+	threshold := currentEpoch - TransactionEpochWindow
 	retained := make(map[string]struct{}, len(s.set))
 	removed := make([]sinfonia.TransactionID, 0)
 	for key := range s.set {
@@ -436,30 +436,14 @@ func (s *DecidedTransactionLog) AddItem(txId sinfonia.TransactionID, committed b
 	return nil
 }
 
-func (s *DecidedTransactionLog) Remove(txId sinfonia.TransactionID) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	k := tidKey(txId)
-	if _, ok := s.outcomes[k]; !ok {
-		return nil
-	}
-	retained := make(map[string]bool, len(s.outcomes)-1)
-	for key, committed := range s.outcomes {
-		if key != k {
-			retained[key] = committed
-		}
-	}
-	return s.rewriteLocked(retained)
-}
-
-// Compact removes expired decisions unless the caller still needs them for redo.
-func (s *DecidedTransactionLog) Compact(retention TransactionRetention) error {
+// Retain removes decisions whose redo entries have already been durably removed.
+func (s *DecidedTransactionLog) Retain(logged map[sinfonia.TransactionID]struct{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	retained := make(map[string]bool, len(s.outcomes))
-	for key, committed := range s.outcomes {
-		tid, ok := parseTidKey(key)
-		if !ok || !retention.Expired(tid) {
+	for tid := range logged {
+		key := tidKey(tid)
+		if committed, ok := s.outcomes[key]; ok {
 			retained[key] = committed
 		}
 	}

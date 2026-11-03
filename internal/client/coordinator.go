@@ -14,25 +14,23 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
-	"github.com/jbancroft/ConcertumDemo/internal/recovery"
-	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
 var coordinatorIDFallback atomic.Uint64
 
 const (
-	commitBatchDelay   = 2 * time.Millisecond
-	commitBatchSize    = 64
-	commitQueueSize    = 1024
-	defaultBaseBackoff = 5 * time.Millisecond
-	defaultMaxBackoff  = 100 * time.Millisecond
-	defaultMaxRetries  = 5
-	prepareQueueSize   = 256
+	commitBatchDelay      = 2 * time.Millisecond
+	commitBatchSize       = 64
+	commitQueueSize       = 1024
+	defaultBaseBackoff    = 5 * time.Millisecond
+	defaultExecuteTimeout = 5 * time.Second
+	defaultMaxBackoff     = 100 * time.Millisecond
+	defaultMaxRetries     = 5
+	prepareQueueSize      = 256
 )
 
 // Participant is the node interface used by the coordinator.
 type Participant interface {
-	recovery.Participant
 	ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error)
 	ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error)
 	Commit(ctx context.Context, req sinfonia.CommitRequest) (sinfonia.CommitResponse, error)
@@ -161,7 +159,6 @@ func (c *Coordinator) observeEpoch(epoch uint64) {
 }
 
 type ExecResult struct {
-	Recovery         *minitxn.RecoveryHandle
 	Committed        bool
 	ReadResults      map[sinfonia.ReadItem][]byte
 	Status           sinfonia.Vote
@@ -208,18 +205,7 @@ func (c *Coordinator) ExecuteAndCommit(ctx context.Context, compares []sinfonia.
 	for {
 		txId := c.nextTID()
 		res, retry := c.execAttempt(ctx, txId, hostIds, compares, reads, writes)
-		if res.UnknownOutcome {
-			handle := &minitxn.RecoveryHandle{TID: txId, Participants: append([]uint32(nil), hostIds...)}
-			for _, item := range reads {
-				handle.Reads = append(handle.Reads, minitxn.ReadItem{HostId: item.MemID, Address: item.Addr, Length: item.Len})
-			}
-			resolved := c.Resolve(ctx, *handle)
-			if resolved.UnknownOutcome {
-				resolved.TransportErr = errors.Join(res.TransportErr, resolved.TransportErr)
-			}
-			return resolved
-		}
-		if !retry || ctx.Err() != nil {
+		if res.UnknownOutcome || !retry || ctx.Err() != nil {
 			return res
 		}
 		if attempt >= c.maxRetries {

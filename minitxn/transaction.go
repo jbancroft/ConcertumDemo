@@ -114,7 +114,7 @@ func (t *MiniTransaction) UniqueHostIds() []uint32 {
 	return hostIds
 }
 
-// ExecuteAndCommit returns the complete result, including a recovery handle
+// ExecuteAndCommit returns the result, including uncertainty and its cause
 // when a deadline or outage prevents the client from establishing the outcome.
 func (t *MiniTransaction) ExecuteAndCommit(ctx context.Context) ExecResult {
 	return t.executor.ExecuteAndCommit(ctx, t.Compares(), t.Reads(), t.Writes())

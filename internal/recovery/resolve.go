@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
-	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
 
 const defaultProbeTimeout = 500 * time.Millisecond
@@ -23,7 +22,6 @@ type Participant interface {
 type Result struct {
 	Known     bool
 	Committed bool
-	Votes     map[uint32]sinfonia.RecoverForceAbortResponse
 	Err       error
 }
 
@@ -34,13 +32,14 @@ type voteResult struct {
 }
 
 // Resolve makes one pass. A known decision remains known even if delivery fails;
-// another recovery pass can deliver it later. Unreachable or expired evidence is
-// never treated as an abort vote. Calls run concurrently so an unavailable node
+// another recovery pass can deliver it later. Unreachable participants are
+// never treated as abort votes. Calls run concurrently so an unavailable node
 // cannot prevent us from obtaining evidence or delivering decisions elsewhere.
 func Resolve(ctx context.Context, tid sinfonia.TransactionID, ids []uint32, peers map[uint32]Participant) Result {
-	out := Result{Votes: make(map[uint32]sinfonia.RecoverForceAbortResponse)}
+	out := Result{}
+	votes := make(map[uint32]sinfonia.RecoverForceAbortResponse)
 	if len(ids) == 0 {
-		out.Err = errors.New("recovery handle has no participants")
+		out.Err = errors.New("recovery has no participants")
 		return out
 	}
 	// Join calls before returning so a shutdown can safely close its local node.
@@ -74,23 +73,18 @@ collect:
 			if reply.err != nil {
 				out.Err = errors.Join(out.Err, reply.err)
 			} else {
-				out.Votes[reply.id] = reply.vote
+				votes[reply.id] = reply.vote
 			}
 		case <-probeCtx.Done():
 			out.Err = errors.Join(out.Err, probeCtx.Err())
 			break collect
 		}
 	}
-	allYes, negative := len(out.Votes) == len(ids), false
-	for _, vote := range out.Votes {
-		if vote.Expired {
-			allYes = false
-			out.Err = errors.Join(out.Err, minitxn.ErrOutcomeExpired)
-			continue
-		}
+	allYes, negative := len(votes) == len(ids), false
+	for _, vote := range votes {
 		if vote.KnownDecision {
 			if out.Known && out.Committed != vote.DecisionCommit {
-				return Result{Err: errors.New("conflicting transaction decisions"), Votes: out.Votes}
+				return Result{Err: errors.New("conflicting transaction decisions")}
 			}
 			out.Known, out.Committed = true, vote.DecisionCommit
 		}
@@ -107,12 +101,9 @@ collect:
 	if !out.Known {
 		return out
 	}
-	deliveries := make(chan error, len(out.Votes))
+	deliveries := make(chan error, len(votes))
 	pending := 0
-	for id, vote := range out.Votes {
-		if vote.Expired {
-			continue
-		}
+	for id := range votes {
 		pending++
 		calls.Add(1)
 		go func(id uint32) {

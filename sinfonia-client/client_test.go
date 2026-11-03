@@ -2,7 +2,6 @@ package sinfoniaclient
 
 import (
 	"context"
-	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -100,32 +99,6 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-type lostOnePCReplyParticipant struct {
-	*memnode.Participant
-}
-
-func (n *lostOnePCReplyParticipant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
-	resp, err := n.Participant.ExecCommit1PC(ctx, req)
-	if err != nil || len(req.WriteItems) == 0 {
-		return resp, err
-	}
-	return sinfonia.ExecCommit1PCResponse{}, errors.New("lost commit reply")
-}
-
-func TestExecuteAndCommitResolvesLostReply(t *testing.T) {
-	ctx := context.Background()
-	n := &lostOnePCReplyParticipant{Participant: memnode.NewParticipant(16)}
-	c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: n})}
-	defer c.Close()
-	result := c.ExecuteAndCommit(ctx, nil, nil, []WriteItem{{HostId: 1, Address: 0, Data: []byte("x")}})
-	if !result.Committed || result.UnknownOutcome || result.Status != StatusCommitted {
-		t.Fatalf("lost reply should resolve to committed: %+v", result)
-	}
-	if got, err := c.Read(ctx, 1, 0, 1); err != nil || string(got) != "x" {
-		t.Fatalf("write should have applied before the reply was lost: data=%q error=%v", got, err)
 	}
 }
 

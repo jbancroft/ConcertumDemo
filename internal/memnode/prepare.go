@@ -38,7 +38,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	if n.hasDurableTransactionLocked(req.TID) {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, fmt.Errorf("%w: prepare transaction %v", ErrResponseUnavailable, req.TID)
 	}
-	if (storage.TransactionRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.PublicRetryHorizon}).Expired(req.TID) {
+	if (storage.TransactionRetention{CurrentEpoch: currentEpoch, RetryHorizon: storage.TransactionEpochWindow}).Expired(req.TID) {
 		if err := n.persistEpochFloorLocked(currentEpoch); err != nil {
 			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 		}

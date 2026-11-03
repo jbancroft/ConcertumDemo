@@ -122,8 +122,8 @@ func TestDurableResponsesAreNotLoggedOrRestored(t *testing.T) {
 				}
 			}
 			vote, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: tid})
-			if err != nil || !vote.KnownDecision || !vote.DecisionCommit || len(vote.ReadData) != 0 {
-				t.Fatalf("outcome recovery must preserve commit without inventing reads: %+v, %v", vote, err)
+			if err != nil || !vote.KnownDecision || !vote.DecisionCommit {
+				t.Fatalf("node recovery must preserve the logged commit: %+v, %v", vote, err)
 			}
 			if got, err := node.ReadBytesForTest(8, 1); err != nil || string(got) != "Z" {
 				t.Fatalf("duplicate reapplied a write: %q, %v", got, err)
@@ -257,45 +257,25 @@ func TestOnePCCrashAfterDecisionBeforeResponseDoesNotReexecuteKnownTID(t *testin
 	if got := restarted.RedoEntryCountForTest(); got != 0 {
 		t.Fatalf("redo entries after cleanup = %d, want 0", got)
 	}
-	// The decision is the only remaining durable evidence. Keep it throughout
-	// the retry window, then expire it without making this TID executable again.
-	for _, age := range []time.Duration{time.Hour, 2 * time.Hour} {
-		if err := restarted.Close(); err != nil {
-			t.Fatal(err)
-		}
-		next, err := memnode.NewDurableParticipant(1, 32, dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		restarted = next
-		restarted.SetClockForTest(func() time.Time { return now.Add(age) })
-		if err := restarted.Recover(ctx); err != nil {
-			t.Fatal(err)
-		}
-		vote, err := restarted.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: txId})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if age == time.Hour {
-			if !vote.KnownDecision || !vote.DecisionCommit || vote.Expired {
-				t.Fatalf("recent commit after cleanup and restart = %+v", vote)
-			}
-			resp, err = restarted.ExecCommit1PC(ctx, req)
-			if !errors.Is(err, memnode.ErrResponseUnavailable) || resp.Vote != sinfonia.VoteBadInternal {
-				t.Fatalf("retry after cleanup and restart = %+v, %v", resp, err)
-			}
-		} else {
-			if !vote.Expired || vote.KnownDecision {
-				t.Fatalf("expired commit after cleanup and restart = %+v", vote)
-			}
-			resp, err = restarted.ExecCommit1PC(ctx, req)
-			if err != nil || resp.Vote != sinfonia.VoteBadStaleEpoch {
-				t.Fatalf("expired retry = %+v, %v", resp, err)
-			}
-		}
-		if got, err := restarted.ReadBytesForTest(8, 1); err != nil || string(got) != "Z" {
-			t.Fatalf("retry after cleanup changed data: %q, %v", got, err)
-		}
+	if restarted.HasDecidedForTest(txId) {
+		t.Fatal("decision survived redo cleanup")
+	}
+	if err := restarted.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err = memnode.NewDurableParticipant(1, 32, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.SetClockForTest(func() time.Time { return now })
+	if err := restarted.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if restarted.HasDecidedForTest(txId) {
+		t.Fatal("collected decision reappeared after restart")
+	}
+	if got, err := restarted.ReadBytesForTest(8, 1); err != nil || string(got) != "Z" {
+		t.Fatalf("restart after cleanup changed data: %q, %v", got, err)
 	}
 }
 

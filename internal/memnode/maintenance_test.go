@@ -44,8 +44,8 @@ func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 	if a.RedoEntryCountForTest() != 0 {
 		t.Fatalf("expected redo gc to truncate committed entry")
 	}
-	if !a.HasDecidedForTest(txId) {
-		t.Fatalf("expected recent decision retained after redo cleanup")
+	if a.HasDecidedForTest(txId) {
+		t.Fatalf("expected decision removed with redo")
 	}
 	if a.HasAppliedTrackingForTest(txId) {
 		t.Fatalf("expected applied tracking cleaned")
@@ -68,8 +68,8 @@ func TestRedoLogGCNoPrematureTruncationWithoutRemoteConfirm(t *testing.T) {
 	if err := a.RunRedoLogGC(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if a.RedoEntryCountForTest() != 1 {
-		t.Fatalf("expected redo entry to remain without remote applied confirmation")
+	if a.RedoEntryCountForTest() != 1 || !a.HasDecidedForTest(txId) {
+		t.Fatalf("expected redo and decision to remain without remote applied confirmation")
 	}
 }
 
@@ -102,9 +102,73 @@ func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
 	if err := restarted.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	vote, err := restarted.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: txId})
-	if err != nil || !vote.KnownDecision || vote.DecisionCommit {
-		t.Fatalf("aborted outcome after redo cleanup and restart = %+v, %v", vote, err)
+	if restarted.HasDecidedForTest(txId) || restarted.RedoEntryCountForTest() != 0 {
+		t.Fatal("aborted redo or decision survived cleanup and restart")
+	}
+	if got, err := restarted.ReadBytesForTest(2, 1); err != nil || string(got) != "\x00" {
+		t.Fatalf("aborted write was applied: %q, %v", got, err)
+	}
+}
+
+func TestRedoLogGCFailurePreservesRecoveryEvidence(t *testing.T) {
+	for _, blocked := range []string{"redo.log", "decided.log"} {
+		t.Run(blocked, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			node := newRecoveredFailureTestNode(t, 1, dir)
+			collected := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+			retained := collected
+			retained.Counter++
+			if resp, err := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: collected, WriteItems: []sinfonia.WriteItem{{Data: []byte("A")}}}); err != nil || resp.Vote != sinfonia.VoteOk {
+				t.Fatalf("local commit: %+v, %v", resp, err)
+			}
+			// This entry must remain until participant 2 confirms application.
+			if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: retained, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{Addr: 1, Data: []byte("B")}}}); err != nil || resp.Vote != sinfonia.VoteOk {
+				t.Fatalf("prepare: %+v, %v", resp, err)
+			}
+			if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: retained, ActionCommit: true}); err != nil || !resp.Ack {
+				t.Fatalf("commit: %+v, %v", resp, err)
+			}
+			path := filepath.Join(dir, blocked)
+			if err := os.Rename(path, path+".saved"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := node.RunRedoLogGC(ctx); err == nil {
+				t.Fatal("GC succeeded with blocked storage")
+			}
+			assertParticipantReady(t, node, false)
+			if !node.HasDecidedForTest(collected) || !node.HasDecidedForTest(retained) {
+				t.Fatal("failed cleanup discarded a decision")
+			}
+			if err := node.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(path+".saved", path); err != nil {
+				t.Fatal(err)
+			}
+			// Reopening after a decision-write failure starts with the new redo
+			// and old decisions, as after a crash between the two replacements.
+			restarted := newRecoveredFailureTestNode(t, 1, dir)
+			wantRedo := 1
+			if blocked == "redo.log" {
+				wantRedo = 2
+			}
+			if got := restarted.RedoEntryCountForTest(); got != wantRedo {
+				t.Fatalf("redo entries after restart = %d, want %d", got, wantRedo)
+			}
+			if restarted.HasDecidedForTest(collected) != (blocked == "redo.log") || !restarted.HasDecidedForTest(retained) {
+				t.Fatal("recovery did not retain exactly the decisions with redo")
+			}
+			if got, err := restarted.ReadBytesForTest(0, 2); err != nil || string(got) != "AB" {
+				t.Fatalf("recovery changed committed data: %q, %v", got, err)
+			}
+		})
 	}
 }
 

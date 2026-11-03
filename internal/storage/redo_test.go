@@ -59,15 +59,15 @@ func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDecidedRetentionPreservesRecentAndPinnedOutcomes(t *testing.T) {
+func TestDecidedRetentionFollowsRedoRegardlessOfEpoch(t *testing.T) {
 	dir := t.TempDir()
 	log, err := OpenDecidedTransactionLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Exercise the retry boundary and a near-maximum epoch without overflow.
+	// Decisions follow redo membership, regardless of their age.
 	current := ^uint64(0)
-	old := sinfonia.TransactionID{Counter: 1, Epoch: current - PublicRetryHorizon}
+	old := sinfonia.TransactionID{Counter: 1, Epoch: current - TransactionEpochWindow}
 	recent := sinfonia.TransactionID{Counter: 2, Epoch: current - 1}
 	now := sinfonia.TransactionID{Counter: 3, Epoch: current}
 	pinned := sinfonia.TransactionID{Counter: 4, Epoch: 1}
@@ -76,17 +76,19 @@ func TestDecidedRetentionPreservesRecentAndPinnedOutcomes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := log.Compact(TransactionRetention{CurrentEpoch: current, RetryHorizon: PublicRetryHorizon, Keep: map[sinfonia.TransactionID]struct{}{pinned: {}}}); err != nil {
+	if err := log.Retain(map[sinfonia.TransactionID]struct{}{old: {}, pinned: {}}); err != nil {
 		t.Fatal(err)
 	}
 	log, err = OpenDecidedTransactionLog(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, known := log.Get(old); known {
-		t.Fatal("expired decision survived compaction")
+	for _, tid := range []sinfonia.TransactionID{recent, now} {
+		if _, known := log.Get(tid); known {
+			t.Fatal("decision without redo survived compaction")
+		}
 	}
-	for _, tid := range []sinfonia.TransactionID{recent, now, pinned} {
+	for _, tid := range []sinfonia.TransactionID{old, pinned} {
 		if committed, known := log.Get(tid); !committed || !known {
 			t.Fatalf("required decision lost after compaction and reopen: %+v", tid)
 		}
@@ -411,7 +413,7 @@ func TestDecidedLogReplacement(t *testing.T) {
 	}
 	checkOriginal := unchangedOpenLog(t, filepath.Join(dir, "decided.log"))
 
-	err = log.Remove(removed)
+	err = log.Retain(map[sinfonia.TransactionID]struct{}{retained: {}})
 
 	if err != nil {
 		t.Fatal(err)
@@ -479,7 +481,7 @@ func TestTransactionLogFailedReplacementPreservesMemory(t *testing.T) {
 				}
 				path = filepath.Join(dir, "decided.log")
 				contains = func(tid sinfonia.TransactionID) bool { _, ok := log.Get(tid); return ok }
-				rewrite = func() error { return log.Remove(old) }
+				rewrite = func() error { return log.Retain(map[sinfonia.TransactionID]struct{}{recent: {}}) }
 
 			}
 			// A directory at the destination prevents publishing a replacement.

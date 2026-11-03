@@ -17,11 +17,11 @@ type onePCOutcome struct {
 	resp sinfonia.ExecCommit1PCResponse
 }
 
-// gcOutcomesLocked expires cached replies and retained decisions. In-flight
-// transactions keep their replies; redo entries also pin their decisions.
+// gcOutcomesLocked expires memory-only replies. In-flight transactions keep
+// their replies; durable decisions are collected with their redo entries.
 func (n *Participant) gcOutcomesLocked() error {
 	retention := storage.TransactionRetention{
-		CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.PublicRetryHorizon,
+		CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.TransactionEpochWindow,
 		Keep: make(map[sinfonia.TransactionID]struct{}),
 	}
 	for tid := range n.inDoubt {
@@ -29,20 +29,6 @@ func (n *Participant) gcOutcomesLocked() error {
 	}
 	if err := n.persistEpochFloorLocked(retention.CurrentEpoch); err != nil {
 		return err
-	}
-	if n.decided != nil {
-		// Redo recovery still needs these decisions after exact replies expire.
-		decisions := retention
-		decisions.Keep = make(map[sinfonia.TransactionID]struct{})
-		for tid := range retention.Keep {
-			decisions.Keep[tid] = struct{}{}
-		}
-		for tid := range n.allLogTxIds {
-			decisions.Keep[tid] = struct{}{}
-		}
-		if err := n.decided.Compact(decisions); err != nil {
-			return err
-		}
 	}
 	for tid := range n.prepareOutcomes {
 		if retention.Expired(tid) {

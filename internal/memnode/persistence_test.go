@@ -318,9 +318,7 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 	if !resolved.Known || !resolved.Committed || resolved.Err != nil {
 		t.Fatalf("resolution failed: %+v", resolved)
 	}
-	if got := resolved.Votes[1].ReadData[0]; string(got) != "\x00" {
-		t.Errorf("resolution lost the pending original read: %q", got)
-	}
+
 	probe.TID.Counter++
 	applied, err := node.ExecCommit1PC(ctx, probe)
 	if err != nil || applied.Vote != sinfonia.VoteOk || string(applied.ReadData[0]) != "A" {
@@ -378,13 +376,13 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 			coord := client.NewCoordinator(nodes)
 			defer coord.Close()
 			result := coord.ExecuteAndCommit(ctx, nil, nil, writes)
-			if !result.UnknownOutcome || result.Committed || result.Recovery == nil || result.TransportErr == nil {
-				t.Fatalf("ambiguous persistence must survive automatic resolution as unknown: %+v", result)
+			if !result.UnknownOutcome || result.Committed || result.TransportErr == nil {
+				t.Fatalf("ambiguous persistence must return unknown: %+v", result)
 			}
 			if !errors.Is(result.TransportErr, injected) {
 				t.Errorf("original failure was lost: %v", result.TransportErr)
 			}
-			tid := result.Recovery.TID
+			tid := pendingTransactionID(t, node)
 			assertParticipantFaulted(t, node, tid)
 			if got, err := node.ReadBytesForTest(0, 1); err != nil || string(got) != "\x00" {
 				t.Fatalf("node applied unresolved write: %q, %v", got, err)
@@ -408,10 +406,12 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 				t.Fatalf("restart lost persisted write: %q, %v", got, err)
 			}
 
-			resolver := client.NewCoordinator(map[uint32]client.Participant{1: restarted, 2: other})
-			defer resolver.Close()
-			resolved := resolver.Resolve(ctx, *result.Recovery)
-			if resolved.UnknownOutcome || !resolved.Committed || resolved.TransportErr != nil {
+			ids := []uint32{1}
+			if multi {
+				ids = append(ids, 2)
+			}
+			resolved := recovery.Resolve(ctx, tid, ids, map[uint32]recovery.Participant{1: restarted, 2: other})
+			if !resolved.Known || !resolved.Committed || resolved.Err != nil {
 				t.Fatalf("same attempt did not resolve after restart: %+v", resolved)
 			}
 		})
@@ -476,10 +476,11 @@ func TestRedoFailureBeforeWriteResolvesAbortAfterRestart(t *testing.T) {
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: node})
 	defer coord.Close()
 	result := coord.ExecuteAndCommit(ctx, nil, nil, []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}})
-	if !result.UnknownOutcome || result.Recovery == nil {
+	if !result.UnknownOutcome {
 		t.Fatalf("expected conservative uncertainty: %+v", result)
 	}
-	assertParticipantFaulted(t, node, result.Recovery.TID)
+	tid := pendingTransactionID(t, node)
+	assertParticipantFaulted(t, node, tid)
 	if err := node.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -487,10 +488,8 @@ func TestRedoFailureBeforeWriteResolvesAbortAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted := newRecoveredFailureTestNode(t, 1, dir)
-	resolver := client.NewCoordinator(map[uint32]client.Participant{1: restarted})
-	defer resolver.Close()
-	resolved := resolver.Resolve(ctx, *result.Recovery)
-	if resolved.UnknownOutcome || resolved.Committed || resolved.TransportErr != nil {
+	resolved := recovery.Resolve(ctx, tid, []uint32{1}, map[uint32]recovery.Participant{1: restarted})
+	if !resolved.Known || resolved.Committed || resolved.Err != nil {
 		t.Fatalf("missing redo must resolve to abort after reopening: %+v", resolved)
 	}
 	if got, err := restarted.ReadBytesForTest(0, 1); err != nil || string(got) != "\x00" {
@@ -554,4 +553,13 @@ func assertFaultedParticipantRejectsRequests(t *testing.T, node *memnode.Partici
 	if err := node.Recover(ctx); !errors.Is(err, memnode.ErrRestartRequired) {
 		t.Errorf("same-instance recovery cleared a fault without rereading storage: %v", err)
 	}
+}
+
+func pendingTransactionID(t *testing.T, node *memnode.Participant) sinfonia.TransactionID {
+	t.Helper()
+	pending, err := node.QueryInDoubt(context.Background(), sinfonia.QueryInDoubtRequest{})
+	if err != nil || len(pending.Entries) != 1 {
+		t.Fatalf("expected one pending transaction: %+v, %v", pending, err)
+	}
+	return pending.Entries[0].TID
 }

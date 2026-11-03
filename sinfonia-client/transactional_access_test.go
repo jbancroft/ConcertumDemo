@@ -118,7 +118,7 @@ func TestClientWritePersists(t *testing.T) {
 	}
 }
 
-func TestClientWriteResolvesDecisionAfterServerCommitError(t *testing.T) {
+func TestClientWriteReportsUnknownAfterServerCommitError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	dir := t.TempDir()
@@ -133,12 +133,8 @@ func TestClientWriteResolvesDecisionAfterServerCommitError(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := c.Write(ctx, 1, 4, []byte("saved"))
-	if err != nil {
-		t.Fatalf("saved commit decision did not resolve: %v", err)
-	}
-	n.SetResponseBoundaryHookForTest(nil)
-	if data, readErr := c.Read(ctx, 1, 4, 5); readErr != nil || string(data) != "saved" {
-		t.Fatalf("recovery did not apply the committed write: %q, %v", data, readErr)
+	if !errors.Is(err, ErrUnknownOutcome) {
+		t.Fatalf("ambiguous write must report an unknown outcome: %v", err)
 	}
 	if attempts.Load() != 1 {
 		t.Fatalf("ambiguous write was retried: %d attempts", attempts.Load())

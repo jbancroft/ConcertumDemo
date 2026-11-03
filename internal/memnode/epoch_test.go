@@ -2,12 +2,14 @@ package memnode
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
+	"github.com/jbancroft/ConcertumDemo/internal/recovery"
 )
 
 func TestParticipantEpochSharedAndMonotonic(t *testing.T) {
@@ -230,7 +232,7 @@ func TestBackgroundTransactionRetention(t *testing.T) {
 			<-done
 			for _, tid := range []sinfonia.TransactionID{pending, recent.TID} {
 				vote, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: tid})
-				if err != nil || vote.Vote != sinfonia.VoteOk || len(vote.ReadData) != 1 {
+				if err != nil || vote.Vote != sinfonia.VoteOk {
 					t.Fatalf("retained reply for %v = %+v, %v", tid, vote, err)
 				}
 			}
@@ -238,10 +240,6 @@ func TestBackgroundTransactionRetention(t *testing.T) {
 				if _, ok := node.decided.Get(old); ok {
 					t.Fatal("expired read-only decision retained")
 				}
-			}
-			vote, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: old})
-			if err != nil || !vote.Expired || vote.KnownDecision {
-				t.Fatalf("forgotten outcome = %+v, %v", vote, err)
 			}
 
 			if resp, err := node.ExecCommit1PC(ctx, read); err != nil || resp.Vote != sinfonia.VoteBadStaleEpoch {
@@ -253,22 +251,18 @@ func TestBackgroundTransactionRetention(t *testing.T) {
 			if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: old}); err != nil || !resp.Ack {
 				t.Fatalf("expired abort delivery = %+v, %v", resp, err)
 			}
-			vote, err = node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: old})
-			if err != nil || !vote.Expired {
-				t.Fatalf("late requests recreated evidence: %+v, %v", vote, err)
-			}
+
 			if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: pending, ActionCommit: true}); err != nil || !resp.Ack {
 				t.Fatalf("finish expired prepare = %+v, %v", resp, err)
 			}
 			node.mu.Lock()
-			err = node.gcOutcomesLocked()
+			err := node.gcOutcomesLocked()
 			node.mu.Unlock()
 			if err != nil {
 				t.Fatal(err)
 			}
-			vote, err = node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: pending})
-			if err != nil || !vote.Expired {
-				t.Fatalf("completed old transaction retained: %+v, %v", vote, err)
+			if _, ok := node.prepareOutcomes[pending]; ok {
+				t.Fatal("completed old transaction retained a cached prepare reply")
 			}
 
 		})
@@ -276,89 +270,82 @@ func TestBackgroundTransactionRetention(t *testing.T) {
 }
 
 func TestTransactionRetentionFailureAndRestart(t *testing.T) {
-	for _, blocked := range []string{"epoch.floor", "decided.log"} {
-		t.Run(blocked, func(t *testing.T) {
-			ctx := context.Background()
-			dir := t.TempDir()
-			node, err := NewDurableParticipant(1, 64, dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer node.Close()
-			now := time.Unix(100*3600, 0)
-			node.nowFn = func() time.Time { return now }
-			if err := node.Recover(ctx); err != nil {
-				t.Fatal(err)
-			}
-			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 100}
-			write := sinfonia.ExecCommit1PCRequest{TID: tid, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 2, Data: []byte("A")}}}
-			if resp, err := node.ExecCommit1PC(ctx, write); err != nil || resp.Vote != sinfonia.VoteOk {
-				t.Fatalf("write = %+v, %v", resp, err)
-			}
-			// Leave a decision eligible for expiration after its redo is removed.
-			if err := node.RunRedoLogGC(ctx); err != nil {
-				t.Fatal(err)
-			}
-			aborted := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 100}
-			prepare := sinfonia.ExecPrepareRequest{TID: aborted, Participants: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("X")}}}
-			if resp, err := node.ExecAndPrepare(ctx, prepare); err != nil || resp.Vote != sinfonia.VoteOk {
-				t.Fatalf("prepare = %+v, %v", resp, err)
-			}
-			if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: aborted}); err != nil || !resp.Ack {
-				t.Fatalf("abort = %+v, %v", resp, err)
-			}
-			now = now.Add(2 * time.Hour)
-			path := filepath.Join(dir, blocked)
-			if err := os.Rename(path, path+".saved"); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Mkdir(path, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			node.mu.Lock()
-			err = node.gcOutcomesLocked()
-			node.mu.Unlock()
-			if err == nil {
-				t.Fatal("cleanup succeeded with blocked storage")
-			}
-			if _, ok := node.onePCOutcomes[tid]; !ok {
-				t.Fatal("failed cleanup discarded the cached reply")
-			}
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Rename(path+".saved", path); err != nil {
-				t.Fatal(err)
-			}
-			node.mu.Lock()
-			err = node.gcOutcomesLocked()
-			node.mu.Unlock()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if committed, known := node.decided.Get(aborted); !known || committed {
-				t.Fatal("cleanup lost the abort decision for retained redo")
-			}
-			if err := node.Close(); err != nil {
-				t.Fatal(err)
-			}
-			restarted, err := NewDurableParticipant(1, 64, dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer restarted.Close()
-			now = now.Add(-2 * time.Hour)
-			restarted.nowFn = func() time.Time { return now }
-			if err := restarted.Recover(ctx); err != nil {
-				t.Fatal(err)
-			}
-			if resp, err := restarted.ExecCommit1PC(ctx, write); err != nil || resp.Vote != sinfonia.VoteBadStaleEpoch {
-				t.Fatalf("forgotten retry after clock rollback = %+v, %v", resp, err)
-			}
-			if got, err := restarted.ReadBytesForTest(1, 1); err != nil || string(got) != "\x00" {
-				t.Fatalf("recovery applied an aborted write: %q, %v", got, err)
-			}
-		})
+	ctx := context.Background()
+	dir := t.TempDir()
+	node, err := NewDurableParticipant(1, 64, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close()
+	now := time.Unix(100*3600, 0)
+	node.nowFn = func() time.Time { return now }
+	if err := node.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 100}
+	read := sinfonia.ExecCommit1PCRequest{TID: tid, ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 2, Len: 1}}}
+	if resp, err := node.ExecCommit1PC(ctx, read); err != nil || resp.Vote != sinfonia.VoteOk {
+		t.Fatalf("read = %+v, %v", resp, err)
+	}
+
+	aborted := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 100}
+	prepare := sinfonia.ExecPrepareRequest{TID: aborted, Participants: []uint32{1}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 1, Data: []byte("X")}}}
+	if resp, err := node.ExecAndPrepare(ctx, prepare); err != nil || resp.Vote != sinfonia.VoteOk {
+		t.Fatalf("prepare = %+v, %v", resp, err)
+	}
+	if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: aborted}); err != nil || !resp.Ack {
+		t.Fatalf("abort = %+v, %v", resp, err)
+	}
+	now = now.Add(2 * time.Hour)
+	path := filepath.Join(dir, "epoch.floor")
+	if err := os.Rename(path, path+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	node.mu.Lock()
+	err = node.gcOutcomesLocked()
+	node.mu.Unlock()
+	if err == nil {
+		t.Fatal("cleanup succeeded with blocked storage")
+	}
+	if _, ok := node.onePCOutcomes[tid]; !ok {
+		t.Fatal("failed cleanup discarded the cached reply")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path+".saved", path); err != nil {
+		t.Fatal(err)
+	}
+	node.mu.Lock()
+	err = node.gcOutcomesLocked()
+	node.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed, known := node.decided.Get(aborted); !known || committed {
+		t.Fatal("cleanup lost the abort decision for retained redo")
+	}
+	if err := node.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewDurableParticipant(1, 64, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	now = now.Add(-2 * time.Hour)
+	restarted.nowFn = func() time.Time { return now }
+	if err := restarted.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := restarted.ExecCommit1PC(ctx, read); err != nil || resp.Vote != sinfonia.VoteBadStaleEpoch {
+		t.Fatalf("forgotten retry after clock rollback = %+v, %v", resp, err)
+	}
+	if got, err := restarted.ReadBytesForTest(1, 1); err != nil || string(got) != "\x00" {
+		t.Fatalf("recovery applied an aborted write: %q, %v", got, err)
 	}
 }
 
@@ -397,6 +384,73 @@ func TestStaleRequestPersistsEpochFloor(t *testing.T) {
 					t.Fatal(err)
 				}
 				now = time.Unix(100*3600, 0)
+			}
+		})
+	}
+}
+
+func TestRecoveryOfOldRAMTransaction(t *testing.T) {
+	for _, state := range []string{"prepared", "never voted", "forgotten commit"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Unix(100*3600, 0)
+			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(now)}
+			a, b := NewParticipantWithId(1, 16), NewParticipantWithId(2, 16)
+			defer a.Close()
+			defer b.Close()
+			for _, node := range []*Participant{a, b} {
+				node.nowFn = func() time.Time { return now }
+				if node == a && state == "never voted" {
+					continue
+				}
+				resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{Data: []byte("X")}}})
+				if err != nil || resp.Vote != sinfonia.VoteOk {
+					t.Fatalf("prepare: %+v, %v", resp, err)
+				}
+			}
+			if state == "forgotten commit" {
+				if resp, err := a.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: true}); err != nil || !resp.Ack {
+					t.Fatalf("partial commit: %+v, %v", resp, err)
+				}
+			}
+			now = now.Add(2 * time.Hour)
+			// Run the same expiration used by background recovery. An unresolved
+			// prepare stays pinned, but a completed RAM decision can be forgotten.
+			for _, node := range []*Participant{a, b} {
+				node.mu.Lock()
+				err := node.gcOutcomesLocked()
+				node.mu.Unlock()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			result := recovery.Resolve(ctx, tid, []uint32{1, 2}, map[uint32]recovery.Participant{1: a, 2: b})
+			known := state == "prepared"
+			if result.Known != known || result.Committed != known || (known && result.Err != nil) || (!known && !errors.Is(result.Err, ErrRecoveryPending)) {
+				t.Fatalf("recovery after expiration: %+v", result)
+			}
+			if !known {
+				// Startup recovery uses this other entry point to the same evidence.
+				if _, err := a.QueryTidStatus(ctx, sinfonia.QueryTidStatusRequest{TID: tid}); !errors.Is(err, ErrRecoveryPending) {
+					t.Fatalf("forgotten evidence became a vote: %v", err)
+				}
+			}
+			pending, err := b.QueryInDoubt(ctx, sinfonia.QueryInDoubtRequest{})
+			wantPending := 1
+			if known {
+				wantPending = 0
+			}
+			if err != nil || len(pending.Entries) != wantPending {
+				t.Fatalf("pending transactions: %+v, %v; want %d", pending, err, wantPending)
+			}
+			for _, node := range []*Participant{a, b} {
+				want := "\x00"
+				if known || (node == a && state == "forgotten commit") {
+					want = "X"
+				}
+				if got, err := node.ReadBytesForTest(0, 1); err != nil || string(got) != want {
+					t.Fatalf("recovered data = %q, %v; want %q", got, err, want)
+				}
 			}
 		})
 	}

@@ -69,10 +69,12 @@ without resizing the image. Resizing existing images is not supported.
 
 `redo.log` uses framed gob records to store transaction writes for recovery.
 Existing JSON redo logs are unsupported; use a fresh data directory when upgrading
-from that format. Original replies are cached only in memory. After a participant
-restarts, `Resolve` can recover a commit decision but reports
-`ErrReadResultsUnavailable` if the original reads were lost. No replay log is
-created or read; an old `replay.log` is unused and can be deleted.
+from that format. Original replies are cached only in memory and are lost on
+restart. No replay log is created or read; an old `replay.log` is unused and can be
+deleted. An ambiguous request returns `ErrUnknownOutcome` without retrying the
+operation. Nodes still recover unfinished transactions, but there is no public
+transaction-history query or `Resolve` API. Callers must not retry uncertain
+writes blindly.
 Read-only and compare-only minitransactions append neither redo nor decision
 records. Their original outcomes and read results are not recoverable after a
 participant restart; issue a fresh read-only transaction if needed.
@@ -83,9 +85,12 @@ An uncertain redo or forced-abort append faults the node until storage is reopen
 and recovery succeeds; retrying recovery on the same participant cannot clear it.
 Embedded participants use `RunRecovery` for background recovery and reply expiration.
 Stop serving requests and join that worker before calling `Participant.Close()`.
-Redo cleanup preserves recent transaction decisions through the retry window,
-even when a crash lost the exact reply, so a restart cannot turn a known commit
-into an abort or execute it again.
+Recovery can remain pending if a RAM node has forgotten a completed decision
+that another participant still needs. Expired, missing evidence is treated as unknown.
+Redo cleanup removes each decision after durably removing its redo entry.
+Committed entries remain until all participants have applied their writes.
+Startup finishes decision cleanup if a crash interrupts those steps. Collected
+transactions have no retained history or duplicate-execution guarantee.
 
 ## Minuet
 

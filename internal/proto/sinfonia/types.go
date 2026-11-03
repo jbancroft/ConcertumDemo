@@ -1,9 +1,21 @@
 package sinfonia
 
-import "github.com/jbancroft/ConcertumDemo/minitxn"
+import (
+	"strconv"
 
-// TransactionID identifies a single attempt across client and recovery RPCs.
-type TransactionID = minitxn.TransactionID
+	"github.com/jbancroft/ConcertumDemo/minitxn"
+)
+
+// TransactionID identifies one attempt, including its UTC-hour epoch.
+type TransactionID struct {
+	CoordinatorID uint64
+	Counter       uint64
+	Epoch         uint64
+}
+
+func (t TransactionID) CorrelationID() string {
+	return "txn-" + strconv.FormatUint(t.CoordinatorID, 10) + "-" + strconv.FormatUint(t.Epoch, 10) + "-" + strconv.FormatUint(t.Counter, 10)
+}
 
 // CmpItem requires the bytes at (MemID, Addr) to match Data.
 type CmpItem struct {

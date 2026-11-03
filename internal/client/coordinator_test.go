@@ -14,15 +14,16 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
-// Coordinator IDs, transaction projections, retries, and resolution after lost replies.
+// Coordinator IDs, transaction projections, retries, and uncertainty after lost replies.
 
-func TestCoordinatorResolves1PCResponseLostAfterApply(t *testing.T) {
-	n := &lost1PCNode{Participant: memnode.NewParticipant(16)}
+func TestCoordinatorReportsUnknownAfter1PCResponseLost(t *testing.T) {
+	failure := errors.New("lost 1pc response")
+	n := &lost1PCNode{Participant: memnode.NewParticipant(16), failure: failure}
 	coord := NewCoordinator(map[uint32]Participant{1: n})
 	defer coord.Close()
 	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
-	if res.UnknownOutcome || res.TransportErr != nil || !res.Committed {
-		t.Fatalf("expected recovered commit, got %+v", res)
+	if !res.UnknownOutcome || !errors.Is(res.TransportErr, failure) || res.Committed || n.calls != 1 {
+		t.Fatalf("expected one uncertain attempt, got %+v, calls=%d", res, n.calls)
 	}
 	got, err := readParticipant(context.Background(), n.Participant, 0, 1)
 	if err != nil || string(got) != "A" {
@@ -30,7 +31,7 @@ func TestCoordinatorResolves1PCResponseLostAfterApply(t *testing.T) {
 	}
 }
 
-func TestCoordinatorResolvesPrepareReplyFailsAfterVote(t *testing.T) {
+func TestCoordinatorReportsUnknownAfterPrepareReplyFails(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		failure error
@@ -45,21 +46,14 @@ func TestCoordinatorResolvesPrepareReplyFailsAfterVote(t *testing.T) {
 			defer coord.Close()
 			coord.coordID = 1
 			res := coord.ExecuteAndCommit(context.Background(), nil, []sinfonia.ReadItem{{MemID: 1, Len: 1}, {MemID: 2, Len: 1}}, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
-			if res.UnknownOutcome || res.TransportErr != nil || !res.Committed {
-				t.Fatalf("expected recovered commit, got %+v", res)
+			if !res.UnknownOutcome || !errors.Is(res.TransportErr, tc.failure) || res.Committed || n1.calls != 1 {
+				t.Fatalf("expected one uncertain attempt, got %+v, calls=%d", res, n1.calls)
 			}
 			for id, node := range map[uint32]*memnode.Participant{1: n1.Participant, 2: n2} {
-				if got := res.ReadResults[sinfonia.ReadItem{MemID: id, Len: 1}]; string(got) != "\x00" {
-					t.Fatalf("node %d lost original read: %q", id, got)
-				}
 				pending, err := node.QueryInDoubt(context.Background(), sinfonia.QueryInDoubtRequest{})
-				if err != nil || len(pending.Entries) != 0 {
-					t.Fatalf("node %d kept transaction locked: %+v, %v", id, pending, err)
+				if err != nil || len(pending.Entries) != 1 {
+					t.Fatalf("node %d should await node recovery: %+v, %v", id, pending, err)
 				}
-			}
-			resp, err := n1.ExecAndPrepare(context.Background(), sinfonia.ExecPrepareRequest{TID: sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}, RequestID: "retry", Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}})
-			if err != nil || resp.Vote != sinfonia.VoteOk {
-				t.Fatalf("expected idempotent prepared vote on retry, resp=%+v err=%v", resp, err)
 			}
 		})
 	}
@@ -237,28 +231,29 @@ func readParticipant(ctx context.Context, node Participant, addr uint64, length 
 
 type lost1PCNode struct {
 	*memnode.Participant
-	dropped bool
+	calls   int
+	failure error
 }
 
 func (n *lost1PCNode) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
+	n.calls++
 	resp, err := n.Participant.ExecCommit1PC(ctx, req)
-	if !n.dropped {
-		n.dropped = true
-		return sinfonia.ExecCommit1PCResponse{}, errors.New("lost 1pc response")
+	if n.calls == 1 {
+		return sinfonia.ExecCommit1PCResponse{}, n.failure
 	}
 	return resp, err
 }
 
 type lostPrepareNode struct {
 	*memnode.Participant
-	dropped bool
+	calls   int
 	failure error
 }
 
 func (n *lostPrepareNode) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error) {
+	n.calls++
 	resp, err := n.Participant.ExecAndPrepare(ctx, req)
-	if !n.dropped {
-		n.dropped = true
+	if n.calls == 1 {
 		return sinfonia.ExecPrepareResponse{}, n.failure
 	}
 	return resp, err

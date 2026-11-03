@@ -81,8 +81,6 @@ type RecoverForceAbortRequest struct {
 
 // RecoverForceAbortResponse returns the participant's vote after that check.
 type RecoverForceAbortResponse struct {
-	ReadData       map[uint32][]byte
-	Expired        bool
 	Vote           Vote
 	KnownDecision  bool
 	DecisionCommit bool

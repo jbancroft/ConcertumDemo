@@ -119,17 +119,19 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 		}
 		truncateCount++
 	}
-	if truncateCount == 0 {
-		return nil
-	}
 	removed := entries[:truncateCount]
-	if err := n.redoLog.TruncateHead(truncateCount); err != nil {
-		n.recoveryComplete = false
-		return err
+	if truncateCount > 0 {
+		if err := n.redoLog.TruncateHead(truncateCount); err != nil {
+			n.recoveryComplete = false
+			return err
+		}
 	}
 	for _, entry := range removed {
 		delete(n.allLogTxIds, entry.TransactionId)
 		delete(n.inDoubt, entry.TransactionId)
+		delete(n.prepareOutcomes, entry.TransactionId)
+		delete(n.onePCOutcomes, entry.TransactionId)
+		delete(n.commitOutcomes, entry.TransactionId)
 		delete(n.appliedLocal, entry.TransactionId)
 		delete(n.appliedRemote, entry.TransactionId)
 		for pid, txIds := range n.pendingNotify {
@@ -139,8 +141,12 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 			}
 		}
 	}
-	// Leave decisions for epoch-based outcome cleanup: a decision may be the
-	// only durable outcome evidence when a crash lost the exact reply.
+	// Redo must disappear durably before its decision. A crash between these
+	// steps leaves harmless extra decisions that startup recovery removes.
+	if err := n.decided.Retain(n.allLogTxIds); err != nil {
+		n.recoveryComplete = false
+		return err
+	}
 	return nil
 }
 

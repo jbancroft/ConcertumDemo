@@ -104,7 +104,7 @@ type unknownOutcomeClient struct {
 	sinfoniaclient.TxnClient
 	applyWrites bool
 	attempts    int
-	handle      sinfoniaclient.RecoveryHandle
+	failure     error
 }
 
 func (c *unknownOutcomeClient) ExecuteAndCommit(ctx context.Context, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
@@ -118,7 +118,7 @@ func (c *unknownOutcomeClient) ExecuteAndCommit(ctx context.Context, compares []
 			return result
 		}
 	}
-	return sinfoniaclient.ExecResult{Status: sinfoniaclient.StatusUnknown, UnknownOutcome: true, Recovery: &c.handle}
+	return sinfoniaclient.ExecResult{Status: sinfoniaclient.StatusUnknown, UnknownOutcome: true, Err: c.failure}
 }
 
 func TestEngineCreateInsertSelectDelete(t *testing.T) {
@@ -425,15 +425,14 @@ func TestCreateTableUnknownOutcomeIsNotRetried(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			base := newMemTxnClient()
-			client := &unknownOutcomeClient{TxnClient: base, applyWrites: test.applyWrites}
+			client := &unknownOutcomeClient{TxnClient: base, applyWrites: test.applyWrites, failure: errors.New("lost reply")}
 			engine := newTestEngineWithClient(t, client)
 			_, err := engine.Exec(ctx, "CREATE TABLE scores")
 			if !errors.Is(err, sinfoniaclient.ErrUnknownOutcome) {
 				t.Errorf("create error = %v, want ErrUnknownOutcome", err)
 			}
-			var uncertain *sinfoniaclient.UnknownOutcomeError
-			if !errors.As(err, &uncertain) || uncertain.Handle != &client.handle {
-				t.Fatalf("lost recovery handle: %v", err)
+			if !errors.Is(err, client.failure) {
+				t.Fatalf("lost original failure: %v", err)
 			}
 			if client.attempts != 1 {
 				t.Errorf("commit attempts = %d, want 1", client.attempts)
@@ -480,7 +479,7 @@ func TestRowMutationPropagatesUnknownOutcome(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			client := &unknownOutcomeClient{TxnClient: base, applyWrites: test.applyWrites}
+			client := &unknownOutcomeClient{TxnClient: base, applyWrites: test.applyWrites, failure: errors.New("lost reply")}
 			engine := newTestEngineWithClient(t, client)
 			statement := "INSERT INTO scores VALUES (7, 70)"
 			if test.delete {
