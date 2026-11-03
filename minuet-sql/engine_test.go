@@ -215,7 +215,7 @@ func TestKeyLockerConcurrentAccess(t *testing.T) {
 		wg.Go(func() {
 			<-start
 			for range iterations {
-				_, _ = locker.withLock(7, func() (QueryResult, error) {
+				_, _ = locker.withLock(t.Context(), 7, func() (QueryResult, error) {
 					previous := count
 					// Let waiters contend while the callback owns the lock.
 					runtime.Gosched()
@@ -232,6 +232,72 @@ func TestKeyLockerConcurrentAccess(t *testing.T) {
 	}
 	if retained := len(locker.locks); retained != 0 {
 		t.Fatalf("retained %d key locks after concurrent calls", retained)
+	}
+}
+
+func TestEngineRowMutationCancellationWhileWaitingForKey(t *testing.T) {
+	for _, statement := range []string{
+		"INSERT INTO t VALUES (7, 70)",
+		"DELETE FROM t WHERE id = 7",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			e := newTestEngine(t)
+			if _, err := e.Exec(t.Context(), "CREATE TABLE t"); err != nil {
+				t.Fatal(err)
+			}
+			locker := &e.tables["t"].keyLocks
+			held := make(chan struct{})
+			release := make(chan struct{})
+			unlock := sync.OnceFunc(func() { close(release) })
+			defer unlock()
+			holderDone := make(chan error, 1)
+			go func() {
+				_, err := locker.withLock(t.Context(), 7, func() (QueryResult, error) {
+					close(held)
+					<-release
+					return QueryResult{}, nil
+				})
+				holderDone <- err
+			}()
+			<-held
+
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := e.Exec(ctx, statement)
+				done <- err
+			}()
+			<-ctx.Done()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("waiting mutation returned %v, want deadline exceeded", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("mutation ignored its deadline while waiting for the key lock")
+			}
+			locker.mu.Lock()
+			retained := len(locker.locks)
+			locker.mu.Unlock()
+			if retained != 1 {
+				t.Fatalf("cancelled waiter removed the holder's key lock: retained %d", retained)
+			}
+			unlock()
+			if err := <-holderDone; err != nil {
+				t.Fatal(err)
+			}
+			// An expired context must also skip the callback when the lock is free.
+			if _, err := locker.withLock(ctx, 7, func() (QueryResult, error) {
+				t.Error("expired context entered the callback")
+				return QueryResult{}, nil
+			}); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("uncontended mutation returned %v, want deadline exceeded", err)
+			}
+			if retained := len(locker.locks); retained != 0 {
+				t.Fatalf("retained %d key locks after cancellation and holder completion", retained)
+			}
+		})
 	}
 }
 

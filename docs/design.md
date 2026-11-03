@@ -349,8 +349,10 @@ when all six slots are occupied returns `ErrCatalogFull` before attempting a wri
 existing table still returns `ErrTableExists`. The parser supports `CREATE TABLE`,
 `INSERT`, `SELECT` with an optional ID filter, and `DELETE` by ID.
 
-Writes to the same key through one engine are serialized. Each data change uses
-the index's transaction path; there's no general SQL transaction manager or
+Writes to the same key through one engine are serialized. Waiting for a key lock
+honors context cancellation and deadlines; cancelled waiters release their lock
+references without running the mutation. Each data change uses the index's
+transaction path; there's no general SQL transaction manager or
 `BEGIN`/`COMMIT` support. Concurrent table creation through one engine isn't
 supported.
 

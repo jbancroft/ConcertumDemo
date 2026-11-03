@@ -69,15 +69,13 @@ type keyLocker struct {
 }
 
 type keyLock struct {
-	mu   sync.Mutex
-	refs int // Holders and waiters; protected by keyLocker.mu.
+	held chan struct{} // Capacity one lets acquisition wait on context cancellation.
+	refs int           // Holders and waiters; protected by keyLocker.mu.
 }
 
-func (k *keyLocker) withLock(key uint64, fn func() (QueryResult, error)) (QueryResult, error) {
+func (k *keyLocker) withLock(ctx context.Context, key uint64, fn func() (QueryResult, error)) (QueryResult, error) {
 	l := k.lockFor(key)
-	l.mu.Lock()
 	defer func() {
-		l.mu.Unlock()
 		k.mu.Lock()
 		defer k.mu.Unlock()
 		l.refs--
@@ -85,6 +83,16 @@ func (k *keyLocker) withLock(key uint64, fn func() (QueryResult, error)) (QueryR
 			delete(k.locks, key)
 		}
 	}()
+	select {
+	case l.held <- struct{}{}:
+		defer func() { <-l.held }()
+	case <-ctx.Done():
+		return QueryResult{}, ctx.Err()
+	}
+	// Acquisition and cancellation can both be ready in the select above.
+	if err := ctx.Err(); err != nil {
+		return QueryResult{}, err
+	}
 	return fn()
 }
 
@@ -96,7 +104,7 @@ func (k *keyLocker) lockFor(key uint64) *keyLock {
 	}
 	l, ok := k.locks[key]
 	if !ok {
-		l = &keyLock{}
+		l = &keyLock{held: make(chan struct{}, 1)}
 		k.locks[key] = l
 	}
 	l.refs++
@@ -149,7 +157,7 @@ func (e *Engine) Exec(ctx context.Context, sql string) (QueryResult, error) {
 		if !ok {
 			return QueryResult{}, ErrTableNotFound
 		}
-		return t.keyLocks.withLock(n.row.ID, func() (QueryResult, error) {
+		return t.keyLocks.withLock(ctx, n.row.ID, func() (QueryResult, error) {
 			_, found, err := t.index.Search(ctx, n.row.ID)
 			if err != nil {
 				return QueryResult{}, mapIndexError(err)
@@ -167,7 +175,7 @@ func (e *Engine) Exec(ctx context.Context, sql string) (QueryResult, error) {
 		if !ok {
 			return QueryResult{}, ErrTableNotFound
 		}
-		return t.keyLocks.withLock(n.id, func() (QueryResult, error) {
+		return t.keyLocks.withLock(ctx, n.id, func() (QueryResult, error) {
 			_, found, err := t.index.Search(ctx, n.id)
 			if err != nil {
 				return QueryResult{}, mapIndexError(err)

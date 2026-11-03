@@ -146,6 +146,8 @@ go run ./cmd/repl -host 127.0.0.1 -port 7001
 Enter `.help` for SQL examples or `.quit` to exit. Exiting the REPL leaves the
 memnode running; restart that node with the same data directory to reopen tables.
 Use one memnode per data directory and one SQL session per node.
+Within one SQL engine, inserts and deletes for the same key are serialized;
+waiting for that key honors the caller's context cancellation or deadline.
 
 For a temporary local session, `make repl` builds both executables, starts one
 durable memnode on `127.0.0.1:7001` in a temporary directory, and connects the
