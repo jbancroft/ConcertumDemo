@@ -10,7 +10,7 @@ import (
 )
 
 // preparedTxn keeps the writes and locks until a commit or abort decision arrives.
-// Durable nodes also log prepared writes so they can recover after a restart.
+// Prepared writes are also logged so they can recover after a restart.
 type preparedTxn struct {
 	writes        []sinfonia.WriteItem
 	readData      map[uint32][]byte
@@ -44,7 +44,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 		}
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadStaleEpoch, CurrentEpoch: currentEpoch}, nil
 	}
-	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
+	if n.forcedAborts.IsForcedAbort(req.TID) {
 		return n.rememberPrepareOutcomeLocked(req.TID, sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch}), nil
 	}
 	if out, ok := n.commitOutcomes[req.TID]; ok && !out.actionCommit {
@@ -95,7 +95,7 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 
 	// Save our yes vote before replying. Even with no local writes, we need an
 	// empty entry if the transaction writes elsewhere: recovery needs every vote.
-	if n.redoLog != nil && (req.HasWrites || len(req.WriteItems) > 0) {
+	if req.HasWrites || len(req.WriteItems) > 0 {
 		participants := append([]uint32(nil), req.Participants...)
 		clonedWrites := cloneWrites(req.WriteItems)
 		if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.TID, HostIds: participants, WriteItems: clonedWrites}); err != nil {

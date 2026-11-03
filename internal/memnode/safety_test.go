@@ -14,7 +14,7 @@ import (
 )
 
 func TestRPCExecutionLimitSharedAcrossPrepareAndOnePhase(t *testing.T) {
-	n := NewParticipantWithId(1, 16)
+	n := newTestParticipant(t, 1, 16)
 	client := startAdmissionTestRPC(t, n)
 	ctx := context.Background()
 	epoch := sinfonia.EpochAt(time.Now())
@@ -69,7 +69,7 @@ func TestRPCExecutionLimitSharedAcrossPrepareAndOnePhase(t *testing.T) {
 }
 
 func TestRPCExecutionLimitReleasesRejectedRequests(t *testing.T) {
-	n := NewParticipantWithId(1, 16)
+	n := newTestParticipant(t, 1, 16)
 	n.recoveryComplete = false
 	client := startAdmissionTestRPC(t, n)
 	ctx := context.Background()

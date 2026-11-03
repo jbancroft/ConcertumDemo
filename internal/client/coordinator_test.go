@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -16,9 +15,26 @@ import (
 
 // Coordinator IDs, transaction projections, retries, and uncertainty after lost replies.
 
+func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant {
+	t.Helper()
+	node, err := memnode.NewParticipant(id, size, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := node.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := node.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return node
+}
+
 func TestCoordinatorReportsUnknownAfter1PCResponseLost(t *testing.T) {
 	failure := errors.New("lost 1pc response")
-	n := &lost1PCNode{Participant: memnode.NewParticipant(16), failure: failure}
+	n := &lost1PCNode{Participant: newTestParticipant(t, 1, 16), failure: failure}
 	coord := NewCoordinator(map[uint32]Participant{1: n})
 	defer coord.Close()
 	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
@@ -40,8 +56,8 @@ func TestCoordinatorReportsUnknownAfterPrepareReplyFails(t *testing.T) {
 		{name: "server error", failure: &rpcwire.RemoteError{Method: sinfonia.MethodExecPrepare, Message: "failed to save reply after yes vote"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n1 := &lostPrepareNode{Participant: memnode.NewParticipant(16), failure: tc.failure}
-			n2 := memnode.NewParticipant(16)
+			n1 := &lostPrepareNode{Participant: newTestParticipant(t, 1, 16), failure: tc.failure}
+			n2 := newTestParticipant(t, 2, 16)
 			coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 			defer coord.Close()
 			coord.coordID = 1
@@ -84,7 +100,7 @@ func TestCoordinatorRetriesStaleEpochWithFreshID(t *testing.T) {
 				if err := storage.StoreEpochFloor(dir, ahead); err != nil {
 					t.Fatal(err)
 				}
-				node, err := memnode.NewDurableParticipant(1, 64, dir)
+				node, err := memnode.NewParticipant(1, 64, dir)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -96,7 +112,7 @@ func TestCoordinatorRetriesStaleEpochWithFreshID(t *testing.T) {
 				nodes := map[uint32]Participant{1: recorded}
 				writes := []sinfonia.WriteItem{{MemID: 1, Addr: 8, Data: []byte("A")}}
 				if participants == 2 {
-					second := memnode.NewParticipant(64)
+					second := newTestParticipant(t, 2, 64)
 					defer second.Close()
 					nodes[2] = second
 					writes = twoParticipantWrites()
@@ -150,7 +166,7 @@ func TestCoordinatorRetriesSingleParticipantLockConflict(t *testing.T) {
 	for _, release := range []bool{false, true} {
 		t.Run(fmt.Sprintf("release=%t", release), func(t *testing.T) {
 			ctx := context.Background()
-			node := memnode.NewParticipant(16)
+			node := newTestParticipant(t, 1, 16)
 			defer node.Close()
 			holder := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 			if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
@@ -187,7 +203,7 @@ func TestCoordinatorRetriesSingleParticipantLockConflict(t *testing.T) {
 
 func TestCoordinatorDoesNotRetryComparisonFailureWithLockConflict(t *testing.T) {
 	ctx := context.Background()
-	n1, n2 := memnode.NewParticipant(16), memnode.NewParticipant(16)
+	n1, n2 := newTestParticipant(t, 1, 16), newTestParticipant(t, 2, 16)
 	defer n1.Close()
 	defer n2.Close()
 	holder := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
@@ -238,17 +254,7 @@ func TestCoordinatorDoesNotRetryComparisonFailureWithLockConflict(t *testing.T) 
 }
 
 func TestCoordinatorLogsReadOnlyProjectionWhenTransactionHasWrites(t *testing.T) {
-	root := t.TempDir()
-	n1, err := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "n1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = n1.Close() })
-	n2, err := memnode.NewDurableParticipant(2, 64, filepath.Join(root, "n2"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = n2.Close() })
+	n1, n2 := newTestParticipant(t, 1, 64), newTestParticipant(t, 2, 64)
 
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 	defer coord.Close()

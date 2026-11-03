@@ -31,10 +31,8 @@ func (n *Participant) persistEpochFloorLocked(epoch uint64) error {
 	if epoch <= n.epochFloor {
 		return nil
 	}
-	if n.storageDir != "" {
-		if err := storage.StoreEpochFloor(n.storageDir, epoch); err != nil {
-			return err
-		}
+	if err := storage.StoreEpochFloor(n.storageDir, epoch); err != nil {
+		return err
 	}
 	n.epochFloor = epoch
 	return nil
@@ -96,10 +94,8 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 	}
 	if decision, ok := n.commitOutcomes[tid]; ok {
 		out.KnownDecision, out.DecisionCommit = true, decision.actionCommit
-	} else if n.decided != nil {
-		if commit, ok := n.decided.Get(tid); ok {
-			out.KnownDecision, out.DecisionCommit = true, commit
-		}
+	} else if commit, ok := n.decided.Get(tid); ok {
+		out.KnownDecision, out.DecisionCommit = true, commit
 	}
 	if out.KnownDecision {
 		out.Vote = sinfonia.VoteBadForced
@@ -108,7 +104,7 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 		}
 		return out, nil
 	}
-	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(tid) {
+	if n.forcedAborts.IsForcedAbort(tid) {
 		out.Vote = sinfonia.VoteBadForced
 		return out, nil
 	}
@@ -118,18 +114,13 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 	if out.Vote != sinfonia.VoteUnknown {
 		return out, nil
 	}
-	// A RAM node may have committed and expired its cached decision while a
-	// peer is still prepared. Missing old evidence cannot establish an abort.
+	// Collected transactions and expired read-only replies have no retained
+	// evidence. Missing old evidence cannot establish an abort.
 	if (storage.TransactionRetention{CurrentEpoch: n.currentEpochLocked(), RetryHorizon: storage.TransactionEpochWindow}).Expired(tid) {
 		return out, fmt.Errorf("%w: transaction %v has no retained vote", ErrRecoveryPending, tid)
 	}
-	if n.forcedAborts != nil {
-		if err := n.forcedAborts.AddItem(tid); err != nil {
-			return out, n.failUncertainLocked("append forced abort", err)
-		}
-	} else {
-		// RAM nodes also have to reject a late request for this same attempt.
-		n.commitOutcomes[tid] = commitOutcome{actionCommit: false}
+	if err := n.forcedAborts.AddItem(tid); err != nil {
+		return out, n.failUncertainLocked("append forced abort", err)
 	}
 	out.Vote = sinfonia.VoteBadForced
 	return out, nil
@@ -153,18 +144,11 @@ func (n *Participant) Recover(ctx context.Context) error {
 		return err
 	}
 	n.recoveryComplete = false
-	entries := []storage.RedoLogItem{}
-	if n.redoLog != nil {
-		entries = n.redoLog.Entries()
-	}
-	ptr := 0
-	var err error
-	if n.storageDir != "" {
-		ptr, err = storage.LoadProcessedPointer(n.storageDir)
-		if err != nil {
-			n.mu.Unlock()
-			return err
-		}
+	entries := n.redoLog.Entries()
+	ptr, err := storage.LoadProcessedPointer(n.storageDir)
+	if err != nil {
+		n.mu.Unlock()
+		return err
 	}
 	if ptr < 0 {
 		ptr = 0
@@ -189,11 +173,9 @@ func (n *Participant) Recover(ctx context.Context) error {
 			n.mu.Unlock()
 			return err
 		}
-		if n.decided != nil {
-			if c, ok := n.decided.Get(entry.TransactionId); ok {
-				outcomeCommit = c
-				known = true
-			}
+		if c, ok := n.decided.Get(entry.TransactionId); ok {
+			outcomeCommit = c
+			known = true
 		}
 		n.mu.Unlock()
 
@@ -210,13 +192,11 @@ func (n *Participant) Recover(ctx context.Context) error {
 			n.mu.Unlock()
 			return err
 		}
-		if n.decided != nil {
-			if decidedCommit, decided := n.decided.Get(entry.TransactionId); decided {
-				outcomeCommit = decidedCommit
-			} else if err := n.decided.AddItem(entry.TransactionId, outcomeCommit); err != nil {
-				n.mu.Unlock()
-				return err
-			}
+		if decidedCommit, decided := n.decided.Get(entry.TransactionId); decided {
+			outcomeCommit = decidedCommit
+		} else if err := n.decided.AddItem(entry.TransactionId, outcomeCommit); err != nil {
+			n.mu.Unlock()
+			return err
 		}
 		flushNotify := false
 		if outcomeCommit {
@@ -238,15 +218,13 @@ func (n *Participant) Recover(ctx context.Context) error {
 				return err
 			}
 		}
-		if n.storageDir != "" {
-			if err := n.callRecoverBoundaryHookLocked("pointer-before", entry.TransactionId); err != nil {
-				n.mu.Unlock()
-				return err
-			}
-			if err := storage.StoreProcessedPointer(n.storageDir, i+1); err != nil {
-				n.mu.Unlock()
-				return err
-			}
+		if err := n.callRecoverBoundaryHookLocked("pointer-before", entry.TransactionId); err != nil {
+			n.mu.Unlock()
+			return err
+		}
+		if err := storage.StoreProcessedPointer(n.storageDir, i+1); err != nil {
+			n.mu.Unlock()
+			return err
 		}
 		n.commitOutcomes[entry.TransactionId] = commitOutcome{
 			resp:         sinfonia.CommitResponse{Ack: true},
@@ -264,11 +242,9 @@ func (n *Participant) Recover(ctx context.Context) error {
 		n.mu.Unlock()
 		return err
 	}
-	if n.decided != nil {
-		if err := n.decided.Retain(n.allLogTxIds); err != nil {
-			n.mu.Unlock()
-			return err
-		}
+	if err := n.decided.Retain(n.allLogTxIds); err != nil {
+		n.mu.Unlock()
+		return err
 	}
 	if err := n.gcOutcomesLocked(); err != nil {
 		n.mu.Unlock()
@@ -302,7 +278,7 @@ func (n *Participant) discoverOutcome(ctx context.Context, peers map[uint32]Reco
 	}
 	n.mu.Lock()
 	peerTimeout := n.peerTimeout
-	forcedAbort := n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(entry.TransactionId)
+	forcedAbort := n.forcedAborts.IsForcedAbort(entry.TransactionId)
 	n.mu.Unlock()
 
 	knownDecision := false
@@ -371,9 +347,6 @@ func (n *Participant) SetRecoverBoundaryHookForTest(fn func(phase string, txId s
 func (n *Participant) HasDecidedForTest(txId sinfonia.TransactionID) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.decided == nil {
-		return false
-	}
 	_, ok := n.decided.Get(txId)
 	return ok
 }
@@ -381,18 +354,12 @@ func (n *Participant) HasDecidedForTest(txId sinfonia.TransactionID) bool {
 func (n *Participant) HasForcedAbortForTest(txId sinfonia.TransactionID) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.forcedAborts == nil {
-		return false
-	}
 	return n.forcedAborts.IsForcedAbort(txId)
 }
 
 func (n *Participant) ForceAbortForTest(txId sinfonia.TransactionID) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.forcedAborts == nil {
-		return errors.New("forced-abort store unavailable")
-	}
 	return n.forcedAborts.AddItem(txId)
 }
 

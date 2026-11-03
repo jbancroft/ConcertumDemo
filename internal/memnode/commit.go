@@ -43,18 +43,15 @@ func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, re
 		}
 		return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: !req.ActionCommit}, nil
 	}
-	logged := false
+	_, logged := n.allLogTxIds[req.TID]
 	knownDecision := false
-	if n.decided != nil {
-		_, logged = n.allLogTxIds[req.TID]
-		if durableAction, ok := n.decided.Get(req.TID); ok {
-			// Keep the saved decision even if log cleanup or recovery removed
-			// the other transaction state.
-			req.ActionCommit = durableAction
-			knownDecision = true
-		}
+	if durableAction, ok := n.decided.Get(req.TID); ok {
+		// Keep the saved decision even if log cleanup or recovery removed
+		// the other transaction state.
+		req.ActionCommit = durableAction
+		knownDecision = true
 	}
-	if !recoveryDecision && !knownDecision && req.ActionCommit && n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
+	if !recoveryDecision && !knownDecision && req.ActionCommit && n.forcedAborts.IsForcedAbort(req.TID) {
 		return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, nil
 	}
 	if logged && !knownDecision {
@@ -94,15 +91,11 @@ func (n *Participant) commitLocked(req sinfonia.CommitRequest) (sinfonia.CommitR
 	if n.restartRequired != nil {
 		return sinfonia.CommitResponse{RequestID: req.RequestID}, n.restartRequired
 	}
-	if n.decided != nil {
-		if _, ok := n.allLogTxIds[req.TID]; ok {
-			if durableAction, decided := n.decided.Get(req.TID); decided {
-				req.ActionCommit = durableAction
-			} else {
-				if err := n.decided.AddItem(req.TID, req.ActionCommit); err != nil {
-					return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
-				}
-			}
+	if _, ok := n.allLogTxIds[req.TID]; ok {
+		if durableAction, decided := n.decided.Get(req.TID); decided {
+			req.ActionCommit = durableAction
+		} else if err := n.decided.AddItem(req.TID, req.ActionCommit); err != nil {
+			return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
 		}
 	}
 
@@ -166,7 +159,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 	if out, ok := n.commitOutcomes[req.TID]; ok && !out.actionCommit {
 		return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch}), nil
 	}
-	if n.forcedAborts != nil && n.forcedAborts.IsForcedAbort(req.TID) {
+	if n.forcedAborts.IsForcedAbort(req.TID) {
 		return n.rememberOnePCOutcomeLocked(req.TID, sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadForced, CurrentEpoch: currentEpoch}), nil
 	}
 
@@ -204,7 +197,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 		onePCResponse: &original,
 	}
 	n.inDoubt[req.TID] = txn
-	if n.redoLog != nil && len(req.WriteItems) > 0 {
+	if len(req.WriteItems) > 0 {
 		writes := cloneWrites(req.WriteItems)
 		entry := storage.RedoLogItem{TransactionId: req.TID, HostIds: []uint32{n.hostId}, WriteItems: writes}
 		if err := n.redoLog.AddItem(entry); err != nil {
@@ -213,7 +206,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 		n.allLogTxIds[req.TID] = struct{}{}
 		txn.redoLoggedTid = true
 	}
-	if n.decided != nil && txn.redoLoggedTid {
+	if txn.redoLoggedTid {
 		if _, known := n.decided.Get(req.TID); !known {
 			if err := n.decided.AddItem(req.TID, true); err != nil {
 				n.recoveryComplete = false

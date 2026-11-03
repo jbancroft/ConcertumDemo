@@ -38,6 +38,9 @@ go build -o bin/memnode ./cmd/memnode
 go run ./demo/sinfonia-client-demo
 ```
 
+The transfer demo uses durable nodes in a temporary directory and removes that
+directory after stopping the nodes.
+
 - [Client API](sinfonia-client/client.go)
 - [Minitransaction builder](minitxn/transaction.go)
 - [Transaction coordinator](internal/client/coordinator.go)
@@ -58,17 +61,19 @@ when another participant reports a lock conflict or stale epoch.
 To run a [memnode](cmd/memnode/main.go) independently:
 
 ```sh
-go run ./cmd/memnode -id 1 -listen 127.0.0.1:7001
+go run ./cmd/memnode -id 1 -listen 127.0.0.1:7001 -data-dir tmp/node-1
 ```
 
-Add `-data-dir tmp/node-1` for persistence and `-peer ID=ADDRESS` for recovery peers.
-Use a separate ID and data directory for each node. Ctrl-C stops the node.
+Every node is durable and requires `-data-dir`. It keeps its working data in
+memory and persists its image and recovery records to that directory. Add
+`-peer ID=ADDRESS` for recovery peers. Use a separate ID and data directory for
+each node; reopen the same directory to recover its data. Ctrl-C stops the node.
 Nodes are not replicated and there is no automatic failover; an unavailable node
 can block transactions until it returns. Backup and restore are not implemented.
 Nodes accept at most 256 concurrent transaction-execution RPCs. Commit and
 recovery requests are exempt from this limit.
 The image size defaults to 2 MiB; use `-size BYTES` to choose another size when
-creating a node. Reopen durable nodes with the same size: a mismatch fails startup
+creating a node. Reopen nodes with the same size: a mismatch fails startup
 without resizing the image. Resizing existing images is not supported.
 
 `redo.log` uses framed gob records to store transaction writes for recovery.
@@ -90,8 +95,7 @@ An uncertain redo or forced-abort append faults the node until storage is reopen
 and recovery succeeds; retrying recovery on the same participant cannot clear it.
 Embedded participants use `RunRecovery` for background recovery and reply expiration.
 Stop serving requests and join that worker before calling `Participant.Close()`.
-Recovery can remain pending if a RAM node has forgotten a completed decision
-that another participant still needs. Expired, missing evidence is treated as unknown.
+Recovery treats expired transactions without retained evidence as unknown.
 Redo cleanup removes each decision after durably removing its redo entry.
 Committed entries remain until all participants have applied their writes.
 Startup finishes decision cleanup if a crash interrupts those steps. Collected
@@ -113,9 +117,6 @@ go run ./cmd/demo
 Make sure a memnode with ID 1 and the default 2 MiB size is running:
 
 ```sh
-go run ./cmd/memnode -id 1 -listen 127.0.0.1:7001
-
-# Or save and reopen tables between memnode restarts:
 go run ./cmd/memnode -id 1 -listen 127.0.0.1:7001 -data-dir tmp/repl
 ```
 
@@ -129,12 +130,13 @@ go run ./cmd/repl -host 127.0.0.1 -port 7001
 ```
 
 Enter `.help` for SQL examples or `.quit` to exit. Exiting the REPL leaves the
-memnode running; data lasts until that node stops unless it uses `-data-dir`.
+memnode running; restart that node with the same data directory to reopen tables.
 Use one memnode per data directory and one SQL session per node.
 
 For a temporary local session, `make repl` builds both executables, starts one
-in-memory memnode on `127.0.0.1:7001`, and connects the console. It stops that node
-and discards its data when the console exits. The port must be free.
+durable memnode on `127.0.0.1:7001` in a temporary directory, and connects the
+console. It stops that node and removes its data directory when the console
+exits. The port must be free.
 
 - [Engine](minuet-sql/engine.go)
 - [Catalog](minuet-sql/catalog.go)

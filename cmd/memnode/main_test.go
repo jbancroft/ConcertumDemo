@@ -32,3 +32,13 @@ func TestInvalidConfigurationDoesNotCreateStorage(t *testing.T) {
 		})
 	}
 }
+
+func TestDataDirectoryRequiredBeforeListening(t *testing.T) {
+	for _, args := range [][]string{nil, {"-data-dir", ""}} {
+		flags := append([]string{"-listen", "invalid"}, args...)
+		err := run(context.Background(), flags, nil, io.Discard, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "-data-dir is required") {
+			t.Fatalf("missing data directory: %v", err)
+		}
+	}
+}

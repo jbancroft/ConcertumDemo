@@ -17,71 +17,64 @@ func TestBackgroundRecoveryFinishesInterruptedTransaction(t *testing.T) {
 		name  string
 		onePC bool
 	}{{"prepare", false}, {"one-phase", true}} {
-		for _, mode := range []string{"RAM", "durable"} {
-			t.Run(phase.name+"/"+mode, func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				dir := t.TempDir()
-				node := memnode.NewParticipantWithId(1, 16)
-				if mode == "durable" {
-					node = durableAccessNode(t, dir)
-				}
-				tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
-				fault := errors.New("interrupted before saving original response")
-				node.SetResponseBoundaryHookForTest(func(string, sinfonia.TransactionID) error { return fault })
-				reads := []sinfonia.ReadItem{{MemID: 1, Len: 1}}
-				writes := []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}}
-				var err error
-				if phase.onePC {
-					_, err = node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, RequestID: "original", ReadItems: reads, WriteItems: writes})
-				} else {
-					_, err = node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, RequestID: "original", Participants: []uint32{1}, ReadItems: reads, WriteItems: writes})
-				}
-				if !errors.Is(err, fault) {
-					t.Fatalf("expected interrupted request: %v", err)
-				}
-				node.SetResponseBoundaryHookForTest(nil)
-				workerCtx, stopWorker := context.WithCancel(ctx)
-				workerDone := make(chan struct{})
-				go func() { defer close(workerDone); node.RunRecovery(workerCtx, nil) }()
-				defer func() { stopWorker(); <-workerDone }()
-				for {
-					pending, err := node.QueryInDoubt(ctx, sinfonia.QueryInDoubtRequest{})
-					if err != nil {
-						t.Fatal(err)
-					}
-					if len(pending.Entries) == 0 {
-						break
-					}
-					select {
-					case <-ctx.Done():
-						t.Fatal("background recovery did not finish")
-					case <-time.After(25 * time.Millisecond):
-					}
-				}
-				stopWorker()
-				<-workerDone
-				c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
-				defer c.Close()
-				if got, err := c.Read(ctx, 1, 0, 1); err != nil || string(got) != "A" {
-					t.Fatalf("background recovery did not apply write: %q, %v", got, err)
-				}
-				if err := c.Write(ctx, 1, 0, []byte("B")); err != nil {
+		t.Run(phase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			dir := t.TempDir()
+			node := openTestParticipant(t, 1, 16, dir)
+			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+			fault := errors.New("interrupted before saving original response")
+			node.SetResponseBoundaryHookForTest(func(string, sinfonia.TransactionID) error { return fault })
+			reads := []sinfonia.ReadItem{{MemID: 1, Len: 1}}
+			writes := []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}}
+			var err error
+			if phase.onePC {
+				_, err = node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, RequestID: "original", ReadItems: reads, WriteItems: writes})
+			} else {
+				_, err = node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, RequestID: "original", Participants: []uint32{1}, ReadItems: reads, WriteItems: writes})
+			}
+			if !errors.Is(err, fault) {
+				t.Fatalf("expected interrupted request: %v", err)
+			}
+			node.SetResponseBoundaryHookForTest(nil)
+			workerCtx, stopWorker := context.WithCancel(ctx)
+			workerDone := make(chan struct{})
+			go func() { defer close(workerDone); node.RunRecovery(workerCtx, nil) }()
+			defer func() { stopWorker(); <-workerDone }()
+			for {
+				pending, err := node.QueryInDoubt(ctx, sinfonia.QueryInDoubtRequest{})
+				if err != nil {
 					t.Fatal(err)
 				}
-				if mode == "durable" {
-					if err := node.Close(); err != nil {
-						t.Fatal(err)
-					}
-					node = durableAccessNode(t, dir)
-					c = &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
-					defer c.Close()
-					if got, err := c.Read(ctx, 1, 0, 1); err != nil || string(got) != "B" {
-						t.Fatalf("restart reapplied the old write: %q, %v", got, err)
-					}
+				if len(pending.Entries) == 0 {
+					break
 				}
-			})
-		}
+				select {
+				case <-ctx.Done():
+					t.Fatal("background recovery did not finish")
+				case <-time.After(25 * time.Millisecond):
+				}
+			}
+			stopWorker()
+			<-workerDone
+			c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
+			defer c.Close()
+			if got, err := c.Read(ctx, 1, 0, 1); err != nil || string(got) != "A" {
+				t.Fatalf("background recovery did not apply write: %q, %v", got, err)
+			}
+			if err := c.Write(ctx, 1, 0, []byte("B")); err != nil {
+				t.Fatal(err)
+			}
+			if err := node.Close(); err != nil {
+				t.Fatal(err)
+			}
+			node = openTestParticipant(t, 1, 16, dir)
+			c = &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
+			defer c.Close()
+			if got, err := c.Read(ctx, 1, 0, 1); err != nil || string(got) != "B" {
+				t.Fatalf("restart reapplied the old write: %q, %v", got, err)
+			}
+		})
 	}
 }
 
@@ -102,7 +95,7 @@ func TestClientReportsUnknownAfterLostCommitReply(t *testing.T) {
 		t.Run(api, func(t *testing.T) {
 			ctx := context.Background()
 			dir := t.TempDir()
-			node := durableAccessNode(t, dir)
+			node := openTestParticipant(t, 1, 16, dir)
 			failure := errors.New("connection lost")
 			disconnected := &disconnectedAfterCommit{Participant: node, failure: failure}
 			c := &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: disconnected})}
@@ -128,7 +121,7 @@ func TestClientReportsUnknownAfterLostCommitReply(t *testing.T) {
 			if err := node.Close(); err != nil {
 				t.Fatal(err)
 			}
-			node = durableAccessNode(t, dir)
+			node = openTestParticipant(t, 1, 16, dir)
 			c = &Client{coordinator: client.NewCoordinator(map[uint32]client.Participant{1: node})}
 			defer c.Close()
 			if got, err := c.Read(ctx, 1, 0, 1); err != nil || string(got) != "A" {

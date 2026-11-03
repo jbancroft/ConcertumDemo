@@ -72,7 +72,7 @@ func TestCancellationStopsChildProcesses(t *testing.T) {
 	executable := os.Getenv("MEMNODE_BIN")
 	childCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	cluster, err := Start(childCtx, executable, "", 64)
+	cluster, err := Start(childCtx, executable, t.TempDir(), 64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,62 +91,57 @@ func TestCancellationStopsChildProcesses(t *testing.T) {
 }
 
 func TestProcessesRecoverAbandonedCoordinatorWithoutRestart(t *testing.T) {
-	for _, durable := range []bool{false, true} {
-		for _, allPrepared := range []bool{false, true} {
-			t.Run(fmt.Sprintf("durable=%t/all-prepared=%t", durable, allPrepared), func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				dir := ""
-				if durable {
-					dir = t.TempDir()
+	for _, allPrepared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("all-prepared=%t", allPrepared), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			dir := t.TempDir()
+			cluster, err := Start(ctx, os.Getenv("MEMNODE_BIN"), dir, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cluster.Close()
+			tid := sinfonia.TransactionID{CoordinatorID: 44, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+			count := uint32(1)
+			if allPrepared {
+				count = 2
+			}
+			for id := uint32(1); id <= count; id++ {
+				peer := rpcwire.NewClient(cluster.config[id].RPCAddress, rpcwire.ClientOptions{})
+				var vote sinfonia.ExecPrepareResponse
+				err := peer.Call(ctx, sinfonia.MethodExecPrepare, sinfonia.ExecPrepareRequest{TID: tid, Epoch: tid.Epoch, Participants: []uint32{1, 2}, HasWrites: true, WriteItems: []sinfonia.WriteItem{{MemID: id, Data: []byte{byte(id)}}}}, &vote)
+				peer.Close()
+				if err != nil || vote.Vote != sinfonia.VoteOk {
+					t.Fatalf("prepare node %d: %+v, %v", id, vote, err)
 				}
-				cluster, err := Start(ctx, os.Getenv("MEMNODE_BIN"), dir, 64)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer cluster.Close()
-				tid := sinfonia.TransactionID{CoordinatorID: 44, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
-				count := uint32(1)
+			}
+			// No client sends a decision. The nodes must resolve the held range locks.
+			for id := uint32(1); id <= 2; id++ {
+				want := byte(0)
 				if allPrepared {
-					count = 2
+					want = byte(id)
 				}
-				for id := uint32(1); id <= count; id++ {
-					peer := rpcwire.NewClient(cluster.config[id].RPCAddress, rpcwire.ClientOptions{})
-					var vote sinfonia.ExecPrepareResponse
-					err := peer.Call(ctx, sinfonia.MethodExecPrepare, sinfonia.ExecPrepareRequest{TID: tid, Epoch: tid.Epoch, Participants: []uint32{1, 2}, HasWrites: true, WriteItems: []sinfonia.WriteItem{{MemID: id, Data: []byte{byte(id)}}}}, &vote)
-					peer.Close()
-					if err != nil || vote.Vote != sinfonia.VoteOk {
-						t.Fatalf("prepare node %d: %+v, %v", id, vote, err)
+				for {
+					got, err := cluster.Client.Read(ctx, id, 0, 1)
+					if err == nil && len(got) == 1 && got[0] == want {
+						break
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatalf("node %d stayed blocked: %x, %v", id, got, err)
+					case <-time.After(20 * time.Millisecond):
 					}
 				}
-				// No client sends a decision. The nodes must resolve the held range locks.
-				for id := uint32(1); id <= 2; id++ {
-					want := byte(0)
-					if allPrepared {
-						want = byte(id)
-					}
-					for {
-						got, err := cluster.Client.Read(ctx, id, 0, 1)
-						if err == nil && len(got) == 1 && got[0] == want {
-							break
-						}
-						select {
-						case <-ctx.Done():
-							t.Fatalf("node %d stayed blocked: %x, %v", id, got, err)
-						case <-time.After(20 * time.Millisecond):
-						}
-					}
+			}
+			if !allPrepared {
+				peer := rpcwire.NewClient(cluster.config[2].RPCAddress, rpcwire.ClientOptions{})
+				defer peer.Close()
+				var vote sinfonia.ExecPrepareResponse
+				err := peer.Call(ctx, sinfonia.MethodExecPrepare, sinfonia.ExecPrepareRequest{TID: tid, Epoch: tid.Epoch, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 2, Data: []byte("late")}}}, &vote)
+				if err != nil || vote.Vote != sinfonia.VoteBadForced {
+					t.Fatalf("late prepare reversed recovery: %+v, %v", vote, err)
 				}
-				if !allPrepared {
-					peer := rpcwire.NewClient(cluster.config[2].RPCAddress, rpcwire.ClientOptions{})
-					defer peer.Close()
-					var vote sinfonia.ExecPrepareResponse
-					err := peer.Call(ctx, sinfonia.MethodExecPrepare, sinfonia.ExecPrepareRequest{TID: tid, Epoch: tid.Epoch, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: 2, Data: []byte("late")}}}, &vote)
-					if err != nil || vote.Vote != sinfonia.VoteBadForced {
-						t.Fatalf("late prepare reversed recovery: %+v, %v", vote, err)
-					}
-				}
-			})
-		}
+			}
+		})
 	}
 }

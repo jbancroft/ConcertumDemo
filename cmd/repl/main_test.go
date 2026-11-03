@@ -94,7 +94,7 @@ func TestREPLOverTCPAndDurableReopen(t *testing.T) {
 // The test owns the node independently of the REPL, just like a separate server.
 func startREPLNode(t *testing.T, ctx context.Context, dir string) ([]string, func()) {
 	t.Helper()
-	node, err := memnode.NewDurableParticipant(1, nodeMemorySize, dir)
+	node, err := memnode.NewParticipant(1, nodeMemorySize, dir)
 	if err != nil {
 		t.Fatal(err)
 	}

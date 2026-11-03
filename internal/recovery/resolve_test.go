@@ -17,11 +17,28 @@ func (unavailable) RecoveryForceAbort(ctx context.Context, _ sinfonia.RecoverFor
 	return sinfonia.RecoverForceAbortResponse{}, ctx.Err()
 }
 
+func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant {
+	t.Helper()
+	node, err := memnode.NewParticipant(id, size, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := node.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := node.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return node
+}
+
 func TestKnownDecisionStillReachesPreparedNodeWithAnotherPeerUnavailable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
-	decided, prepared := memnode.NewParticipantWithId(2, 16), memnode.NewParticipantWithId(3, 16)
+	decided, prepared := newTestParticipant(t, 2, 16), newTestParticipant(t, 3, 16)
 	for _, node := range []*memnode.Participant{decided, prepared} {
 		resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1, 2, 3}, WriteItems: []sinfonia.WriteItem{{Data: []byte("A")}}})
 		if err != nil || resp.Vote != sinfonia.VoteOk {

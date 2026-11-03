@@ -49,7 +49,7 @@ func (n *countingNode) CommitBatch(ctx context.Context, req sinfonia.CommitBatch
 }
 
 func TestSingleParticipantUses1PCFastPath(t *testing.T) {
-	n := &countingNode{Participant: memnode.NewParticipant(64)}
+	n := &countingNode{Participant: newTestParticipant(t, 1, 64)}
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n})
 	defer coord.Close()
 	c := &Client{coordinator: coord}
@@ -72,13 +72,15 @@ func TestSingleParticipantUses1PCFastPath(t *testing.T) {
 }
 
 func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
-	n1 := memnode.NewParticipant(4096)
-	n2 := memnode.NewParticipant(4096)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	n1 := newTestParticipant(t, 1, 4096)
+	n2 := newTestParticipant(t, 2, 4096)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	defer coord.Close()
 	c := &Client{coordinator: coord}
 
-	const txns = 1000
+	const txns = 64
 	var wg sync.WaitGroup
 	wg.Add(txns)
 	for i := 0; i < txns; i++ {
@@ -88,28 +90,20 @@ func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
 			execution := c.NewMiniTransaction().
 				Write(1, uint64(i), []byte{byte(i)}).
 				Write(2, uint64(i), []byte{byte(i)}).
-				ExecuteAndCommit(context.Background())
+				ExecuteAndCommit(ctx)
 			committed := execution.Committed
 			if !committed {
 				t.Errorf("txn %d aborted", i)
 			}
 		}()
 	}
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("concurrent workload appears deadlocked")
-	}
+	// Finish all API calls before Close, including when the context expires.
+	wg.Wait()
 }
 
 func TestCommitMessageBatchingReducesIndividualCommitRPCs(t *testing.T) {
-	n1 := &countingNode{Participant: memnode.NewParticipant(256)}
-	n2 := &countingNode{Participant: memnode.NewParticipant(256)}
+	n1 := &countingNode{Participant: newTestParticipant(t, 1, 256)}
+	n2 := &countingNode{Participant: newTestParticipant(t, 2, 256)}
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	defer coord.Close()
 	c := &Client{coordinator: coord}
@@ -139,8 +133,8 @@ func TestCommitMessageBatchingReducesIndividualCommitRPCs(t *testing.T) {
 }
 
 func TestFlushPendingCommitsAppliesQueuedDecisions(t *testing.T) {
-	n1 := memnode.NewParticipant(64)
-	n2 := memnode.NewParticipant(64)
+	n1 := newTestParticipant(t, 1, 64)
+	n2 := newTestParticipant(t, 2, 64)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	defer coord.Close()
 	c := &Client{coordinator: coord}

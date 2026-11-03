@@ -20,6 +20,31 @@ import (
 
 // Durable transaction records, write boundaries, and uncertain persistence failures.
 
+func TestParticipantRequiresStorageConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   uint32
+		size int
+		dir  string
+	}{
+		{"missing directory", 1, 64, ""},
+		{"zero node ID", 0, 64, t.TempDir()},
+		{"zero size", 1, 0, t.TempDir()},
+		{"negative size", 1, -1, t.TempDir()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node, err := memnode.NewParticipant(tc.id, tc.size, tc.dir)
+			if node != nil {
+				_ = node.Close()
+				t.Fatal("invalid configuration opened a participant")
+			}
+			if err == nil {
+				t.Fatal("invalid configuration was accepted")
+			}
+		})
+	}
+}
+
 func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
 	for _, phase := range []string{"one-phase", "prepare/commit"} {
 		for _, kind := range []string{"read", "compare-only"} {
@@ -89,7 +114,7 @@ func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
 
 func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 	ctx := context.Background()
-	n, err := memnode.NewDurableParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
+	n, err := memnode.NewParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +202,7 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 func TestOnePCOutOfBoundsWriteDoesNotPersistSuccess(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
-	n, err := memnode.NewDurableParticipant(1, 32, dir)
+	n, err := memnode.NewParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +229,7 @@ func TestDurableLargeWritesSurviveRestart(t *testing.T) {
 		t.Run(map[bool]string{false: "applied", true: "committed before apply"}[interrupted], func(t *testing.T) {
 			ctx := context.Background()
 			dir := t.TempDir()
-			node, err := memnode.NewDurableParticipant(1, memorySize, dir)
+			node, err := memnode.NewParticipant(1, memorySize, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -249,7 +274,7 @@ func TestDurableLargeWritesSurviveRestart(t *testing.T) {
 			if err := node.Close(); err != nil {
 				t.Fatal(err)
 			}
-			node, err = memnode.NewDurableParticipant(1, memorySize, dir)
+			node, err = memnode.NewParticipant(1, memorySize, dir)
 			if err != nil {
 				t.Fatalf("reopen node after large writes: %v", err)
 			}
@@ -269,7 +294,7 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	dir := t.TempDir()
-	node, err := memnode.NewDurableParticipant(1, 16, dir)
+	node, err := memnode.NewParticipant(1, 16, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +357,7 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 	if err := node.Close(); err != nil {
 		t.Fatal(err)
 	}
-	node, err = memnode.NewDurableParticipant(1, 16, dir)
+	node, err = memnode.NewParticipant(1, 16, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +392,7 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 				return injected
 			})
 
-			other := memnode.NewParticipantWithId(2, 16)
+			other := newTestParticipant(t, 2, 16)
 			nodes := map[uint32]client.Participant{1: node, 2: other}
 			writes := []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}
 			if multi {
@@ -393,7 +418,7 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 			if err := node.Close(); err != nil {
 				t.Fatal(err)
 			}
-			restarted, err := memnode.NewDurableParticipant(1, 16, dir)
+			restarted, err := memnode.NewParticipant(1, 16, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -499,7 +524,7 @@ func TestRedoFailureBeforeWriteResolvesAbortAfterRestart(t *testing.T) {
 
 func newRecoveredFailureTestNode(t *testing.T, id uint32, dir string) *memnode.Participant {
 	t.Helper()
-	node, err := memnode.NewDurableParticipant(id, 16, dir)
+	node, err := memnode.NewParticipant(id, 16, dir)
 	if err != nil {
 		t.Fatal(err)
 	}

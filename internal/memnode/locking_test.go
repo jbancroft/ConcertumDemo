@@ -55,7 +55,7 @@ func TestLockManagerChecksEarlierLongReadLocks(t *testing.T) {
 
 func TestPreparedComparisonProtectsPartiallyWrittenRange(t *testing.T) {
 	ctx := context.Background()
-	n := NewParticipantWithId(1, 2)
+	n := newTestParticipant(t, 1, 2)
 	first := sinfonia.ExecPrepareRequest{
 		TID:          lockTestTID(1),
 		CmpItems:     []sinfonia.CmpItem{{Addr: 0, Data: []byte{0, 0}}},
@@ -98,7 +98,7 @@ func TestTransactionPartialReadLockConflicts(t *testing.T) {
 				}
 				t.Run(name, func(t *testing.T) {
 					ctx := context.Background()
-					n := NewParticipant(3)
+					n := newTestParticipant(t, 1, 3)
 					holder := sinfonia.ExecPrepareRequest{
 						TID:        lockTestTID(1),
 						WriteItems: []sinfonia.WriteItem{{Addr: heldAddr, Data: []byte{1}}},
@@ -153,7 +153,7 @@ func TestTransactionOverlappingItemsReleaseLocks(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			n := NewParticipant(5)
+			n := newTestParticipant(t, 1, 5)
 			req := sinfonia.ExecPrepareRequest{
 				TID:      lockTestTID(1),
 				CmpItems: []sinfonia.CmpItem{{Addr: 0, Data: make([]byte, 5)}},
@@ -196,7 +196,7 @@ func TestTransactionOverlappingItemsReleaseLocks(t *testing.T) {
 
 func TestTransactionReadLocksRemainShared(t *testing.T) {
 	ctx := context.Background()
-	n := NewParticipant(3)
+	n := newTestParticipant(t, 1, 3)
 	for counter := uint64(1); counter <= 2; counter++ {
 		req := sinfonia.ExecPrepareRequest{
 			TID:       lockTestTID(counter),
@@ -246,7 +246,7 @@ func runLockTestRequest(t *testing.T, n *Participant, onePhase bool, req sinfoni
 }
 
 func TestBadLockIncludesConflictContext(t *testing.T) {
-	n := NewParticipant(64)
+	n := newTestParticipant(t, 1, 64)
 	ctx := context.Background()
 	tid1 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	tid2 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: sinfonia.EpochAt(time.Now())}

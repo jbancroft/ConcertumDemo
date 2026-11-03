@@ -12,6 +12,28 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
+func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant {
+	t.Helper()
+	return openTestParticipant(t, id, size, t.TempDir())
+}
+
+func openTestParticipant(t testing.TB, id uint32, size int, dir string) *memnode.Participant {
+	t.Helper()
+	node, err := memnode.NewParticipant(id, size, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := node.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := node.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return node
+}
+
 func TestClientCloseReleasesWorkers(t *testing.T) {
 	workerCount := func() int {
 		stacks := make([]byte, 1<<20)
@@ -56,7 +78,7 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			coord := client.NewCoordinator(map[uint32]client.Participant{
-				1: memnode.NewParticipant(16), 2: memnode.NewParticipant(16),
+				1: newTestParticipant(t, 1, 16), 2: newTestParticipant(t, 2, 16),
 			})
 			defer coord.Close()
 			c := &Client{coordinator: coord}
@@ -103,8 +125,8 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 }
 
 func TestTwoNodeAtomicCommit(t *testing.T) {
-	n1 := memnode.NewParticipant(16)
-	n2 := memnode.NewParticipant(16)
+	n1 := newTestParticipant(t, 1, 16)
+	n2 := newTestParticipant(t, 2, 16)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	defer coord.Close()
 	c := &Client{coordinator: coord}
@@ -134,7 +156,7 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 }
 
 func TestCompareAbortNoWritesApplied(t *testing.T) {
-	n1 := memnode.NewParticipant(16)
+	n1 := newTestParticipant(t, 1, 16)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
 	defer coord.Close()
 	c := &Client{coordinator: coord}
@@ -161,8 +183,8 @@ func TestCompareAbortNoWritesApplied(t *testing.T) {
 }
 
 func TestBadLockRetryThenSuccess(t *testing.T) {
-	n1 := memnode.NewParticipant(16)
-	n2 := memnode.NewParticipant(16)
+	n1 := newTestParticipant(t, 1, 16)
+	n2 := newTestParticipant(t, 2, 16)
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1, 2: n2})
 	defer coord.Close()
 	c := &Client{coordinator: coord}

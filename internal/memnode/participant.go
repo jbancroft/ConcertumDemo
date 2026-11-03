@@ -53,33 +53,12 @@ type Participant struct {
 	writeApplyFaultHook  func(addr uint64, data []byte) error
 }
 
-func NewParticipant(size int) *Participant {
-	n := &Participant{
-		memory:          make([]byte, size),
-		inDoubt:         make(map[sinfonia.TransactionID]*preparedTxn),
-		allLogTxIds:     make(map[sinfonia.TransactionID]struct{}),
-		nowFn:           time.Now,
-		participants:    make(map[uint32]RecoveryPeer),
-		appliedLocal:    make(map[sinfonia.TransactionID]bool),
-		appliedRemote:   make(map[sinfonia.TransactionID]map[uint32]bool),
-		pendingNotify:   make(map[uint32]map[sinfonia.TransactionID]struct{}),
-		prepareOutcomes: make(map[sinfonia.TransactionID]prepareOutcome),
-		onePCOutcomes:   make(map[sinfonia.TransactionID]onePCOutcome),
-		commitOutcomes:  make(map[sinfonia.TransactionID]commitOutcome),
+// NewParticipant opens durable storage. Configure recovery peers and call Recover
+// before serving execution requests; every participant requires its own directory.
+func NewParticipant(hostId uint32, size int, dir string) (_ *Participant, err error) {
+	if hostId == 0 || size <= 0 || dir == "" {
+		return nil, errors.New("participant requires a nonzero node ID, positive size, and data directory")
 	}
-	n.recoveryComplete = true
-	n.peerTimeout = defaultPeerTimeout
-	n.executionSlots = make(chan struct{}, maxConcurrentExecutions)
-	return n
-}
-
-func NewParticipantWithId(hostId uint32, size int) *Participant {
-	n := NewParticipant(size)
-	n.hostId = hostId
-	return n
-}
-
-func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant, err error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -161,12 +140,7 @@ func NewDurableParticipant(hostId uint32, size int, dir string) (_ *Participant,
 func (n *Participant) Close() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.diskImage == nil {
-		return nil
-	}
-	err := n.diskImage.Close()
-	n.diskImage = nil
-	return err
+	return n.diskImage.Close()
 }
 
 func (n *Participant) read(addr uint64, length uint32) ([]byte, error) {
@@ -190,12 +164,7 @@ func (n *Participant) write(addr uint64, data []byte) error {
 			return err
 		}
 	}
-	if n.diskImage != nil {
-		if err := n.diskImage.ApplyWrite(addr, data); err != nil {
-			return err
-		}
-	}
-	return nil
+	return n.diskImage.ApplyWrite(addr, data)
 }
 
 // SetWriteApplyFaultForTest lets recovery tests fail a write after memory changes

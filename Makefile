@@ -42,12 +42,13 @@ demo: memnode
 repl: memnode
 	go build -o "$(REPL_BIN)" ./cmd/repl
 	@set -eu; \
-	ready=$$(mktemp "$(TMPDIR)/repl-ready.XXXXXX"); \
+	data_dir=$$(mktemp -d "$(TMPDIR)/repl.XXXXXX"); \
+	ready="$$data_dir/ready"; \
 	node_pid=; \
-	trap 'if [ -n "$$node_pid" ]; then kill "$$node_pid" 2>/dev/null || :; wait "$$node_pid" 2>/dev/null || :; fi; rm -f "$$ready"' EXIT; \
+	trap 'if [ -n "$$node_pid" ]; then kill "$$node_pid" 2>/dev/null || :; wait "$$node_pid" 2>/dev/null || :; fi; rm -rf "$$data_dir"' EXIT; \
 	trap 'exit 130' INT; \
 	trap 'exit 143' TERM; \
-	"$(MEMNODE_BIN)" -id 1 -listen 127.0.0.1:7001 >"$$ready" & \
+	"$(MEMNODE_BIN)" -id 1 -listen 127.0.0.1:7001 -data-dir "$$data_dir/node" >"$$ready" & \
 	node_pid=$$!; \
 	attempts=0; \
 	while [ ! -s "$$ready" ]; do \

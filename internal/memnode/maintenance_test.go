@@ -19,8 +19,8 @@ import (
 func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
-	b, _ := memnode.NewDurableParticipant(2, 64, filepath.Join(root, "b"))
+	a, _ := memnode.NewParticipant(1, 64, filepath.Join(root, "a"))
+	b, _ := memnode.NewParticipant(2, 64, filepath.Join(root, "b"))
 	t.Cleanup(func() { _ = a.Close() })
 	t.Cleanup(func() { _ = b.Close() })
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
@@ -55,7 +55,7 @@ func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 func TestRedoLogGCNoPrematureTruncationWithoutRemoteConfirm(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
+	a, _ := memnode.NewParticipant(1, 64, filepath.Join(root, "a"))
 	t.Cleanup(func() { _ = a.Close() })
 	if err := a.Recover(ctx); err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestRedoLogGCNoPrematureTruncationWithoutRemoteConfirm(t *testing.T) {
 func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	a, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
+	a, _ := memnode.NewParticipant(1, 64, filepath.Join(root, "a"))
 	t.Cleanup(func() { _ = a.Close() })
 	if err := a.Recover(ctx); err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
 	if err := a.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "a"))
+	restarted, err := memnode.NewParticipant(1, 64, filepath.Join(root, "a"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestRedoLogGCFailurePreservesRecoveryEvidence(t *testing.T) {
 func TestForcedAbortEpochGC(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	n, _ := memnode.NewDurableParticipant(1, 64, filepath.Join(root, "n"))
+	n, _ := memnode.NewParticipant(1, 64, filepath.Join(root, "n"))
 	t.Cleanup(func() { _ = n.Close() })
 	base := time.Unix(3600, 0)
 	n.SetClockForTest(func() time.Time { return base })
@@ -201,8 +201,8 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
 	bDir := filepath.Join(root, "b")
-	a, _ := memnode.NewDurableParticipant(1, 64, aDir)
-	b, _ := memnode.NewDurableParticipant(2, 64, bDir)
+	a, _ := memnode.NewParticipant(1, 64, aDir)
+	b, _ := memnode.NewParticipant(2, 64, bDir)
 	t.Cleanup(func() { _ = a.Close() })
 	t.Cleanup(func() { _ = b.Close() })
 	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
@@ -224,11 +224,11 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 
 	_ = a.Close()
 	// Reject a smaller image without losing the committed byte at address 7.
-	if smaller, err := memnode.NewDurableParticipant(1, 4, aDir); err == nil {
+	if smaller, err := memnode.NewParticipant(1, 4, aDir); err == nil {
 		_ = smaller.Close()
 		t.Error("expected reopening with a smaller size to fail")
 	}
-	a2, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a2, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestRecoveryAfterGCWithProcessedCheckpoint(t *testing.T) {
 			ctx := context.Background()
 			dir := t.TempDir()
 			open := func() *memnode.Participant {
-				n, err := memnode.NewDurableParticipant(1, 16, dir)
+				n, err := memnode.NewParticipant(1, 16, dir)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -339,7 +339,7 @@ func TestRedoLogGCRejectsConcurrentStartupRecovery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	dir := t.TempDir()
-	node, err := memnode.NewDurableParticipant(1, 16, dir)
+	node, err := memnode.NewParticipant(1, 16, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestRedoLogGCRejectsConcurrentStartupRecovery(t *testing.T) {
 	if err := node.Close(); err != nil {
 		t.Fatal(err)
 	}
-	node, err = memnode.NewDurableParticipant(1, 16, dir)
+	node, err = memnode.NewParticipant(1, 16, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestRedoLogGCRejectsConcurrentStartupRecovery(t *testing.T) {
 func TestRedoLogGCCheckpointFailurePreservesLog(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	node, err := memnode.NewDurableParticipant(1, 16, dir)
+	node, err := memnode.NewParticipant(1, 16, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestRedoLogGCCheckpointFailurePreservesLog(t *testing.T) {
 	if err := node.Close(); err != nil {
 		t.Fatal(err)
 	}
-	node, err = memnode.NewDurableParticipant(1, 16, dir)
+	node, err = memnode.NewParticipant(1, 16, dir)
 	if err != nil {
 		t.Fatal(err)
 	}

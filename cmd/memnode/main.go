@@ -1,4 +1,4 @@
-// Command memnode serves an in-memory or durable Sinfonia participant over TCP.
+// Command memnode serves a durable Sinfonia participant over TCP.
 package main
 
 import (
@@ -48,7 +48,7 @@ func run(ctx context.Context, args []string, input io.Reader, out, errOut io.Wri
 	id := flags.Uint64("id", 1, "unique nonzero memory node ID")
 	address := flags.String("listen", "127.0.0.1:7001", "RPC listen address (port 0 chooses a free port)")
 	size := flags.Int("size", defaultMemorySize, "memory image size in bytes")
-	dir := flags.String("data-dir", "", "durable storage directory; empty keeps data in memory")
+	dir := flags.String("data-dir", "", "required durable storage directory")
 	parent := flags.Bool("exit-on-stdin-close", false, "exit when the demo parent closes stdin")
 	peers := make(map[uint32]string)
 	flags.Func("peer", "recovery peer as ID=RPC_ADDRESS; repeat for each peer", func(value string) error {
@@ -72,6 +72,9 @@ func run(ctx context.Context, args []string, input io.Reader, out, errOut io.Wri
 	if flags.NArg() != 0 || *id == 0 || *id > math.MaxUint32 || *size <= 0 {
 		return errors.New("expected flags only, a nonzero uint32 node ID, and a positive size")
 	}
+	if *dir == "" {
+		return errors.New("-data-dir is required")
+	}
 	if _, exists := peers[uint32(*id)]; exists {
 		return errors.New("a node cannot be its own recovery peer")
 	}
@@ -88,14 +91,9 @@ func run(ctx context.Context, args []string, input io.Reader, out, errOut io.Wri
 		return err
 	}
 	defer listener.Close()
-	var node *memnode.Participant
-	if *dir == "" {
-		node = memnode.NewParticipantWithId(uint32(*id), *size)
-	} else {
-		node, err = memnode.NewDurableParticipant(uint32(*id), *size, *dir)
-		if err != nil {
-			return err
-		}
+	node, err := memnode.NewParticipant(uint32(*id), *size, *dir)
+	if err != nil {
+		return err
 	}
 	recoveryWorkers := make(map[uint32]recovery.Participant)
 	recoveryPeers := make(map[uint32]memnode.RecoveryPeer)

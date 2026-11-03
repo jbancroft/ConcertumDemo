@@ -36,10 +36,13 @@ type Cluster struct {
 	err    error
 }
 
-// Start launches two nodes. An empty data directory selects in-memory storage.
+// Start launches two durable nodes using separate subdirectories of dataDir.
 func Start(ctx context.Context, binary, dataDir string, memorySize int) (_ *Cluster, err error) {
 	if binary == "" {
 		return nil, errors.New("memnode executable required; use the Makefile demo or test target")
+	}
+	if dataDir == "" {
+		return nil, errors.New("memnode data directory required")
 	}
 	c := &Cluster{}
 	defer func() {
@@ -67,10 +70,8 @@ func Start(ctx context.Context, binary, dataDir string, memorySize int) (_ *Clus
 	}
 	for id := uint32(1); id <= 2; id++ {
 		args := []string{"-id", fmt.Sprint(id), "-listen", config[id].RPCAddress,
-			"-size", strconv.Itoa(memorySize), "-exit-on-stdin-close"}
-		if dataDir != "" {
-			args = append(args, "-data-dir", filepath.Join(dataDir, fmt.Sprint(id)))
-		}
+			"-size", strconv.Itoa(memorySize), "-exit-on-stdin-close",
+			"-data-dir", filepath.Join(dataDir, fmt.Sprint(id))}
 		for peerID := uint32(1); peerID <= 2; peerID++ {
 			if peerID != id {
 				args = append(args, "-peer", fmt.Sprintf("%d=%s", peerID, config[peerID].RPCAddress))

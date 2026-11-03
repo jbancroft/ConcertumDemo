@@ -26,12 +26,12 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	dir := t.TempDir()
 	aDir := filepath.Join(dir, "a")
 	bDir := filepath.Join(dir, "b")
-	a, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	b, err := memnode.NewDurableParticipant(2, 64, bDir)
+	b, err := memnode.NewParticipant(2, 64, bDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	}
 
 	_ = a.Close()
-	a2, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a2, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,12 +74,12 @@ func TestRecoveryRejectsTornCommitRecord(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	aDir, bDir := filepath.Join(root, "a"), filepath.Join(root, "b")
-	a, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	b, err := memnode.NewDurableParticipant(2, 64, bDir)
+	b, err := memnode.NewParticipant(2, 64, bDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestRecoveryRejectsTornCommitRecord(t *testing.T) {
 	// during recovery. They must never become authoritative abort evidence.
 	// Manual repair is acceptable for now. Future recovery could automate safe
 	// torn-tail repair using intact redo and peer decision evidence.
-	restarted, err := memnode.NewDurableParticipant(2, 64, bDir)
+	restarted, err := memnode.NewParticipant(2, 64, bDir)
 	if err != nil {
 		return
 	}
@@ -154,12 +154,12 @@ func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
 	dir := t.TempDir()
 	aDir := filepath.Join(dir, "a")
 	bDir := filepath.Join(dir, "b")
-	a, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	b, err := memnode.NewDurableParticipant(2, 64, bDir)
+	b, err := memnode.NewParticipant(2, 64, bDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
 	}
 
 	_ = a.Close()
-	a2, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a2, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,12 +199,12 @@ func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
-	a, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	b, err := memnode.NewDurableParticipant(2, 64, filepath.Join(root, "b"))
+	b, err := memnode.NewParticipant(2, 64, filepath.Join(root, "b"))
 	if err != nil {
 		_ = a.Close()
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
 	if err := a.Close(); err != nil {
 		t.Fatal(err)
 	}
-	a2, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a2, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,12 +252,12 @@ func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
-	a, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	b, err := memnode.NewDurableParticipant(2, 64, filepath.Join(root, "b"))
+	b, err := memnode.NewParticipant(2, 64, filepath.Join(root, "b"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
 	if err := a.Close(); err != nil {
 		t.Fatal(err)
 	}
-	a, err = memnode.NewDurableParticipant(1, 64, aDir)
+	a, err = memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			node, err := memnode.NewDurableParticipant(1, 64, t.TempDir())
+			node, err := memnode.NewParticipant(1, 64, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -365,7 +365,7 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	node, err := memnode.NewDurableParticipant(1, 64, dir)
+	node, err := memnode.NewParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 	if err := node.Close(); err != nil {
 		t.Fatal(err)
 	}
-	node, err = memnode.NewDurableParticipant(1, 64, dir)
+	node, err = memnode.NewParticipant(1, 64, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,8 +410,8 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 	}
 }
 
-func TestRecoveryAbortRejectsLateOnePhaseRequestOnRAMNode(t *testing.T) {
-	node := memnode.NewParticipantWithId(1, 16)
+func TestRecoveryAbortRejectsLateOnePhaseRequest(t *testing.T) {
+	node := newTestParticipant(t, 1, 16)
 	ctx := context.Background()
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	vote, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: tid})
@@ -444,11 +444,11 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
 	bDir := filepath.Join(root, "b")
-	a, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := memnode.NewDurableParticipant(2, 64, bDir)
+	b, err := memnode.NewParticipant(2, 64, bDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +474,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableParticipant(1, 64, aDir)
+	restarted, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,11 +590,11 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 			root := t.TempDir()
 			aDir := filepath.Join(root, "a")
 			bDir := filepath.Join(root, "b")
-			a, err := memnode.NewDurableParticipant(1, 64, aDir)
+			a, err := memnode.NewParticipant(1, 64, aDir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, err := memnode.NewDurableParticipant(2, 64, bDir)
+			b, err := memnode.NewParticipant(2, 64, bDir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -620,7 +620,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			restarted, err := memnode.NewDurableParticipant(1, 64, aDir)
+			restarted, err := memnode.NewParticipant(1, 64, aDir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -684,11 +684,11 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
-	a, err := memnode.NewDurableParticipant(1, 64, aDir)
+	a, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := memnode.NewParticipantWithId(2, 64)
+	b := newTestParticipant(t, 2, 64)
 
 	txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
@@ -706,7 +706,7 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableParticipant(1, 64, aDir)
+	restarted, err := memnode.NewParticipant(1, 64, aDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +734,7 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 }
 
 func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
-	node, err := memnode.NewDurableParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
+	node, err := memnode.NewParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
 	}

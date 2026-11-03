@@ -1,9 +1,24 @@
 package memnode
 
 import (
+	"context"
 	"os"
+	"testing"
 	"time"
 )
+
+func newTestParticipant(t testing.TB, id uint32, size int) *Participant {
+	t.Helper()
+	node, err := NewParticipant(id, size, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = node.Close() })
+	if err := node.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return node
+}
 
 func (n *Participant) SetForcedAbortFsyncHookForTest(fn func(*os.File) error) {
 	n.mu.Lock()

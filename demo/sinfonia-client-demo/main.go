@@ -34,12 +34,17 @@ func main() {
 }
 
 func run(ctx context.Context, executable string, out io.Writer) (err error) {
-	cluster, err := democluster.Start(ctx, executable, "", balanceSize)
+	dir, err := os.MkdirTemp("", "concertum-sinfonia-")
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, os.RemoveAll(dir)) }()
+	cluster, err := democluster.Start(ctx, executable, dir, balanceSize)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, cluster.Close()) }()
-	fmt.Fprintln(out, "Two in-memory memnode processes listening on loopback TCP")
+	fmt.Fprintln(out, "Two durable memnode processes listening on loopback TCP")
 	return demonstrate(ctx, cluster.Client, out)
 }
 

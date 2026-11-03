@@ -42,7 +42,7 @@ there's no global list of hosts. Public items use `HostId`, `Address`, and
 All application data access uses minitransactions. `Client.Read` and
 `Client.Write` submit one read or write item through the coordinator's
 single-participant path. Both respect prepared transaction locks and RPC
-readiness. Writes work on RAM and durable nodes. Raw read/write RPCs and
+readiness. All memory nodes are durable. Raw read/write RPCs and
 public participant access methods are removed; private byte-access helpers are
 used only inside node operations.
 
@@ -77,7 +77,7 @@ For the main walkthrough, follow `ExecAndPrepare` in `prepare.go` and then
 All byte addresses must be known before the transaction starts. For a transaction
 that touches several nodes, the coordinator sends each node its part in parallel.
 Each participant tries to lock its ranges without waiting, checks comparisons,
-collects reads, and logs prepared writes before voting yes in durable mode.
+collects reads, and logs prepared writes before voting yes.
 A participant with no local writes still logs its yes vote if the transaction
 writes elsewhere, so recovery can account for everyone's vote.
 
@@ -125,13 +125,16 @@ limit. This assumes roughly synchronized system clocks.
 
 ## Disk storage and recovery
 
-A durable node saves its memory image, redo entries, decisions, and forced-abort
-records. On restart it uses those records and asks recovery
+Every node keeps its working data in memory and saves its memory image, redo
+entries, decisions, and forced-abort records to its required data directory.
+`memnode.NewParticipant` takes the node ID, image size, and directory. Callers
+configure peers and complete `Recover` before serving application requests.
+On restart the node uses those records and asks recovery
 peers for evidence about unfinished transactions. Missing evidence can keep it
 from finishing recovery or serving requests. A coordinator disappearing doesn't
 give a prepared participant permission to abort on its own.
 
-Each durable participant owns its disk image, including cleanup when construction
+Each participant owns its disk image, including cleanup when construction
 fails. After requests and externally started recovery workers have stopped,
 `Participant.Close` closes the image. Each redo append writes and syncs its record
 before returning success. Appends and compaction share the log mutex.
@@ -165,13 +168,13 @@ log is preserved for manual repair.
 
 The shared [recovery coordinator](../internal/recovery/resolve.go) asks participants
 for their existing votes. A node that has not voted records a forced abort and
-rejects a late request for that transaction ID, including on RAM nodes. A saved
+rejects a late request for that transaction ID. A saved
 decision takes precedence; otherwise all yes votes establish commit and any no
 vote establishes abort. An unreachable participant is never counted as a no.
-Missing evidence for a stale transaction returns `ErrRecoveryPending`: a RAM
-node may have committed and expired its cached decision while a peer is still
-prepared. Retained votes and decisions still take precedence. If no other node
-retains a decision, such a transaction can remain unresolved.
+Missing evidence for a stale transaction returns `ErrRecoveryPending`:
+collection removes transaction history, so absence alone does not establish an
+abort. Retained votes and decisions still take precedence. If no other node
+retains enough evidence, such a transaction can remain unresolved.
 Probes and decision deliveries run concurrently, with time reserved for delivery
 so an unreachable peer cannot block progress at reachable nodes. Recovery waits
 for an in-flight prepare or one-node request before determining its vote.
@@ -186,8 +189,7 @@ A failed storage write leaves a node unavailable until successful restart recove
 the background worker does not repair failed storage. If a one-node transaction
 cannot save its decision after logging redo, it retains its pending writes and
 locks and returns an unknown-outcome error to the caller. Node recovery can
-finish that same attempt. RAM nodes
-cannot preserve data or transaction evidence across a process restart.
+finish that same attempt.
 
 A redo append error is ambiguous: bytes can reach disk before `fsync` reports
 failure, leaving the log's in-memory index incomplete. This retains the full
@@ -221,7 +223,7 @@ restart recovery.
 Tests cover full and partial cleanup after a nonzero checkpoint, interrupted
 recovery, failed writes, duplicate requests, and forced aborts.
 
-Before discarding old replies or forced-abort records, a durable node saves an
+Before discarding old replies or forced-abort records, each node saves an
 epoch floor. Restarts preserve that floor so a clock rollback cannot make a
 forgotten transaction eligible to execute again.
 Forced-abort and decision logs use the same replacement procedure to preserve

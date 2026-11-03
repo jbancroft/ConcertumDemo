@@ -79,9 +79,6 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 	n.FlushAppliedNotifications(ctx)
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.redoLog == nil {
-		return nil
-	}
 	// Startup recovery uses a snapshot of log indexes and writes its checkpoint
 	// between entries. Do not compact that log until recovery has finished.
 	if !n.recoveryComplete {
@@ -90,10 +87,7 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 	entries := n.redoLog.Entries()
 	truncateCount := 0
 	for _, entry := range entries {
-		committed, known := false, false
-		if n.decided != nil {
-			committed, known = n.decided.Get(entry.TransactionId)
-		}
+		committed, known := n.decided.Get(entry.TransactionId)
 		if !known {
 			break
 		}
@@ -158,9 +152,6 @@ func (n *Participant) RunRedoLogGCRPC(ctx context.Context, _ sinfonia.RunRedoLog
 func (n *Participant) RunForcedAbortGC() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.forcedAborts == nil {
-		return nil
-	}
 	current := n.currentEpochLocked()
 	if err := n.persistEpochFloorLocked(current); err != nil {
 		return err
@@ -177,17 +168,12 @@ func (n *Participant) RunForcedAbortGCRPC(ctx context.Context, _ sinfonia.RunFor
 func (n *Participant) SetRedoFsyncHookForTest(fn func(*os.File) error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.redoLog != nil {
-		n.redoLog.SetFsyncHookForTest(fn)
-	}
+	n.redoLog.SetFsyncHookForTest(fn)
 }
 
 func (n *Participant) RedoEntryCountForTest() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.redoLog == nil {
-		return 0
-	}
 	return len(n.redoLog.Entries())
 }
 

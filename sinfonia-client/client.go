@@ -88,7 +88,7 @@ func (c *Client) Read(ctx context.Context, hostId uint32, addr uint64, length ui
 	return c.coordinator.Read(ctx, hostId, addr, length)
 }
 
-// Write executes a write-only minitransaction on either a RAM or durable node.
+// Write executes a write-only minitransaction on a memory node.
 // ErrUnknownOutcome means the write may have committed.
 func (c *Client) Write(ctx context.Context, hostId uint32, addr uint64, data []byte) error {
 	return c.coordinator.Write(ctx, hostId, addr, data)

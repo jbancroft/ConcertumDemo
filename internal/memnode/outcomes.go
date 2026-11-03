@@ -81,11 +81,8 @@ func (n *Participant) hasDurableTransactionLocked(txId sinfonia.TransactionID) b
 	if _, ok := n.allLogTxIds[txId]; ok {
 		return true
 	}
-	if n.decided != nil {
-		_, ok := n.decided.Get(txId)
-		return ok
-	}
-	return false
+	_, ok := n.decided.Get(txId)
+	return ok
 }
 
 func (n *Participant) callResponseBoundaryHookLocked(phase string, txId sinfonia.TransactionID) error {

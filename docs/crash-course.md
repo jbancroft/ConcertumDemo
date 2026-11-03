@@ -33,18 +33,20 @@ In this Go demo, the client library is the **coordinator**; the affected nodes
 are **participants**. Execution has two phases:
 
 1. **Prepare:** participants lock the ranges, check comparisons, collect reads,
-   and, in durable mode, log the work needed for recovery before voting yes.
+   and log the work needed for recovery before voting yes when the transaction
+   has writes. Every memory node in this demo is durable.
 2. **Commit or abort:** the coordinator commits only if every participant votes
    yes. It sends the decision; participants apply committed writes and release locks.
 
 Lock conflicts cause bounded retries. A transaction touching one node uses a
 single execute-and-commit call.
 
-After a lost reply, the client checks the original transaction's saved votes and
-decisions. Nodes also finish abandoned transactions in the background: all yes
-votes mean commit; a no vote means abort. Recovery never reruns the write.
-If an outage outlasts the caller's deadline, the result is still **unknown**, with
-a handle for checking again later. Durable nodes retain evidence across restarts.
+After a lost reply, the client returns an **unknown** outcome without retrying.
+Nodes finish abandoned transactions in the background: all yes votes mean
+commit; a no vote means abort. They retain recovery records across restarts until
+those records can be collected. Original replies are cached only in memory,
+and there is no public transaction-history lookup. Callers must reconcile an
+uncertain write against application state before deciding what to do next.
 
 ## Minuet: an index on top
 

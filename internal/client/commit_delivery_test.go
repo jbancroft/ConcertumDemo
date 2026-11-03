@@ -21,8 +21,8 @@ import (
 func TestCoordinatorCloseDrainsDecisions(t *testing.T) {
 	for _, mode := range []string{"commit", "abort", "delivery failure"} {
 		t.Run(mode, func(t *testing.T) {
-			n1 := memnode.NewParticipant(16)
-			n2 := memnode.NewParticipant(16)
+			n1 := newTestParticipant(t, 1, 16)
+			n2 := newTestParticipant(t, 2, 16)
 			nodes := map[uint32]Participant{1: n1, 2: n2}
 			if mode == "delivery failure" {
 				nodes[2] = &failingCommitNode{Participant: n2}
@@ -54,10 +54,10 @@ func TestCoordinatorCloseDrainsDecisions(t *testing.T) {
 }
 
 func TestFlushPendingCommitsReportsEarlierTimerDeliveryFailure(t *testing.T) {
-	failing := &failingCommitNode{Participant: memnode.NewParticipant(16)}
+	failing := &failingCommitNode{Participant: newTestParticipant(t, 1, 16)}
 	coord := NewCoordinator(map[uint32]Participant{
 		1: failing,
-		2: memnode.NewParticipant(16),
+		2: newTestParticipant(t, 2, 16),
 	})
 	defer coord.Close()
 	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{
@@ -76,10 +76,10 @@ func TestFlushPendingCommitsReportsEarlierTimerDeliveryFailure(t *testing.T) {
 }
 
 func TestFlushPendingCommitsReportsUnacknowledgedFallbackDelivery(t *testing.T) {
-	unacknowledged := &unacknowledgedFallbackCommitNode{Participant: memnode.NewParticipant(16)}
+	unacknowledged := &unacknowledgedFallbackCommitNode{Participant: newTestParticipant(t, 1, 16)}
 	coord := NewCoordinator(map[uint32]Participant{
 		1: unacknowledged,
-		2: memnode.NewParticipant(16),
+		2: newTestParticipant(t, 2, 16),
 	})
 	defer coord.Close()
 	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{
@@ -102,8 +102,8 @@ func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T
 	gate := make(chan struct{})
 	release := sync.OnceFunc(func() { close(gate) })
 	defer release()
-	n1 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
-	n2 := newPhaseTwoNode(memnode.NewParticipant(64), gate)
+	n1 := newPhaseTwoNode(newTestParticipant(t, 1, 64), nil)
+	n2 := newPhaseTwoNode(newTestParticipant(t, 2, 64), gate)
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 	defer func() { release(); _ = coord.Close() }()
 
@@ -159,8 +159,8 @@ func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T
 func TestCoordinatorPhaseTwoDeliversAbortAfterRejectedPrepare(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	n1 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
-	n2 := newPhaseTwoNode(memnode.NewParticipant(64), nil)
+	n1 := newPhaseTwoNode(newTestParticipant(t, 1, 64), nil)
+	n2 := newPhaseTwoNode(newTestParticipant(t, 2, 64), nil)
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 	defer coord.Close()
 	result := coord.ExecuteAndCommit(ctx, []sinfonia.CmpItem{{MemID: 2, Addr: 8, Data: []byte("stale")}}, nil, twoParticipantWrites())
@@ -328,7 +328,7 @@ func openPhaseTwoNodes(t *testing.T, dir string) []*memnode.Participant {
 	t.Helper()
 	var nodes []*memnode.Participant
 	for id := uint32(1); id <= 2; id++ {
-		node, err := memnode.NewDurableParticipant(id, 64, filepath.Join(dir, fmt.Sprintf("node-%d", id)))
+		node, err := memnode.NewParticipant(id, 64, filepath.Join(dir, fmt.Sprintf("node-%d", id)))
 		if err != nil {
 			t.Fatal(err)
 		}

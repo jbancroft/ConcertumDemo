@@ -15,7 +15,7 @@ import (
 // Duplicate requests preserve the original response without reapplying writes.
 
 func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testing.T) {
-	n := memnode.NewParticipant(8)
+	n := newTestParticipant(t, 1, 8)
 	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecCommit1PCRequest{TID: txId, RequestID: "first", ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
 	resp, err := n.ExecCommit1PC(context.Background(), req)
@@ -36,7 +36,7 @@ func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testin
 }
 
 func TestPrepareAndCommitDuplicateTIDReturnOriginalOutcomeAfterResponseLoss(t *testing.T) {
-	n := memnode.NewParticipant(8)
+	n := newTestParticipant(t, 1, 8)
 	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: sinfonia.EpochAt(time.Now())}
 	prep := sinfonia.ExecPrepareRequest{TID: txId, RequestID: "prepare-1", Participants: []uint32{1}, ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
 	resp, err := n.ExecAndPrepare(context.Background(), prep)
@@ -135,7 +135,7 @@ func TestDurableResponsesAreNotLoggedOrRestored(t *testing.T) {
 func TestPrepareCrashAfterRedoBeforeResponseDoesNotReexecuteKnownTID(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
-	n, err := memnode.NewDurableParticipant(1, 32, dir)
+	n, err := memnode.NewParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestPrepareCrashAfterRedoBeforeResponseDoesNotReexecuteKnownTID(t *testing.
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableParticipant(1, 32, dir)
+	restarted, err := memnode.NewParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestOnePCCrashAfterDecisionBeforeResponseDoesNotReexecuteKnownTID(t *testin
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "node")
 	now := time.Unix(100*3600, 0)
-	n, err := memnode.NewDurableParticipant(1, 32, dir)
+	n, err := memnode.NewParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestOnePCCrashAfterDecisionBeforeResponseDoesNotReexecuteKnownTID(t *testin
 		t.Fatal(err)
 	}
 
-	restarted, err := memnode.NewDurableParticipant(1, 32, dir)
+	restarted, err := memnode.NewParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestOnePCCrashAfterDecisionBeforeResponseDoesNotReexecuteKnownTID(t *testin
 	if err := restarted.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err = memnode.NewDurableParticipant(1, 32, dir)
+	restarted, err = memnode.NewParticipant(1, 32, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
