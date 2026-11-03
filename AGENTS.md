@@ -10,6 +10,11 @@ Prioritize clear code, correct demonstrated behavior, and easy local execution.
   invariants rather than reproducing the implementation. For transaction,
   storage, and recovery changes, cover relevant failure and boundary cases.
 
+- Keep test-only helpers, accessors, and setup methods in `_test.go` files.
+  Do not add exported production APIs solely for tests. Prefer same-package
+  tests and private dependency injection; keep unavoidable production testing
+  seams minimal and justify them.
+
 - Maintain one current API, implementation, and data format. Add legacy or
   backward compatibility only when explicitly requested.
 
