@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -347,6 +348,56 @@ func TestRedoLogCompactionReplacesCompleteFile(t *testing.T) {
 				if entry.TransactionId.Counter != uint64(count+i+1) {
 					t.Fatalf("entry %d = %+v", i, entry)
 				}
+			}
+		})
+	}
+}
+
+func TestForcedAbortLogReaderEOFAndMalformedRecords(t *testing.T) {
+	first := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 100}
+	later := sinfonia.TransactionID{CoordinatorID: 1, Counter: 2, Epoch: 100}
+	for _, tc := range []struct {
+		name    string
+		data    string
+		wantErr bool
+	}{
+		{name: "empty"},
+		{name: "complete record", data: "1:1:100\n"},
+		{name: "partial ID", data: "1:1:100\n1:2:", wantErr: true},
+		{name: "missing newline", data: "1:1:100\n1:2:100", wantErr: true},
+		{name: "invalid ID", data: "1:1:100\n1:two:100\n", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "forced_abort.log")
+			if err := os.WriteFile(path, []byte(tc.data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			log, err := OpenForcedAbortLog(dir)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("accepted malformed forced-abort log")
+				}
+				if !strings.Contains(err.Error(), path+":2:") {
+					t.Fatalf("error does not identify the file and line: %v", err)
+				}
+				if got, err := os.ReadFile(path); err != nil || string(got) != tc.data {
+					t.Fatalf("failed open modified forced-abort log: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := log.AddItem(later); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := OpenForcedAbortLog(dir)
+			if err != nil {
+				t.Fatalf("reopen after append: %v", err)
+			}
+			if !reopened.IsForcedAbort(later) || reopened.IsForcedAbort(first) != (tc.data != "") {
+				t.Fatal("reopening lost or invented a forced-abort record")
 			}
 		})
 	}

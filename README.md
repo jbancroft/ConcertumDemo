@@ -79,8 +79,9 @@ Read-only and compare-only minitransactions append neither redo nor decision
 records. Their original outcomes and read results are not recoverable after a
 participant restart; issue a fresh read-only transaction if needed.
 
-Malformed decision-log records block startup with an error identifying the file
-and line. The log is preserved for manual repair; automatic repair is not implemented.
+Malformed decision-log records and malformed or unterminated forced-abort records
+block startup with an error identifying the file and line. The log is preserved
+for manual repair; automatic repair is not implemented.
 An uncertain redo or forced-abort append faults the node until storage is reopened
 and recovery succeeds; retrying recovery on the same participant cannot clear it.
 Embedded participants use `RunRecovery` for background recovery and reply expiration.

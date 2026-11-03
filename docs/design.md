@@ -156,6 +156,10 @@ Malformed or incomplete redo records block startup without modifying the log,
 since discarding one could lose transaction evidence. Recovery never treats a
 missing original reply as an abort decision.
 
+Forced-abort records must contain a valid transaction ID and end with a newline.
+Malformed or unterminated records block startup with a file-and-line error; the
+log is preserved for manual repair.
+
 The shared [recovery coordinator](../internal/recovery/resolve.go) asks participants
 for their existing votes. A node that has not voted records a forced abort and
 rejects a late request for that transaction ID, including on RAM nodes. A saved

@@ -269,15 +269,26 @@ func OpenForcedAbortLog(dir string) (*ForcedAbortLog, error) {
 	}
 	defer f.Close()
 	out := map[string]struct{}{}
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		k := strings.TrimSpace(s.Text())
-		if k != "" {
-			out[k] = struct{}{}
+	reader := bufio.NewReader(f)
+	for lineNumber := 1; ; lineNumber++ {
+		line, err := reader.ReadString('\n')
+		if err == io.EOF {
+			if len(line) == 0 {
+				break
+			}
+			// Even a parseable ID may be torn; appending would merge the next
+			// vote into this record if its terminating newline is missing.
+			return nil, fmt.Errorf("%s:%d: incomplete forced-abort record: missing newline", p, lineNumber)
 		}
-	}
-	if err := s.Err(); err != nil {
-		return nil, err
+		if err != nil {
+			return nil, fmt.Errorf("%s:%d: read forced-abort record: %w", p, lineNumber, err)
+		}
+		key := strings.TrimSuffix(line, "\n")
+		tid, ok := parseTidKey(key)
+		if !ok {
+			return nil, fmt.Errorf("%s:%d: invalid forced-abort transaction ID %q", p, lineNumber, key)
+		}
+		out[tidKey(tid)] = struct{}{}
 	}
 	return &ForcedAbortLog{path: p, set: out, fsyncFn: (*os.File).Sync}, nil
 }
