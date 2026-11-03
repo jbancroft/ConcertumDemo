@@ -62,7 +62,7 @@ func TestMiniTransactionRetainsOperationsAndOwnsData(t *testing.T) {
 		t.Fatalf("changing returned host IDs changed the transaction: %v", got)
 	}
 
-	execution := tx.ExecuteAndCommit(context.Background())
+	execution := tx.ExecuteAndCommit(t.Context())
 
 	committed, status := execution.Committed, execution.Status
 	if !committed || status != StatusCommitted {
@@ -81,6 +81,32 @@ func TestMiniTransactionRetainsOperationsAndOwnsData(t *testing.T) {
 	executor.writes[0].Data[0] = 'Q'
 	if string(tx.Compares()[0].Data) != "compare" || string(tx.Writes()[0].Data) != "write" {
 		t.Fatal("executor mutated the reusable transaction builder")
+	}
+}
+
+func TestMiniTransactionNormalizesEmptyData(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "nil"},
+		{name: "empty", data: []byte{}},
+		{name: "empty with capacity", data: make([]byte, 0, 8)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			executor := &recordingExecutor{}
+			tx := NewMiniTransaction(executor).Compare(1, 0, tc.data).Write(1, 0, tc.data)
+			tx.ExecuteAndCommit(t.Context())
+			for _, data := range [][]byte{
+				tx.Compares()[0].Data, tx.CompareItemsForHost(1)[0].Data,
+				tx.Writes()[0].Data, tx.WriteItemsForHost(1)[0].Data,
+				executor.compares[0].Data, executor.writes[0].Data,
+			} {
+				if data != nil {
+					t.Fatalf("empty operation data = %#v, want nil", data)
+				}
+			}
+		})
 	}
 }
 

@@ -35,7 +35,7 @@ func TestCoordinatorCloseDrainsDecisions(t *testing.T) {
 				compares = []sinfonia.CmpItem{{MemID: 2, Data: []byte("stale")}}
 				want = "\x00"
 			}
-			result := coord.ExecuteAndCommit(context.Background(), compares, nil, twoParticipantWrites())
+			result := coord.ExecuteAndCommit(t.Context(), compares, nil, twoParticipantWrites())
 			if result.Committed != (mode != "abort") || result.UnknownOutcome {
 				t.Fatalf("unexpected decision: %+v", result)
 			}
@@ -45,7 +45,7 @@ func TestCoordinatorCloseDrainsDecisions(t *testing.T) {
 				}
 			}
 			// Delivery must finish at the reachable node and release its locks.
-			got, err := readParticipant(context.Background(), n1, 8, 1)
+			got, err := readParticipant(t.Context(), n1, 8, 1)
 			if err != nil || string(got) != want {
 				t.Fatalf("value after Close=%q, want %q; error=%v", got, want, err)
 			}
@@ -60,7 +60,7 @@ func TestFlushPendingCommitsReportsEarlierTimerDeliveryFailure(t *testing.T) {
 		2: newTestParticipant(t, 2, 16),
 	})
 	defer coord.Close()
-	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{
+	res := coord.ExecuteAndCommit(t.Context(), nil, nil, []sinfonia.WriteItem{
 		{MemID: 1, Addr: 0, Data: []byte("A")},
 		{MemID: 2, Addr: 0, Data: []byte("B")},
 	})
@@ -68,7 +68,7 @@ func TestFlushPendingCommitsReportsEarlierTimerDeliveryFailure(t *testing.T) {
 		t.Fatalf("expected commit decision before phase-two delivery: %+v", res)
 	}
 	time.Sleep(20 * time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	if err := coord.FlushPendingCommits(ctx); err == nil {
 		t.Fatal("expected flush to report the earlier phase-two delivery failure")
@@ -82,14 +82,14 @@ func TestFlushPendingCommitsReportsUnacknowledgedFallbackDelivery(t *testing.T) 
 		2: newTestParticipant(t, 2, 16),
 	})
 	defer coord.Close()
-	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{
+	res := coord.ExecuteAndCommit(t.Context(), nil, nil, []sinfonia.WriteItem{
 		{MemID: 1, Addr: 0, Data: []byte("A")},
 		{MemID: 2, Addr: 0, Data: []byte("B")},
 	})
 	if !res.Committed {
 		t.Fatalf("expected commit decision before phase-two delivery: %+v", res)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	if err := coord.FlushPendingCommits(ctx); err == nil {
 		t.Fatal("expected flush to report the unacknowledged fallback delivery")
@@ -97,7 +97,7 @@ func TestFlushPendingCommitsReportsUnacknowledgedFallbackDelivery(t *testing.T) 
 }
 
 func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	gate := make(chan struct{})
 	release := sync.OnceFunc(func() { close(gate) })
@@ -157,7 +157,7 @@ func TestCoordinatorPhaseTwoUsesGeneratedIDsAndAsynchronousDelivery(t *testing.T
 }
 
 func TestCoordinatorPhaseTwoDeliversAbortAfterRejectedPrepare(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	n1 := newPhaseTwoNode(newTestParticipant(t, 1, 64), nil)
 	n2 := newPhaseTwoNode(newTestParticipant(t, 2, 64), nil)
@@ -189,13 +189,12 @@ func TestCoordinatorRecoversAfterPartialCommitDelivery(t *testing.T) {
 	for _, mode := range []string{"batch", "fallback"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCoordinatorRecoversAfterPartialCommitDelivery$")
 			cmd.Env = append(os.Environ(), "CONCERTUM_PHASE_TWO_CRASH_DIR="+dir, "CONCERTUM_PHASE_TWO_DELIVERY="+mode)
 			output, err := cmd.CombinedOutput()
-			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 23 {
+			if exitErr, ok := errors.AsType[*exec.ExitError](err); !ok || exitErr.ExitCode() != 23 {
 				t.Fatalf("helper did not exit at the partial-delivery checkpoint: %v\n%s", err, output)
 			}
 			data, err := os.ReadFile(filepath.Join(dir, "transaction.json"))
@@ -346,7 +345,7 @@ func openPhaseTwoNodes(t *testing.T, dir string) []*memnode.Participant {
 
 func runPhaseTwoCrashHelper(t *testing.T, dir string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	nodes := openPhaseTwoNodes(t, dir)
 	for _, node := range nodes {

@@ -2,12 +2,10 @@ package minuetsql
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
-	"sync/atomic"
 	"testing"
 
 	minuetindex "github.com/jbancroft/ConcertumDemo/minuet-index"
@@ -29,7 +27,7 @@ func newRegionTestEngine(t *testing.T, client sinfoniaclient.TxnClient, regionSi
 
 func execOK(t *testing.T, e *Engine, sql string) QueryResult {
 	t.Helper()
-	result, err := e.Exec(context.Background(), sql)
+	result, err := e.Exec(t.Context(), sql)
 	if err != nil {
 		t.Fatalf("%s: %v", sql, err)
 	}
@@ -73,7 +71,7 @@ func TestTableRegionsStayIsolatedAndPersistOnReopen(t *testing.T) {
 	fillAdjacentTables(t, e)
 	checkAdjacentTables(t, e)
 	before := bytes.Clone(client.ram)
-	if _, err := e.Exec(context.Background(), "INSERT INTO alpha VALUES (13, 130)"); !errors.Is(err, ErrTableFull) {
+	if _, err := e.Exec(t.Context(), "INSERT INTO alpha VALUES (13, 130)"); !errors.Is(err, ErrTableFull) {
 		t.Fatalf("full table insert: %v", err)
 	}
 	if !bytes.Equal(before, client.ram) {
@@ -83,7 +81,7 @@ func TestTableRegionsStayIsolatedAndPersistOnReopen(t *testing.T) {
 	// their stored bounds and data, including when the engine reopens them.
 	e = newRegionTestEngine(t, client, 2*smallTableRegionSize, testMemorySize)
 	checkAdjacentTables(t, e)
-	if _, err := e.Exec(context.Background(), "INSERT INTO alpha VALUES (13, 130)"); !errors.Is(err, ErrTableFull) {
+	if _, err := e.Exec(t.Context(), "INSERT INTO alpha VALUES (13, 130)"); !errors.Is(err, ErrTableFull) {
 		t.Fatalf("reopened table lost its original limit: %v", err)
 	}
 	execOK(t, e, "CREATE TABLE gamma")
@@ -117,14 +115,14 @@ func TestCreateTableRespectsNodeCapacity(t *testing.T) {
 				execOK(t, e, "CREATE TABLE beta")
 			}
 			before := bytes.Clone(client.ram)
-			if _, err := e.Exec(context.Background(), "CREATE TABLE overflow"); !errors.Is(err, ErrStorageFull) {
+			if _, err := e.Exec(t.Context(), "CREATE TABLE overflow"); !errors.Is(err, ErrStorageFull) {
 				t.Fatalf("create beyond node limit: %v", err)
 			}
 			if !bytes.Equal(before, client.ram) {
 				t.Fatal("rejected table creation changed storage")
 			}
 			e = newRegionTestEngine(t, client, smallTableRegionSize, limit)
-			if _, err := e.Exec(context.Background(), "SELECT id, value FROM overflow"); !errors.Is(err, ErrTableNotFound) {
+			if _, err := e.Exec(t.Context(), "SELECT id, value FROM overflow"); !errors.Is(err, ErrTableNotFound) {
 				t.Fatalf("rejected table persisted: %v", err)
 			}
 			if _, err := NewEngine(Config{TxnClient: client, MemorySize: defaultCatalogNextBase + smallTableRegionSize - 1}); !errors.Is(err, ErrInvalidCatalog) {
@@ -177,7 +175,7 @@ func TestCatalogRejectsInvalidStoredRegions(t *testing.T) {
 			if _, err := NewEngine(Config{TxnClient: client, MemorySize: testMemorySize}); !errors.Is(err, ErrInvalidCatalog) {
 				t.Fatalf("reopen with corrupt %s: %v", field, err)
 			}
-			if _, err := e.Exec(context.Background(), "CREATE TABLE gamma"); !errors.Is(err, ErrInvalidCatalog) {
+			if _, err := e.Exec(t.Context(), "CREATE TABLE gamma"); !errors.Is(err, ErrInvalidCatalog) {
 				t.Fatalf("create with corrupt %s: %v", field, err)
 			}
 			if !bytes.Equal(before, client.ram) {
@@ -188,7 +186,7 @@ func TestCatalogRejectsInvalidStoredRegions(t *testing.T) {
 }
 
 func TestEngineRejectsTableBeyondCatalogCapacity(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := newMemTxnClient()
 	client := &conflictInjectingClient{base: base}
 	engine := newTestEngineWithClient(t, client)
@@ -203,7 +201,7 @@ func TestEngineRejectsTableBeyondCatalogCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempts := atomic.LoadInt32(&client.calls)
+	attempts := client.calls.Load()
 	// Both a current engine and one with an empty cached catalog must consult
 	// the stored catalog and reject creation before attempting a transaction.
 	for _, candidate := range []*Engine{engine, staleEngine} {
@@ -217,7 +215,7 @@ func TestEngineRejectsTableBeyondCatalogCapacity(t *testing.T) {
 			t.Errorf("duplicate create in full catalog = %v, want ErrTableExists", err)
 		}
 	}
-	if got := atomic.LoadInt32(&client.calls); got != attempts {
+	if got := client.calls.Load(); got != attempts {
 		t.Errorf("rejected creation attempted %d transactions", got-attempts)
 	}
 	after, err := base.Read(ctx, 1, catalogAddr, catalogSize)
@@ -249,7 +247,7 @@ func FuzzDecodeCatalogNeverPanics(f *testing.F) {
 			regionSize:    defaultTableRegionSize,
 		}},
 	})
-	oversizedCount := append([]byte(nil), valid...)
+	oversizedCount := bytes.Clone(valid)
 	binary.BigEndian.PutUint32(oversizedCount[catalogTableCountOffset:], ^uint32(0))
 	f.Add([]byte{}, uint64(0))
 	f.Add(valid, uint64(testMemorySize))

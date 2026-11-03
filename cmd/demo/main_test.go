@@ -9,7 +9,7 @@ import (
 )
 
 func TestDemoOverTCPAndDurableReopen(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), demoTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), demoTimeout)
 	defer cancel()
 	var output bytes.Buffer
 	if err := run(ctx, os.Getenv("MEMNODE_BIN"), t.TempDir(), &output); err != nil {

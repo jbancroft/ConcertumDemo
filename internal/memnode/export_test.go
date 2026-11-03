@@ -1,7 +1,6 @@
 package memnode
 
 import (
-	"context"
 	"os"
 	"testing"
 	"time"
@@ -14,7 +13,7 @@ func newTestParticipant(t testing.TB, id uint32, size int) *Participant {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = node.Close() })
-	if err := node.Recover(context.Background()); err != nil {
+	if err := node.Recover(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	return node

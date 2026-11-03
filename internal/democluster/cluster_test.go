@@ -12,7 +12,7 @@ import (
 )
 
 func TestProcessesRecoverPreparedTransactionThroughPeerRPC(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	executable := os.Getenv("MEMNODE_BIN")
 	dir := t.TempDir()
@@ -67,7 +67,7 @@ func TestProcessesRecoverPreparedTransactionThroughPeerRPC(t *testing.T) {
 }
 
 func TestCancellationStopsChildProcesses(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	executable := os.Getenv("MEMNODE_BIN")
 	childCtx, stop := context.WithCancel(ctx)
@@ -93,7 +93,7 @@ func TestCancellationStopsChildProcesses(t *testing.T) {
 func TestProcessesRecoverAbandonedCoordinatorWithoutRestart(t *testing.T) {
 	for _, allPrepared := range []bool{false, true} {
 		t.Run(fmt.Sprintf("all-prepared=%t", allPrepared), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			dir := t.TempDir()
 			cluster, err := Start(ctx, os.Getenv("MEMNODE_BIN"), dir, 64)

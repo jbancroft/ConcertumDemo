@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/recovery"
@@ -18,17 +19,12 @@ type RecoveryPeer interface {
 }
 
 func (n *Participant) currentEpochLocked() uint64 {
-	current := sinfonia.EpochAt(n.nowFn())
-	if current > n.epoch {
-		n.epoch = current
-	}
+	n.epoch = max(n.epoch, sinfonia.EpochAt(n.nowFn()))
 	return n.epoch
 }
 
 func (n *Participant) persistEpochFloorLocked(epoch uint64) error {
-	if epoch > n.epoch {
-		n.epoch = epoch
-	}
+	n.epoch = max(n.epoch, epoch)
 	if epoch <= n.epochFloor {
 		return nil
 	}
@@ -42,10 +38,7 @@ func (n *Participant) persistEpochFloorLocked(epoch uint64) error {
 func (n *Participant) SetRecoveryPeers(peers map[uint32]RecoveryPeer) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.participants = make(map[uint32]RecoveryPeer, len(peers))
-	for k, v := range peers {
-		n.participants[k] = v
-	}
+	n.participants = maps.Clone(peers)
 }
 
 func (n *Participant) QueryTidStatus(ctx context.Context, req sinfonia.QueryTidStatusRequest) (sinfonia.QueryTidStatusResponse, error) {
@@ -151,9 +144,7 @@ func (n *Participant) Recover(ctx context.Context) error {
 		n.mu.Unlock()
 		return err
 	}
-	if ptr < 0 {
-		ptr = 0
-	}
+	ptr = max(ptr, 0)
 	peers := make(map[uint32]recovery.Participant, len(n.participants)+1)
 	for k, v := range n.participants {
 		peers[k] = v

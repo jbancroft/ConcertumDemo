@@ -70,7 +70,7 @@ func TestRegionFullDiscardsEntireSplit(t *testing.T) {
 		{pages: 12, tail: pageSize - 1, keys: 40},
 	} {
 		t.Run(fmt.Sprintf("pages_%d_tail_%d", tc.pages, tc.tail), func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			base := newMemTxnClient()
 			cfg := Config{HostId: 1, BaseAddress: 1024, RegionSize: uint64(superblockSize + tc.pages*pageSize + tc.tail)}
 			client := &boundedTestClient{TxnClient: base, t: t, base: cfg.BaseAddress, size: cfg.RegionSize}
@@ -122,7 +122,7 @@ func TestRegionFullDiscardsEntireSplit(t *testing.T) {
 }
 
 func TestTreeRejectsChangedRegionOnReopen(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	client := newMemTxnClient()
 	cfg := Config{HostId: 1, RegionSize: MinRegionSize}
 	idx := newTestBTree(t, client, cfg)
@@ -143,7 +143,7 @@ func TestTreeRejectsChangedRegionOnReopen(t *testing.T) {
 func TestTreeRejectsCorruptBoundsBeforeAccess(t *testing.T) {
 	for _, field := range []string{"magic", "next_page", "root", "child", "leaf_link"} {
 		t.Run(field, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			base := newMemTxnClient()
 			cfg := Config{HostId: 1, RegionSize: superblockSize + 3*pageSize}
 			client := &boundedTestClient{TxnClient: base, t: t, size: cfg.RegionSize}

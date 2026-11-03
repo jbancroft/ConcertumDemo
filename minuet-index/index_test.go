@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math/rand"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -86,7 +86,7 @@ func (m *memTxnClient) ExecuteAndCommit(_ context.Context, compares []sinfoniacl
 
 func TestInsertSearchDeleteSplitMergeRegression(t *testing.T) {
 	idx := newTestBTree(t, newMemTxnClient(), Config{HostId: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
-	ctx := context.Background()
+	ctx := t.Context()
 	for i := uint64(1); i <= 80; i++ {
 		if err := idx.Insert(ctx, i, i*10); err != nil {
 			t.Fatalf("insert %d: %v", i, err)
@@ -118,7 +118,7 @@ func TestInsertSearchDeleteSplitMergeRegression(t *testing.T) {
 
 func TestRangeScanIteratorStableSnapshot(t *testing.T) {
 	idx := newTestBTree(t, newMemTxnClient(), Config{HostId: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
-	ctx := context.Background()
+	ctx := t.Context()
 	for i := uint64(1); i <= 30; i++ {
 		_ = idx.Insert(ctx, i, i)
 	}
@@ -144,11 +144,11 @@ func TestRangeScanIteratorStableSnapshot(t *testing.T) {
 
 func TestRangeScanReturnsEmptyForUnmatchedRanges(t *testing.T) {
 	idx := newTestBTree(t, newMemTxnClient(), Config{HostId: 1})
-	if err := idx.Insert(context.Background(), 10, 100); err != nil {
+	if err := idx.Insert(t.Context(), 10, 100); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range [][2]uint64{{0, 9}, {11, 20}} {
-		it, err := idx.RangeScan(context.Background(), tc[0], tc[1])
+		it, err := idx.RangeScan(t.Context(), tc[0], tc[1])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -161,9 +161,9 @@ func TestRangeScanReturnsEmptyForUnmatchedRanges(t *testing.T) {
 func TestPropertyOrderingAndModelParity(t *testing.T) {
 	rng := rand.New(rand.NewSource(77))
 	idx := newTestBTree(t, newMemTxnClient(), Config{HostId: 1, MaxRetries: 40, RetryBackoff: time.Microsecond})
-	ctx := context.Background()
+	ctx := t.Context()
 	model := map[uint64]uint64{}
-	for step := 0; step < 800; step++ {
+	for step := range 800 {
 		k := uint64(rng.Intn(100))
 		op := rng.Intn(3)
 		switch op {
@@ -196,7 +196,7 @@ func TestPropertyOrderingAndModelParity(t *testing.T) {
 	for k := range model {
 		keys = append(keys, int(k))
 	}
-	sort.Ints(keys)
+	slices.Sort(keys)
 	it, err := idx.RangeScan(ctx, 0, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -214,14 +214,11 @@ func TestPropertyOrderingAndModelParity(t *testing.T) {
 
 func TestConcurrentMutationSafety(t *testing.T) {
 	idx := newTestBTree(t, newMemTxnClient(), Config{HostId: 1, MaxRetries: 80, RetryBackoff: time.Microsecond})
-	ctx := context.Background()
+	ctx := t.Context()
 	var wg sync.WaitGroup
-	for w := 0; w < 12; w++ {
-		w := w
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 120; i++ {
+	for w := range 12 {
+		wg.Go(func() {
+			for i := range 120 {
 				k := uint64((w*17 + i) % 64)
 				var err error
 				if i%3 == 0 {
@@ -234,7 +231,7 @@ func TestConcurrentMutationSafety(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	assertTreeInvariants(t, idx, ctx)
@@ -242,8 +239,8 @@ func TestConcurrentMutationSafety(t *testing.T) {
 
 type conflictInjectingClient struct {
 	base         *memTxnClient
-	rejectFirstN int32
-	calls        int32
+	rejectFirstN atomic.Int32
+	calls        atomic.Int32
 }
 
 func (c *conflictInjectingClient) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
@@ -256,22 +253,23 @@ func (c *conflictInjectingClient) Write(ctx context.Context, hostId uint32, addr
 
 func (c *conflictInjectingClient) ExecuteAndCommit(ctx context.Context, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
 	_ = reads
-	call := atomic.AddInt32(&c.calls, 1)
-	if call <= atomic.LoadInt32(&c.rejectFirstN) {
+	call := c.calls.Add(1)
+	if call <= c.rejectFirstN.Load() {
 		return sinfoniaclient.ExecResult{Committed: false, Status: sinfoniaclient.StatusAborted, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 	}
 	return c.base.ExecuteAndCommit(ctx, compares, reads, writes)
 }
 
 func TestInsertRetriesConflictAndEventuallyCommits(t *testing.T) {
-	client := &conflictInjectingClient{base: newMemTxnClient(), rejectFirstN: 3}
+	client := &conflictInjectingClient{base: newMemTxnClient()}
+	client.rejectFirstN.Store(3)
 	idx := newTestBTree(t, client, Config{HostId: 1, MaxRetries: 10, RetryBackoff: 10 * time.Microsecond})
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := idx.Insert(ctx, 42, 4200); err != nil {
 		t.Fatalf("insert with retry: %v", err)
 	}
-	if atomic.LoadInt32(&client.calls) < 4 {
-		t.Fatalf("expected retries, got calls=%d", atomic.LoadInt32(&client.calls))
+	if client.calls.Load() < 4 {
+		t.Fatalf("expected retries, got calls=%d", client.calls.Load())
 	}
 	v, ok, err := idx.Search(ctx, 42)
 	if err != nil || !ok || v != 4200 {
@@ -280,21 +278,22 @@ func TestInsertRetriesConflictAndEventuallyCommits(t *testing.T) {
 }
 
 func TestInsertExhaustsRetryBudget(t *testing.T) {
-	client := &conflictInjectingClient{base: newMemTxnClient(), rejectFirstN: 100}
+	client := &conflictInjectingClient{base: newMemTxnClient()}
+	client.rejectFirstN.Store(100)
 	idx := newTestBTree(t, client, Config{HostId: 1, MaxRetries: 4, RetryBackoff: 10 * time.Microsecond})
-	ctx := context.Background()
+	ctx := t.Context()
 	err := idx.Insert(ctx, 5, 50)
 	if !errors.Is(err, ErrBusy) {
 		t.Fatalf("insert err=%v want=%v", err, ErrBusy)
 	}
-	if got := atomic.LoadInt32(&client.calls); got != 4 {
+	if got := client.calls.Load(); got != 4 {
 		t.Fatalf("commit attempts=%d want=4", got)
 	}
 }
 
 func TestDeleteRebalanceRootCollapseAndEmptyTree(t *testing.T) {
 	idx := newTestBTree(t, newMemTxnClient(), Config{HostId: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
-	ctx := context.Background()
+	ctx := t.Context()
 	for i := uint64(1); i <= 64; i++ {
 		if err := idx.Insert(ctx, i, i*100); err != nil {
 			t.Fatalf("insert %d: %v", i, err)

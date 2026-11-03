@@ -231,10 +231,8 @@ func TestRedoLogConcurrentAppendsAndCompactionPreserveDurability(t *testing.T) {
 	}
 	const entries = 200
 	var wg sync.WaitGroup
-	wg.Add(entries + 1)
-	for i := 0; i < entries; i++ {
-		go func(i int) {
-			defer wg.Done()
+	for i := range entries {
+		wg.Go(func() {
 			entry := RedoLogItem{
 				TransactionId: sinfonia.TransactionID{CoordinatorID: 1, Counter: uint64(i + 1), Epoch: 1},
 				HostIds:       []uint32{1},
@@ -243,14 +241,13 @@ func TestRedoLogConcurrentAppendsAndCompactionPreserveDurability(t *testing.T) {
 			if err := log.AddItem(entry); err != nil {
 				t.Errorf("append failed: %v", err)
 			}
-		}(i)
+		})
 	}
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if err := log.TruncateHead(1); err != nil {
 			t.Errorf("compaction failed: %v", err)
 		}
-	}()
+	})
 	wg.Wait()
 
 	reloaded, err := OpenRedoLog(dir)
@@ -291,7 +288,7 @@ func TestRedoLogAppendWaitsForSync(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			entered, release := make(chan struct{}), make(chan struct{})
 			unblock := sync.OnceFunc(func() { close(release) })
@@ -678,7 +675,7 @@ func TestPublishLogFileCrashBoundaries(t *testing.T) {
 				if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), logCrashTimeout)
+				ctx, cancel := context.WithTimeout(t.Context(), logCrashTimeout)
 				defer cancel()
 				cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPublishLogFileCrashHelper$")
 				cmd.Env = append(os.Environ(),
@@ -687,8 +684,7 @@ func TestPublishLogFileCrashBoundaries(t *testing.T) {
 					"CONCERTUM_LOG_CRASH_PHASE="+phase,
 				)
 				output, err := cmd.CombinedOutput()
-				var exitErr *exec.ExitError
-				if !errors.As(err, &exitErr) || exitErr.ExitCode() != logCrashExitCode {
+				if exitErr, ok := errors.AsType[*exec.ExitError](err); !ok || exitErr.ExitCode() != logCrashExitCode {
 					t.Fatalf("crash helper = %v, output: %s", err, output)
 				}
 				want := original

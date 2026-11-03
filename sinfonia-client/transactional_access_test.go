@@ -39,7 +39,7 @@ func accessClient(t *testing.T, node *memnode.Participant) (*Client, func()) {
 }
 
 func TestClientReadAndWriteRespectPreparedLocks(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	n := newTestParticipant(t, 1, 16)
 	c, _ := accessClient(t, n)
@@ -78,7 +78,7 @@ func TestClientReadAndWriteRespectPreparedLocks(t *testing.T) {
 }
 
 func TestClientWritePersists(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	dir := filepath.Join(t.TempDir(), "node")
 	n := openTestParticipant(t, 1, 16, dir)
@@ -99,7 +99,7 @@ func TestClientWritePersists(t *testing.T) {
 }
 
 func TestClientWriteReportsUnknownAfterServerCommitError(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	dir := t.TempDir()
 	n := openTestParticipant(t, 1, 16, dir)
@@ -131,7 +131,7 @@ func TestClientWriteReportsUnknownAfterServerCommitError(t *testing.T) {
 }
 
 func TestClientAccessRejectsInvalidRanges(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	c, _ := accessClient(t, newTestParticipant(t, 1, 16))
 	for _, addr := range []uint64{15, math.MaxUint64} {

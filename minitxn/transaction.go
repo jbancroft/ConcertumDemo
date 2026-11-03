@@ -1,6 +1,7 @@
 package minitxn
 
 import (
+	"bytes"
 	"context"
 	"slices"
 )
@@ -42,20 +43,20 @@ func (t *MiniTransaction) Write(hostId uint32, address uint64, data []byte) *Min
 func (t *MiniTransaction) Compares() []CompareItem {
 	result := make([]CompareItem, 0, len(t.compares))
 	for _, item := range t.compares {
-		item.Data = append([]byte(nil), item.Data...)
+		item.Data = bytes.Clone(item.Data)
 		result = append(result, item)
 	}
 	return result
 }
 
 func (t *MiniTransaction) Reads() []ReadItem {
-	return append([]ReadItem(nil), t.reads...)
+	return slices.Clone(t.reads)
 }
 
 func (t *MiniTransaction) Writes() []WriteItem {
 	result := make([]WriteItem, 0, len(t.writes))
 	for _, item := range t.writes {
-		item.Data = append([]byte(nil), item.Data...)
+		item.Data = bytes.Clone(item.Data)
 		result = append(result, item)
 	}
 	return result
@@ -65,7 +66,7 @@ func (t *MiniTransaction) CompareItemsForHost(hostId uint32) []CompareItem {
 	result := []CompareItem{}
 	for _, item := range t.compares {
 		if item.HostId == hostId {
-			item.Data = append([]byte(nil), item.Data...)
+			item.Data = bytes.Clone(item.Data)
 			result = append(result, item)
 		}
 	}
@@ -86,7 +87,7 @@ func (t *MiniTransaction) WriteItemsForHost(hostId uint32) []WriteItem {
 	result := []WriteItem{}
 	for _, item := range t.writes {
 		if item.HostId == hostId {
-			item.Data = append([]byte(nil), item.Data...)
+			item.Data = bytes.Clone(item.Data)
 			result = append(result, item)
 		}
 	}

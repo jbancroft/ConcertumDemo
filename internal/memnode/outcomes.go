@@ -2,6 +2,7 @@ package memnode
 
 import (
 	"errors"
+	"maps"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
@@ -30,21 +31,15 @@ func (n *Participant) gcOutcomesLocked() error {
 	if err := n.persistEpochFloorLocked(retention.CurrentEpoch); err != nil {
 		return err
 	}
-	for tid := range n.prepareOutcomes {
-		if retention.Expired(tid) {
-			delete(n.prepareOutcomes, tid)
-		}
-	}
-	for tid := range n.onePCOutcomes {
-		if retention.Expired(tid) {
-			delete(n.onePCOutcomes, tid)
-		}
-	}
-	for tid := range n.commitOutcomes {
-		if retention.Expired(tid) {
-			delete(n.commitOutcomes, tid)
-		}
-	}
+	maps.DeleteFunc(n.prepareOutcomes, func(tid sinfonia.TransactionID, _ prepareOutcome) bool {
+		return retention.Expired(tid)
+	})
+	maps.DeleteFunc(n.onePCOutcomes, func(tid sinfonia.TransactionID, _ onePCOutcome) bool {
+		return retention.Expired(tid)
+	})
+	maps.DeleteFunc(n.commitOutcomes, func(tid sinfonia.TransactionID, _ commitOutcome) bool {
+		return retention.Expired(tid)
+	})
 	return nil
 }
 
@@ -62,8 +57,7 @@ func cloneReadData(in map[uint32][]byte) map[uint32][]byte {
 func clonePrepareResponse(resp sinfonia.ExecPrepareResponse) sinfonia.ExecPrepareResponse {
 	resp.ReadData = cloneReadData(resp.ReadData)
 	if resp.LockConflict != nil {
-		conflict := *resp.LockConflict
-		resp.LockConflict = &conflict
+		resp.LockConflict = new(*resp.LockConflict)
 	}
 	return resp
 }
@@ -71,8 +65,7 @@ func clonePrepareResponse(resp sinfonia.ExecPrepareResponse) sinfonia.ExecPrepar
 func clone1PCResponse(resp sinfonia.ExecCommit1PCResponse) sinfonia.ExecCommit1PCResponse {
 	resp.ReadData = cloneReadData(resp.ReadData)
 	if resp.LockConflict != nil {
-		conflict := *resp.LockConflict
-		resp.LockConflict = &conflict
+		resp.LockConflict = new(*resp.LockConflict)
 	}
 	return resp
 }

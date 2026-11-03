@@ -22,7 +22,7 @@ import (
 // Recovery decisions from peer evidence, in-flight work, and readiness gating.
 
 func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	aDir := filepath.Join(dir, "a")
 	bDir := filepath.Join(dir, "b")
@@ -74,7 +74,7 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 }
 
 func TestRecoveryRejectsTornCommitRecord(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	aDir, bDir := filepath.Join(root, "a"), filepath.Join(root, "b")
 	a, err := memnode.NewParticipant(1, 64, aDir)
@@ -153,7 +153,7 @@ func TestRecoveryRejectsTornCommitRecord(t *testing.T) {
 }
 
 func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	aDir := filepath.Join(dir, "a")
 	bDir := filepath.Join(dir, "b")
@@ -200,7 +200,7 @@ func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
 }
 
 func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
 	a, err := memnode.NewParticipant(1, 64, aDir)
@@ -257,7 +257,7 @@ func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
 }
 
 func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
 	a, err := memnode.NewParticipant(1, 64, aDir)
@@ -311,7 +311,7 @@ func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
 }
 
 func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, tc := range []struct {
 		name  string
 		abort func(*testing.T, *memnode.Participant, sinfonia.TransactionID)
@@ -373,7 +373,7 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 }
 
 func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	node, err := memnode.NewParticipant(1, 64, dir)
 	if err != nil {
@@ -423,7 +423,7 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 
 func TestRecoveryAbortRejectsLateOnePhaseRequest(t *testing.T) {
 	node := newTestParticipant(t, 1, 16)
-	ctx := context.Background()
+	ctx := t.Context()
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	vote, err := node.RecoveryForceAbort(ctx, sinfonia.RecoverForceAbortRequest{TID: tid})
 	if err != nil || vote.Vote != sinfonia.VoteBadForced {
@@ -469,7 +469,7 @@ func TestStartupRecoveryUsesAvailableEvidence(t *testing.T) {
 		{name: "yes votes/unreachable peer", unavailable: true, wantPending: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			dir := t.TempDir()
 			local := newRecoveredFailureTestNode(t, 1, dir)
 			peer := newTestParticipant(t, 2, 16)
@@ -543,7 +543,7 @@ func TestStartupRecoveryUsesAvailableEvidence(t *testing.T) {
 }
 
 func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
 	bDir := filepath.Join(root, "b")
@@ -690,7 +690,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 	for _, failurePhase := range []string{"apply-before", "apply-after", "pointer-before"} {
 		t.Run(failurePhase, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			root := t.TempDir()
 			aDir := filepath.Join(root, "a")
 			bDir := filepath.Join(root, "b")
@@ -786,7 +786,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 }
 
 func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
 	a, err := memnode.NewParticipant(1, 64, aDir)
@@ -856,7 +856,7 @@ func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
 	go func() { _ = node.RPCServer().Serve(listener) }()
 
 	client := rpcwire.NewClient(listener.Addr().String(), rpcwire.ClientOptions{DialTimeout: time.Second})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	var read sinfonia.ExecCommit1PCResponse
@@ -881,7 +881,7 @@ func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
 func TestExecutionCannotOvertakeRecoverySnapshot(t *testing.T) {
 	for _, onePC := range []bool{false, true} {
 		t.Run(fmt.Sprintf("onePC=%t", onePC), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			node := newRecoveredFailureTestNode(t, 1, t.TempDir())
 			original := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
@@ -984,7 +984,7 @@ func TestExecutionCannotOvertakeRecoverySnapshot(t *testing.T) {
 func TestRecoveryAndDuplicateWaitForDurableVote(t *testing.T) {
 	for _, onePC := range []bool{false, true} {
 		t.Run(fmt.Sprintf("onePC=%t", onePC), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			node := newRecoveredFailureTestNode(t, 1, t.TempDir())
 			entered, release := make(chan struct{}), make(chan struct{})

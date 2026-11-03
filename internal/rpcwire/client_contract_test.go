@@ -18,7 +18,7 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 	server.Register("test.fail", func(context.Context, any) (any, error) {
 		return nil, errors.New("request rejected")
 	})
-	RegisterTyped(server, "test.typed", func(context.Context, sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
+	server.RegisterTyped("test.typed", func(context.Context, sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error) {
 		return sinfonia.ExecCommit1PCResponse{}, nil
 	})
 
@@ -60,15 +60,15 @@ func TestClientNormalizesServerErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			out := sinfonia.ExecCommit1PCResponse{ReadData: map[uint32][]byte{0: []byte("unchanged")}}
 			err := client.Call(ctx, tt.method, tt.request, &out)
 			if err == nil {
 				t.Fatal("Call succeeded, want remote error")
 			}
-			var remote *RemoteError
-			if !errors.As(err, &remote) {
+			remote, ok := errors.AsType[*RemoteError](err)
+			if !ok {
 				t.Fatalf("Call error type = %T, want *RemoteError", err)
 			}
 			if remote.Method != tt.method {
@@ -107,15 +107,14 @@ func TestClientRejectsUnexpectedSuccessBody(t *testing.T) {
 
 	client := NewClient(listener.Addr().String(), ClientOptions{DialTimeout: time.Second})
 	defer client.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	out := sinfonia.ExecCommit1PCResponse{ReadData: map[uint32][]byte{0: []byte("unchanged")}}
 	err = client.Call(ctx, "test.wrong_response", sinfonia.ExecCommit1PCRequest{}, &out)
 	if err == nil || !strings.Contains(err.Error(), "unexpected response type") {
 		t.Fatalf("Call error = %v, want unexpected response type", err)
 	}
-	var remote *RemoteError
-	if errors.As(err, &remote) {
+	if remote, ok := errors.AsType[*RemoteError](err); ok {
 		t.Fatalf("local response error was normalized as remote: %#v", remote)
 	}
 	if got := string(out.ReadData[0]); got != "unchanged" {
@@ -143,15 +142,14 @@ func TestClientRetiresConnectionAfterMalformedResponse(t *testing.T) {
 		serverResult <- err
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	out := sinfonia.ExecCommit1PCResponse{ReadData: map[uint32][]byte{0: []byte("unchanged")}}
 	err := client.Call(ctx, "test.read", sinfonia.ExecCommit1PCRequest{}, &out)
 	if err == nil {
 		t.Fatal("Call accepted malformed response")
 	}
-	var remote *RemoteError
-	if errors.As(err, &remote) {
+	if remote, ok := errors.AsType[*RemoteError](err); ok {
 		t.Fatalf("malformed response was normalized as remote: %#v", remote)
 	}
 	if got := string(out.ReadData[0]); got != "unchanged" {
@@ -175,12 +173,12 @@ func TestServerDoesNotDispatchMalformedRequest(t *testing.T) {
 
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go server.serveConn(context.Background(), serverConn)
-	if _, err := clientConn.Write(testFrame([]byte{0xff})); err != nil {
-		t.Fatalf("write malformed request: %v", err)
-	}
+	go server.serveConn(t.Context(), serverConn)
 	if err := clientConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
+	}
+	if _, err := clientConn.Write(testFrame([]byte{0xff})); err != nil {
+		t.Fatalf("write malformed request: %v", err)
 	}
 	var response [1]byte
 	if n, err := clientConn.Read(response[:]); n != 0 || !errors.Is(err, io.EOF) {
@@ -203,7 +201,7 @@ func TestClientCancellationInterruptsBlockedResponse(t *testing.T) {
 		_ = readFrame(serverConn, &request)
 		close(received)
 	}()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- client.Call(ctx, "test.block", sinfonia.ExecCommit1PCRequest{}, nil) }()

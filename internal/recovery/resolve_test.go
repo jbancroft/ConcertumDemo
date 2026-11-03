@@ -29,14 +29,14 @@ func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant 
 			t.Error(err)
 		}
 	})
-	if err := node.Recover(context.Background()); err != nil {
+	if err := node.Recover(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	return node
 }
 
 func TestKnownDecisionStillReachesPreparedNodeWithAnotherPeerUnavailable(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	decided, prepared := newTestParticipant(t, 2, 16), newTestParticipant(t, 3, 16)
@@ -64,7 +64,7 @@ func TestKnownDecisionStillReachesPreparedNodeWithAnotherPeerUnavailable(t *test
 }
 
 func TestDiscoverRejectsConflictingDecisions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	committed, aborted := newTestParticipant(t, 1, 16), newTestParticipant(t, 2, 16)
 	for _, node := range []*memnode.Participant{committed, aborted} {
@@ -87,7 +87,7 @@ func TestDiscoverRejectsConflictingDecisions(t *testing.T) {
 func TestCanceledDiscoveryDoesNotForceAnAbort(t *testing.T) {
 	node := newTestParticipant(t, 1, 16)
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	result := recovery.Discover(ctx, tid, []uint32{1}, map[uint32]recovery.Participant{1: node})
 	if result.Known || !errors.Is(result.Err, context.Canceled) || node.HasForcedAbortForTest(tid) {

@@ -2,6 +2,7 @@ package memnode
 
 import (
 	"context"
+	"maps"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
@@ -21,9 +22,7 @@ const (
 // Call after startup recovery, and wait for it to stop before closing the node.
 func (n *Participant) RunRecovery(ctx context.Context, remote map[uint32]recovery.Participant) {
 	peers := make(map[uint32]recovery.Participant, len(remote)+1)
-	for id, peer := range remote {
-		peers[id] = peer
-	}
+	maps.Copy(peers, remote)
 	peers[n.hostId] = n
 	ticker := time.NewTicker(recoveryScanInterval)
 	defer ticker.Stop()

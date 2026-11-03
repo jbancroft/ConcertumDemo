@@ -1,11 +1,12 @@
 package minuetsql
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -109,12 +110,8 @@ func NewEngine(cfg Config) (*Engine, error) {
 	if cfg.MemorySize < defaultCatalogNextBase {
 		return nil, errors.New("minuet-sql: memory size must include the catalog reservation")
 	}
-	if cfg.HostId == 0 {
-		cfg.HostId = defaultHostID
-	}
-	if cfg.TableRegionSize == 0 {
-		cfg.TableRegionSize = defaultTableRegionSize
-	}
+	cfg.HostId = cmp.Or(cfg.HostId, defaultHostID)
+	cfg.TableRegionSize = cmp.Or(cfg.TableRegionSize, defaultTableRegionSize)
 	if cfg.MaxRetries <= 0 {
 		cfg.MaxRetries = defaultMaxRetries
 	}
@@ -210,7 +207,7 @@ func (e *Engine) Exec(ctx context.Context, sql string) (QueryResult, error) {
 			}
 			out = append(out, Row{ID: entry.Key, Value: entry.Value})
 		}
-		sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+		slices.SortFunc(out, func(a, b Row) int { return cmp.Compare(a.ID, b.ID) })
 		return QueryResult{Rows: out}, nil
 	default:
 		return QueryResult{}, fmt.Errorf("%w: %T", ErrUnsupportedSQL, stmt)
@@ -239,7 +236,7 @@ func (e *Engine) loadCatalog(ctx context.Context) error {
 }
 
 func (e *Engine) createTable(ctx context.Context, name string) error {
-	for attempt := 0; attempt < e.cfg.MaxRetries; attempt++ {
+	for range e.cfg.MaxRetries {
 		raw, err := e.cfg.TxnClient.Read(ctx, e.cfg.HostId, catalogAddr, catalogSize)
 		if err != nil {
 			return err

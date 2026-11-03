@@ -19,7 +19,7 @@ func TestInvalidConfigurationDoesNotCreateStorage(t *testing.T) {
 		{"-peer", "2=invalid"}, {"unexpected-argument"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			dir := filepath.Join(t.TempDir(), "node")
 			flags := append([]string{"-data-dir", dir, "-listen", "127.0.0.1:0"}, args...)
@@ -36,7 +36,7 @@ func TestInvalidConfigurationDoesNotCreateStorage(t *testing.T) {
 func TestDataDirectoryRequiredBeforeListening(t *testing.T) {
 	for _, args := range [][]string{nil, {"-data-dir", ""}} {
 		flags := append([]string{"-listen", "invalid"}, args...)
-		err := run(context.Background(), flags, nil, io.Discard, io.Discard)
+		err := run(t.Context(), flags, nil, io.Discard, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "-data-dir is required") {
 			t.Fatalf("missing data directory: %v", err)
 		}

@@ -1,7 +1,6 @@
 package memnode_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
@@ -14,7 +13,7 @@ func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = node.Close() })
-	if err := node.Recover(context.Background()); err != nil {
+	if err := node.Recover(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	return node
@@ -23,7 +22,7 @@ func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant 
 func recoverTestParticipants(t testing.TB, nodes ...*memnode.Participant) {
 	t.Helper()
 	for _, node := range nodes {
-		if err := node.Recover(context.Background()); err != nil {
+		if err := node.Recover(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	}

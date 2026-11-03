@@ -2,7 +2,9 @@ package memnode
 
 import (
 	"context"
+	"maps"
 	"os"
+	"slices"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
@@ -56,17 +58,10 @@ func (n *Participant) FlushAppliedNotifications(ctx context.Context) {
 		n.mu.Unlock()
 		return
 	}
-	peers := make(map[uint32]RecoveryPeer, len(n.participants))
-	for pid, p := range n.participants {
-		peers[pid] = p
-	}
+	peers := maps.Clone(n.participants)
 	pending := make(map[uint32][]sinfonia.TransactionID, len(n.pendingNotify))
 	for pid, txIds := range n.pendingNotify {
-		list := make([]sinfonia.TransactionID, 0, len(txIds))
-		for txId := range txIds {
-			list = append(list, txId)
-		}
-		pending[pid] = list
+		pending[pid] = slices.Collect(maps.Keys(txIds))
 	}
 	n.mu.Unlock()
 

@@ -62,9 +62,7 @@ func discover(ctx context.Context, tid sinfonia.TransactionID, ids []uint32, pee
 	defer stopProbes()
 	replies := make(chan voteResult, len(ids))
 	for _, id := range ids {
-		calls.Add(1)
-		go func(id uint32) {
-			defer calls.Done()
+		calls.Go(func() {
 			peer := peers[id]
 			if peer == nil {
 				replies <- voteResult{id: id, err: fmt.Errorf("recovery participant %d unavailable", id)}
@@ -72,7 +70,7 @@ func discover(ctx context.Context, tid sinfonia.TransactionID, ids []uint32, pee
 			}
 			vote, err := peer.RecoveryForceAbort(probeCtx, sinfonia.RecoverForceAbortRequest{TID: tid, Epoch: tid.Epoch})
 			replies <- voteResult{id: id, vote: vote, err: err}
-		}(id)
+		})
 	}
 collect:
 	for range ids {
@@ -123,15 +121,13 @@ func Resolve(ctx context.Context, tid sinfonia.TransactionID, ids []uint32, peer
 	pending := 0
 	for id := range votes {
 		pending++
-		calls.Add(1)
-		go func(id uint32) {
-			defer calls.Done()
+		calls.Go(func() {
 			resp, err := peers[id].RecoveryDecide(ctx, sinfonia.RecoverDecideRequest{TID: tid, ActionCommit: out.Committed})
 			if err == nil && !resp.Ack {
 				err = fmt.Errorf("participant %d did not acknowledge recovery", id)
 			}
 			deliveries <- err
-		}(id)
+		})
 	}
 	for range pending {
 		select {

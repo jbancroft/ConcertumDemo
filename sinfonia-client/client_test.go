@@ -28,7 +28,7 @@ func openTestParticipant(t testing.TB, id uint32, size int, dir string) *memnode
 			t.Error(err)
 		}
 	})
-	if err := node.Recover(context.Background()); err != nil {
+	if err := node.Recover(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	return node
@@ -75,7 +75,7 @@ func TestExecuteAndCommitAcrossTwoNodes(t *testing.T) {
 		{name: "compare abort", compare: "stale", status: StatusAborted, vote: sinfonia.VoteBadCmp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			coord := client.NewCoordinator(map[uint32]client.Participant{
 				1: newTestParticipant(t, 1, 16), 2: newTestParticipant(t, 2, 16),
@@ -131,10 +131,10 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 	defer coord.Close()
 	c := &Client{coordinator: coord}
 
-	if err := c.Write(context.Background(), 1, 0, []byte("a")); err != nil {
+	if err := c.Write(t.Context(), 1, 0, []byte("a")); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Write(context.Background(), 2, 0, []byte("x")); err != nil {
+	if err := c.Write(t.Context(), 2, 0, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -143,7 +143,7 @@ func TestTwoNodeAtomicCommit(t *testing.T) {
 		Compare(2, 0, []byte("x")).
 		Write(1, 1, []byte("b")).
 		Write(2, 1, []byte("y")).
-		ExecuteAndCommit(context.Background())
+		ExecuteAndCommit(t.Context())
 
 	committed, status := execution.Committed, execution.Status
 
@@ -160,11 +160,11 @@ func TestCompareAbortNoWritesApplied(t *testing.T) {
 	coord := client.NewCoordinator(map[uint32]client.Participant{1: n1})
 	defer coord.Close()
 	c := &Client{coordinator: coord}
-	if err := c.Write(context.Background(), 1, 0, []byte("seed")); err != nil {
+	if err := c.Write(t.Context(), 1, 0, []byte("seed")); err != nil {
 		t.Fatal(err)
 	}
 
-	execution := c.NewMiniTransaction().Compare(1, 0, []byte("nope")).Write(1, 0, []byte("new!")).ExecuteAndCommit(context.Background())
+	execution := c.NewMiniTransaction().Compare(1, 0, []byte("nope")).Write(1, 0, []byte("new!")).ExecuteAndCommit(t.Context())
 
 	committed, status := execution.Committed, execution.Status
 	if committed {
@@ -173,7 +173,7 @@ func TestCompareAbortNoWritesApplied(t *testing.T) {
 	if status != StatusAborted {
 		t.Fatalf("expected aborted status, got %v", status)
 	}
-	data, err := c.Read(context.Background(), 1, 0, 4)
+	data, err := c.Read(t.Context(), 1, 0, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,10 +189,10 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 	defer coord.Close()
 	c := &Client{coordinator: coord}
 
-	if err := c.Write(context.Background(), 1, 0, []byte("ab")); err != nil {
+	if err := c.Write(t.Context(), 1, 0, []byte("ab")); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Write(context.Background(), 2, 0, []byte("xy")); err != nil {
+	if err := c.Write(t.Context(), 2, 0, []byte("xy")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -212,7 +212,7 @@ func TestBadLockRetryThenSuccess(t *testing.T) {
 		Compare(2, 0, []byte("xy")).
 		Write(1, 0, []byte("cd")).
 		Write(2, 0, []byte("zw")).
-		ExecuteAndCommit(context.Background())
+		ExecuteAndCommit(t.Context())
 
 	committed, status := execution.Committed, execution.Status
 
@@ -227,12 +227,12 @@ func awaitValue(t *testing.T, c *Client, hostId uint32, addr uint64, expected []
 	t.Helper()
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		data, err := c.Read(context.Background(), hostId, addr, uint32(len(expected)))
+		data, err := c.Read(t.Context(), hostId, addr, uint32(len(expected)))
 		if err == nil && string(data) == string(expected) {
 			return
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	data, _ := c.Read(context.Background(), hostId, addr, uint32(len(expected)))
+	data, _ := c.Read(t.Context(), hostId, addr, uint32(len(expected)))
 	t.Fatalf("expected %q at mem %d addr %d, got %q", string(expected), hostId, addr, string(data))
 }

@@ -31,7 +31,7 @@ func TestOperationsRetryConcurrentSplit(t *testing.T) {
 	}{{"leaf_root", 8}, {"internal_root", 40}} {
 		for _, operation := range []string{"search", "scan", "insert", "delete"} {
 			t.Run(split.name+"/"+operation, func(t *testing.T) {
-				ctx := context.Background()
+				ctx := t.Context()
 				base := newMemTxnClient()
 				writer := newTestBTree(t, base, Config{HostId: 1})
 				for key := uint64(1); key <= split.keys; key++ {
@@ -98,7 +98,7 @@ func TestSnapshotRetriesAreBoundedAndCancelable(t *testing.T) {
 			name = "canceled"
 		}
 		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			base := newMemTxnClient()
 			writer := newTestBTree(t, base, Config{HostId: 1})

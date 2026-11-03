@@ -26,7 +26,8 @@ removed with the container when it exits.
 
 ## Run locally
 
-Requires Go 1.22+. From the repository root, build the memnode executable used by the demos:
+Requires Go 1.27+. The module selects Go 1.27.3 through automatic toolchain
+switching. From the repository root, build the memnode executable used by the demos:
 
 ```sh
 go build -o bin/memnode ./cmd/memnode

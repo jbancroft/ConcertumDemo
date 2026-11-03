@@ -18,7 +18,7 @@ func TestBackgroundRecoveryFinishesInterruptedTransaction(t *testing.T) {
 		onePC bool
 	}{{"prepare", false}, {"one-phase", true}} {
 		t.Run(phase.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			dir := t.TempDir()
 			node := openTestParticipant(t, 1, 16, dir)
@@ -93,7 +93,7 @@ func (n *disconnectedAfterCommit) ExecCommit1PC(ctx context.Context, req sinfoni
 func TestClientReportsUnknownAfterLostCommitReply(t *testing.T) {
 	for _, api := range []string{"builder", "direct", "write"} {
 		t.Run(api, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			dir := t.TempDir()
 			node := openTestParticipant(t, 1, 16, dir)
 			failure := errors.New("connection lost")

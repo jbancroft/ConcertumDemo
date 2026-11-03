@@ -5,9 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -182,9 +183,7 @@ func (r *RedoLog) TruncateHead(count int) error {
 	if count <= 0 || len(r.entries) == 0 {
 		return nil
 	}
-	if count > len(r.entries) {
-		count = len(r.entries)
-	}
+	count = min(count, len(r.entries))
 	remaining := append([]RedoLogItem(nil), r.entries[count:]...)
 	// Compaction changes entry indexes. Persist a conservative checkpoint
 	// first: either the old or replacement log can be replayed from zero.
@@ -358,11 +357,7 @@ func (s *ForcedAbortLog) GCByEpoch(currentEpoch uint64) ([]sinfonia.TransactionI
 }
 
 func (s *ForcedAbortLog) rewriteLocked(retained map[string]struct{}) error {
-	keys := make([]string, 0, len(retained))
-	for k := range retained {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(retained))
 	if err := publishLogFile(s.path, forcedAbortTempPrefix, func(w io.Writer) error {
 		for _, k := range keys {
 			if _, err := io.WriteString(w, k+"\n"); err != nil {
@@ -470,11 +465,7 @@ func (s *DecidedTransactionLog) Retain(logged map[sinfonia.TransactionID]struct{
 }
 
 func (s *DecidedTransactionLog) rewriteLocked(retained map[string]bool) error {
-	keys := make([]string, 0, len(retained))
-	for key := range retained {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(retained))
 	if err := publishLogFile(s.path, decidedTempPrefix, func(w io.Writer) error {
 		for _, key := range keys {
 			state := "abort"

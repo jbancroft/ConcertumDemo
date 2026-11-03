@@ -1,7 +1,6 @@
 package memnode_test
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -18,14 +17,14 @@ func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testin
 	n := newTestParticipant(t, 1, 8)
 	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecCommit1PCRequest{TID: txId, RequestID: "first", ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
-	resp, err := n.ExecCommit1PC(context.Background(), req)
+	resp, err := n.ExecCommit1PC(t.Context(), req)
 	if err != nil || resp.Vote != sinfonia.VoteOk || string(resp.ReadData[0]) != "\x00" {
 		t.Fatalf("first 1pc resp=%+v err=%v", resp, err)
 	}
 	retry := req
 	retry.RequestID = "retry"
 	retry.WriteItems[0].Data = []byte("B")
-	resp, err = n.ExecCommit1PC(context.Background(), retry)
+	resp, err = n.ExecCommit1PC(t.Context(), retry)
 	if err != nil || resp.Vote != sinfonia.VoteOk || resp.RequestID != "retry" || string(resp.ReadData[0]) != "\x00" {
 		t.Fatalf("retry 1pc should return original outcome, resp=%+v err=%v", resp, err)
 	}
@@ -39,24 +38,24 @@ func TestPrepareAndCommitDuplicateTIDReturnOriginalOutcomeAfterResponseLoss(t *t
 	n := newTestParticipant(t, 1, 8)
 	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: sinfonia.EpochAt(time.Now())}
 	prep := sinfonia.ExecPrepareRequest{TID: txId, RequestID: "prepare-1", Participants: []uint32{1}, ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
-	resp, err := n.ExecAndPrepare(context.Background(), prep)
+	resp, err := n.ExecAndPrepare(t.Context(), prep)
 	if err != nil || resp.Vote != sinfonia.VoteOk || string(resp.ReadData[0]) != "\x00" {
 		t.Fatalf("prepare resp=%+v err=%v", resp, err)
 	}
 	prep.RequestID = "prepare-retry"
 	prep.WriteItems[0].Data = []byte("B")
-	resp, err = n.ExecAndPrepare(context.Background(), prep)
+	resp, err = n.ExecAndPrepare(t.Context(), prep)
 	if err != nil || resp.Vote != sinfonia.VoteOk || resp.RequestID != "prepare-retry" || string(resp.ReadData[0]) != "\x00" {
 		t.Fatalf("prepare retry resp=%+v err=%v", resp, err)
 	}
 	commit := sinfonia.CommitRequest{TID: txId, RequestID: "commit-1", ActionCommit: true}
-	cresp, err := n.Commit(context.Background(), commit)
+	cresp, err := n.Commit(t.Context(), commit)
 	if err != nil || !cresp.Ack {
 		t.Fatalf("commit resp=%+v err=%v", cresp, err)
 	}
 	commit.RequestID = "commit-retry"
 	commit.ActionCommit = false
-	cresp, err = n.Commit(context.Background(), commit)
+	cresp, err = n.Commit(t.Context(), commit)
 	if err != nil || !cresp.Ack || cresp.RequestID != "commit-retry" {
 		t.Fatalf("commit retry resp=%+v err=%v", cresp, err)
 	}
@@ -73,7 +72,7 @@ func TestDurableResponsesAreNotLoggedOrRestored(t *testing.T) {
 			name = "one-phase"
 		}
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			dir := t.TempDir()
 			node := newRecoveredFailureTestNode(t, 1, dir)
 			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
@@ -133,7 +132,7 @@ func TestDurableResponsesAreNotLoggedOrRestored(t *testing.T) {
 }
 
 func TestPrepareCrashAfterRedoBeforeResponseDoesNotReexecuteKnownTID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := filepath.Join(t.TempDir(), "node")
 	n, err := memnode.NewParticipant(1, 32, dir)
 	if err != nil {
@@ -199,7 +198,7 @@ func TestPrepareCrashAfterRedoBeforeResponseDoesNotReexecuteKnownTID(t *testing.
 }
 
 func TestOnePCCrashAfterDecisionBeforeResponseDoesNotReexecuteKnownTID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := filepath.Join(t.TempDir(), "node")
 	now := time.Unix(100*3600, 0)
 	n, err := memnode.NewParticipant(1, 32, dir)
@@ -282,7 +281,7 @@ func TestOnePCCrashAfterDecisionBeforeResponseDoesNotReexecuteKnownTID(t *testin
 }
 
 func TestOnePCRetryWaitsForPendingRecoveryWrites(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	node := newRecoveredFailureTestNode(t, 1, dir)
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}

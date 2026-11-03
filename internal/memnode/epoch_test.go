@@ -46,7 +46,7 @@ func TestParticipantEpochSharedAndMonotonic(t *testing.T) {
 func TestEpochFloorProtectsDiscardedHistory(t *testing.T) {
 	for _, kind := range []string{"forced-abort", "cached reply"} {
 		t.Run(kind, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			dir := t.TempDir()
 			node, err := NewParticipant(1, 64, dir)
 			if err != nil {
@@ -132,7 +132,7 @@ func TestParticipantRejectsCorruptEpochFloor(t *testing.T) {
 }
 
 func TestForcedAbortGCRetainsRecentVoteAfterRestart(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	node, err := NewParticipant(1, 64, dir)
 	if err != nil {
@@ -178,7 +178,7 @@ func TestForcedAbortGCRetainsRecentVoteAfterRestart(t *testing.T) {
 }
 
 func TestBackgroundTransactionRetention(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	node, err := NewParticipant(1, 64, dir)
 	if err != nil {
@@ -272,7 +272,7 @@ func TestBackgroundTransactionRetention(t *testing.T) {
 }
 
 func TestTransactionRetentionFailureAndRestart(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	node, err := NewParticipant(1, 64, dir)
 	if err != nil {
@@ -354,7 +354,7 @@ func TestTransactionRetentionFailureAndRestart(t *testing.T) {
 func TestStaleRequestPersistsEpochFloor(t *testing.T) {
 	for _, kind := range []string{"prepare", "one-pc"} {
 		t.Run(kind, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			dir := t.TempDir()
 			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 100}
 			execute := func(node *Participant) (sinfonia.Vote, error) {
@@ -366,7 +366,7 @@ func TestStaleRequestPersistsEpochFloor(t *testing.T) {
 				return resp.Vote, err
 			}
 			now := time.Unix(100*3600, 0)
-			for attempt := 0; attempt < 2; attempt++ {
+			for attempt := range 2 {
 				node, err := NewParticipant(1, 64, dir)
 				if err != nil {
 					t.Fatal(err)
@@ -394,7 +394,7 @@ func TestStaleRequestPersistsEpochFloor(t *testing.T) {
 func TestRecoveryOfOldTransaction(t *testing.T) {
 	for _, state := range []string{"prepared", "never voted", "retained commit"} {
 		t.Run(state, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			now := time.Unix(100*3600, 0)
 			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(now)}
 			a, err := NewParticipant(1, 16, t.TempDir())

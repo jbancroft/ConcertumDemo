@@ -28,7 +28,7 @@ func TestREPLCommandsAndUnknownOutcome(t *testing.T) {
 		}
 		return minuetsql.QueryResult{}, nil
 	}
-	if err := repl(context.Background(), execute, io.NopCloser(strings.NewReader(input)), &output); err != nil {
+	if err := repl(t.Context(), execute, io.NopCloser(strings.NewReader(input)), &output); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"CREATE TABLE scores;", "SELECT id, value FROM scores;"}
@@ -46,7 +46,7 @@ func TestREPLCommandsAndUnknownOutcome(t *testing.T) {
 }
 
 func TestREPLOverTCPAndDurableReopen(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	dir := t.TempDir()
 	args, stop := startREPLNode(t, ctx, dir)
@@ -142,7 +142,7 @@ func TestREPLRejectsInvalidAddress(t *testing.T) {
 		{"-port", "65536"}, {"unexpected-argument"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			if err := run(context.Background(), args, io.NopCloser(strings.NewReader(".quit\n")), io.Discard, io.Discard); err == nil {
+			if err := run(t.Context(), args, io.NopCloser(strings.NewReader(".quit\n")), io.Discard, io.Discard); err == nil {
 				t.Fatal("invalid address was accepted")
 			}
 		})
@@ -163,7 +163,7 @@ func (w *promptWriter) Write(p []byte) (int, error) {
 }
 
 func TestREPLCancellationWhileInputIsBlocked(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	input, writer := io.Pipe()
 	defer writer.Close()
@@ -191,7 +191,7 @@ func TestREPLCancellationWhileInputIsBlocked(t *testing.T) {
 }
 
 func TestREPLCancellationPreservesUnknownOutcome(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var output bytes.Buffer
 	execute := func(context.Context, string) (minuetsql.QueryResult, error) {
@@ -213,7 +213,7 @@ func TestREPLRejectsOversizedInput(t *testing.T) {
 		return minuetsql.QueryResult{}, nil
 	}
 	input := strings.NewReader(strings.Repeat("x", maxLineBytes) + "\nCREATE TABLE scores\n")
-	err := repl(context.Background(), execute, io.NopCloser(input), io.Discard)
+	err := repl(t.Context(), execute, io.NopCloser(input), io.Discard)
 	if err == nil || calls != 0 {
 		t.Fatalf("oversized input: error=%v, executed=%d", err, calls)
 	}

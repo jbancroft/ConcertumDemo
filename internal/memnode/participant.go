@@ -1,6 +1,7 @@
 package memnode
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"sync"
@@ -161,9 +162,7 @@ func (n *Participant) read(addr uint64, length uint32) ([]byte, error) {
 	if end < addr || end > uint64(len(n.memory)) {
 		return nil, ErrOutOfBounds
 	}
-	data := make([]byte, length)
-	copy(data, n.memory[addr:end])
-	return data, nil
+	return bytes.Clone(n.memory[addr:end]), nil
 }
 
 func (n *Participant) write(addr uint64, data []byte) error {

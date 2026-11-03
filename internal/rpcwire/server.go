@@ -26,7 +26,7 @@ func (s *Server) Register(method string, handler Handler) {
 	s.methods[method] = handler
 }
 
-func RegisterTyped[Req any, Resp any](s *Server, method string, fn func(context.Context, Req) (Resp, error)) {
+func (s *Server) RegisterTyped[Req any, Resp any](method string, fn func(context.Context, Req) (Resp, error)) {
 	s.Register(method, func(ctx context.Context, body any) (any, error) {
 		req, ok := body.(Req)
 		if !ok {
@@ -64,9 +64,7 @@ func (s *Server) Serve(listener net.Listener) error {
 		mu.Lock()
 		connections[conn] = cancel
 		mu.Unlock()
-		handlers.Add(1)
-		go func() {
-			defer handlers.Done()
+		handlers.Go(func() {
 			defer cancel()
 			defer func() {
 				mu.Lock()
@@ -74,7 +72,7 @@ func (s *Server) Serve(listener net.Listener) error {
 				mu.Unlock()
 			}()
 			s.serveConn(ctx, conn)
-		}()
+		})
 	}
 }
 

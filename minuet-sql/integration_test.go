@@ -11,7 +11,7 @@ import (
 )
 
 func TestTableRegionsSurviveDurableRestart(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	dir := t.TempDir()
 	cluster, err := democluster.Start(ctx, os.Getenv("MEMNODE_BIN"), dir, testMemorySize)

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -239,7 +240,7 @@ func (idx *BTree) RangeScan(ctx context.Context, start, end uint64) (*Iterator, 
 
 // mutate retries confirmed aborts with a fresh working copy of the tree.
 func (idx *BTree) mutate(ctx context.Context, fn func(*snapshot) error) error {
-	for attempt := 0; attempt < idx.cfg.MaxRetries; attempt++ {
+	for range idx.cfg.MaxRetries {
 		s, err := idx.loadSnapshot(ctx)
 		if err != nil {
 			return err
@@ -267,7 +268,7 @@ func (idx *BTree) mutate(ctx context.Context, fn func(*snapshot) error) error {
 }
 
 func (idx *BTree) loadSnapshot(ctx context.Context) (*snapshot, error) {
-	for attempt := 0; attempt < idx.cfg.MaxRetries; attempt++ {
+	for range idx.cfg.MaxRetries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -424,8 +425,8 @@ func (idx *BTree) insertRec(s *snapshot, pageID uint32, key, value uint64) (uint
 		mid := len(n.keys) / 2
 		right.keys = append(right.keys, n.keys[mid:]...)
 		right.values = append(right.values, n.values[mid:]...)
-		n.keys = append([]uint64(nil), n.keys[:mid]...)
-		n.values = append([]uint64(nil), n.values[:mid]...)
+		n.keys = slices.Clone(n.keys[:mid])
+		n.values = slices.Clone(n.values[:mid])
 		right.NextLeaf = n.NextLeaf
 		n.NextLeaf = right.ID
 		return right.keys[0], right.ID, true, nil
@@ -452,8 +453,8 @@ func (idx *BTree) insertRec(s *snapshot, pageID uint32, key, value uint64) (uint
 	promote := n.keys[mid]
 	right.keys = append(right.keys, n.keys[mid+1:]...)
 	right.children = append(right.children, n.children[mid+1:]...)
-	n.keys = append([]uint64(nil), n.keys[:mid]...)
-	n.children = append([]uint32(nil), n.children[:mid+1]...)
+	n.keys = slices.Clone(n.keys[:mid])
+	n.children = slices.Clone(n.children[:mid+1])
 	return promote, right.ID, true, nil
 }
 
@@ -668,19 +669,19 @@ func decodeNode(buf []byte) (*BTreeNode, error) {
 		return nil, errors.New("minuet-index: truncated page payload")
 	}
 	n.keys = make([]uint64, keyCount)
-	for i := 0; i < keyCount; i++ {
+	for i := range keyCount {
 		n.keys[i] = binary.BigEndian.Uint64(buf[off:])
 		off += keySize
 	}
 	if n.isLeaf {
 		n.values = make([]uint64, keyCount)
-		for i := 0; i < keyCount; i++ {
+		for i := range keyCount {
 			n.values[i] = binary.BigEndian.Uint64(buf[off:])
 			off += valueSize
 		}
 	} else {
 		n.children = make([]uint32, childCount)
-		for i := 0; i < childCount; i++ {
+		for i := range childCount {
 			n.children[i] = binary.BigEndian.Uint32(buf[off:])
 			off += childIDSize
 		}

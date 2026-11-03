@@ -2,7 +2,6 @@ package memnode
 
 import (
 	"bytes"
-	"context"
 	"testing"
 	"time"
 
@@ -54,7 +53,7 @@ func TestLockManagerChecksEarlierLongReadLocks(t *testing.T) {
 }
 
 func TestPreparedComparisonProtectsPartiallyWrittenRange(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	n := newTestParticipant(t, 1, 2)
 	first := sinfonia.ExecPrepareRequest{
 		TID:          lockTestTID(1),
@@ -97,7 +96,7 @@ func TestTransactionPartialReadLockConflicts(t *testing.T) {
 					name += "/right"
 				}
 				t.Run(name, func(t *testing.T) {
-					ctx := context.Background()
+					ctx := t.Context()
 					n := newTestParticipant(t, 1, 3)
 					holder := sinfonia.ExecPrepareRequest{
 						TID:        lockTestTID(1),
@@ -152,7 +151,7 @@ func TestTransactionOverlappingItemsReleaseLocks(t *testing.T) {
 		{name: "one-phase", onePhase: true, commit: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			n := newTestParticipant(t, 1, 5)
 			req := sinfonia.ExecPrepareRequest{
 				TID:      lockTestTID(1),
@@ -195,7 +194,7 @@ func TestTransactionOverlappingItemsReleaseLocks(t *testing.T) {
 }
 
 func TestTransactionReadLocksRemainShared(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	n := newTestParticipant(t, 1, 3)
 	for counter := uint64(1); counter <= 2; counter++ {
 		req := sinfonia.ExecPrepareRequest{
@@ -230,7 +229,7 @@ func lockTestTID(counter uint64) sinfonia.TransactionID {
 func runLockTestRequest(t *testing.T, n *Participant, onePhase bool, req sinfonia.ExecPrepareRequest) (sinfonia.Vote, map[uint32][]byte) {
 	t.Helper()
 	if onePhase {
-		resp, err := n.ExecCommit1PC(context.Background(), sinfonia.ExecCommit1PCRequest{
+		resp, err := n.ExecCommit1PC(t.Context(), sinfonia.ExecCommit1PCRequest{
 			TID: req.TID, CmpItems: req.CmpItems, ReadItems: req.ReadItems, WriteItems: req.WriteItems,
 		})
 		if err != nil {
@@ -238,7 +237,7 @@ func runLockTestRequest(t *testing.T, n *Participant, onePhase bool, req sinfoni
 		}
 		return resp.Vote, resp.ReadData
 	}
-	resp, err := n.ExecAndPrepare(context.Background(), req)
+	resp, err := n.ExecAndPrepare(t.Context(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +246,7 @@ func runLockTestRequest(t *testing.T, n *Participant, onePhase bool, req sinfoni
 
 func TestBadLockIncludesConflictContext(t *testing.T) {
 	n := newTestParticipant(t, 1, 64)
-	ctx := context.Background()
+	ctx := t.Context()
 	tid1 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	tid2 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: sinfonia.EpochAt(time.Now())}
 	if resp, err := n.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{

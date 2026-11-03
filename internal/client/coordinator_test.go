@@ -26,7 +26,7 @@ func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant 
 			t.Error(err)
 		}
 	})
-	if err := node.Recover(context.Background()); err != nil {
+	if err := node.Recover(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	return node
@@ -35,7 +35,7 @@ func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant 
 func TestCoordinatorRejectsUnknownHostBeforePreparing(t *testing.T) {
 	for _, kind := range []string{"compare", "read", "write"} {
 		t.Run(kind, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			node := newTestParticipant(t, 1, 16)
 			coord := NewCoordinator(map[uint32]Participant{1: node})
 			defer coord.Close()
@@ -71,11 +71,11 @@ func TestCoordinatorReportsUnknownAfter1PCResponseLost(t *testing.T) {
 	n := &lost1PCNode{Participant: newTestParticipant(t, 1, 16), failure: failure}
 	coord := NewCoordinator(map[uint32]Participant{1: n})
 	defer coord.Close()
-	res := coord.ExecuteAndCommit(context.Background(), nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
+	res := coord.ExecuteAndCommit(t.Context(), nil, nil, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}})
 	if !res.UnknownOutcome || !errors.Is(res.TransportErr, failure) || res.Committed || n.calls != 1 {
 		t.Fatalf("expected one uncertain attempt, got %+v, calls=%d", res, n.calls)
 	}
-	got, err := readParticipant(context.Background(), n.Participant, 0, 1)
+	got, err := readParticipant(t.Context(), n.Participant, 0, 1)
 	if err != nil || string(got) != "A" {
 		t.Fatalf("expected applied write despite lost response, got %q err=%v", got, err)
 	}
@@ -95,12 +95,12 @@ func TestCoordinatorReportsUnknownAfterPrepareReplyFails(t *testing.T) {
 			coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 			defer coord.Close()
 			coord.coordID = 1
-			res := coord.ExecuteAndCommit(context.Background(), nil, []sinfonia.ReadItem{{MemID: 1, Len: 1}, {MemID: 2, Len: 1}}, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
+			res := coord.ExecuteAndCommit(t.Context(), nil, []sinfonia.ReadItem{{MemID: 1, Len: 1}, {MemID: 2, Len: 1}}, []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}, {MemID: 2, Addr: 0, Data: []byte("B")}})
 			if !res.UnknownOutcome || !errors.Is(res.TransportErr, tc.failure) || res.Committed || n1.calls != 1 {
 				t.Fatalf("expected one uncertain attempt, got %+v, calls=%d", res, n1.calls)
 			}
 			for id, node := range map[uint32]*memnode.Participant{1: n1.Participant, 2: n2} {
-				pending, err := node.QueryInDoubt(context.Background(), sinfonia.QueryInDoubtRequest{})
+				pending, err := node.QueryInDoubt(t.Context(), sinfonia.QueryInDoubtRequest{})
 				if err != nil || len(pending.Entries) != 1 {
 					t.Fatalf("node %d should await node recovery: %+v, %v", id, pending, err)
 				}
@@ -126,7 +126,7 @@ func TestCoordinatorRetriesStaleEpochWithFreshID(t *testing.T) {
 	for _, participants := range []int{1, 2} {
 		for _, retries := range []int{0, 1} {
 			t.Run(fmt.Sprintf("participants=%d/retries=%d", participants, retries), func(t *testing.T) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 				defer cancel()
 				dir := t.TempDir()
 				current := sinfonia.EpochAt(time.Now())
@@ -199,7 +199,7 @@ func TestCoordinatorRetriesStaleEpochWithFreshID(t *testing.T) {
 func TestCoordinatorRetriesSingleParticipantLockConflict(t *testing.T) {
 	for _, release := range []bool{false, true} {
 		t.Run(fmt.Sprintf("release=%t", release), func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			node := newTestParticipant(t, 1, 16)
 			defer node.Close()
 			holder := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
@@ -236,7 +236,7 @@ func TestCoordinatorRetriesSingleParticipantLockConflict(t *testing.T) {
 }
 
 func TestCoordinatorDoesNotRetryComparisonFailureWithLockConflict(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	n1, n2 := newTestParticipant(t, 1, 16), newTestParticipant(t, 2, 16)
 	defer n1.Close()
 	defer n2.Close()
@@ -292,7 +292,7 @@ func TestCoordinatorLogsReadOnlyProjectionWhenTransactionHasWrites(t *testing.T)
 
 	coord := NewCoordinator(map[uint32]Participant{1: n1, 2: n2})
 	defer coord.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	result := coord.ExecuteAndCommit(
 		ctx,
 		nil,

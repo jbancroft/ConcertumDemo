@@ -60,7 +60,7 @@ func decodeCatalog(raw []byte, memorySize uint64) (catalogState, error) {
 	if tableCount > catalogMaxRecords {
 		return catalogState{}, ErrInvalidCatalog
 	}
-	for i := uint32(0); i < tableCount; i++ {
+	for i := range tableCount {
 		off := catalogHeaderSize + int(i)*catalogRecordSize
 		r := raw[off : off+catalogRecordSize]
 		rec := catalogTableRecord{

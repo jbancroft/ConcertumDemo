@@ -43,7 +43,7 @@ func TestMutationUnknownOutcomeIsNotRetried(t *testing.T) {
 		{name: "delete with lost commit reply", delete: true, applyWrites: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			base := newMemTxnClient()
 			reader := newTestBTree(t, base, Config{HostId: 1})
 			if test.delete {

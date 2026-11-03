@@ -50,11 +50,11 @@ func Parse(sql string) (statement, error) {
 			return nil, fmt.Errorf("%w: table name %q", ErrUnsupportedSQL, strings.TrimSpace(rest[:idx]))
 		}
 		vals := strings.TrimSpace(rest[idx+len(" VALUES "):])
-		if !strings.HasPrefix(vals, "(") || !strings.HasSuffix(vals, ")") {
+		vals, hasOpen := strings.CutPrefix(vals, "(")
+		vals, hasClose := strings.CutSuffix(vals, ")")
+		if !hasOpen || !hasClose {
 			return nil, fmt.Errorf("%w: insert values", ErrUnsupportedSQL)
 		}
-		vals = strings.TrimPrefix(vals, "(")
-		vals = strings.TrimSuffix(vals, ")")
 		cols := strings.Split(vals, ",")
 		if len(cols) != 2 {
 			return nil, fmt.Errorf("%w: insert expects two values", ErrUnsupportedSQL)

@@ -21,12 +21,12 @@ const (
 func benchmarkIndex(b *testing.B) (*BTree, context.Context) {
 	b.Helper()
 	idx := newTestBTree(b, newMemTxnClient(), Config{HostId: 1, MaxRetries: 20, RetryBackoff: time.Microsecond})
-	return idx, context.Background()
+	return idx, b.Context()
 }
 
 func preloadSequential(b *testing.B, idx *BTree, ctx context.Context, n int) {
 	b.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if err := idx.Insert(ctx, uint64(i), uint64(i)); err != nil {
 			b.Fatalf("preload insert %d: %v", i, err)
 		}
@@ -39,8 +39,7 @@ func BenchmarkMinuetIndexSearch(b *testing.B) {
 			idx, ctx := benchmarkIndex(b)
 			preloadSequential(b, idx, ctx, datasetSize)
 			rng := rand.New(rand.NewSource(benchSeedPrimary))
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				key := uint64(rng.Intn(datasetSize))
 				if _, ok, err := idx.Search(ctx, key); err != nil {
 					b.Fatalf("search err: %v", err)
@@ -57,8 +56,8 @@ func BenchmarkMinuetIndexInsert(b *testing.B) {
 		idx, ctx := benchmarkIndex(b)
 		rng := rand.New(rand.NewSource(benchSeedPrimary))
 		inserts := 0
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		var value uint64
+		for b.Loop() {
 			if inserts == benchDatasetLarge {
 				b.StopTimer()
 				idx, ctx = benchmarkIndex(b)
@@ -66,10 +65,11 @@ func BenchmarkMinuetIndexInsert(b *testing.B) {
 				b.StartTimer()
 			}
 			key := uint64(rng.Int63())
-			if err := idx.Insert(ctx, key, uint64(i)); err != nil {
+			if err := idx.Insert(ctx, key, value); err != nil {
 				b.Fatalf("insert err: %v", err)
 			}
 			inserts++
+			value++
 		}
 	})
 
@@ -78,8 +78,7 @@ func BenchmarkMinuetIndexInsert(b *testing.B) {
 		rng := rand.New(rand.NewSource(benchSeedSplitHeavy))
 		base := rng.Uint64() &^ uint64(0xffff)
 		inserts := 0
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			if inserts == benchDatasetLarge {
 				b.StopTimer()
 				idx, ctx = benchmarkIndex(b)
@@ -100,8 +99,7 @@ func BenchmarkMinuetIndexDelete(b *testing.B) {
 		idx, ctx := benchmarkIndex(b)
 		preloadSequential(b, idx, ctx, benchDatasetMedium)
 		next := 0
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			k := uint64(next % benchDatasetMedium)
 			if err := idx.Delete(ctx, k); err != nil {
 				b.Fatalf("delete err: %v", err)
@@ -117,8 +115,7 @@ func BenchmarkMinuetIndexDelete(b *testing.B) {
 		idx, ctx := benchmarkIndex(b)
 		preloadSequential(b, idx, ctx, benchDatasetMedium)
 		remaining := benchDatasetMedium
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			if remaining == 0 {
 				b.StopTimer()
 				idx, ctx = benchmarkIndex(b)
@@ -148,8 +145,7 @@ func BenchmarkMinuetIndexRangeScan(b *testing.B) {
 			idx, ctx := benchmarkIndex(b)
 			preloadSequential(b, idx, ctx, tc.datasetSize)
 			rng := rand.New(rand.NewSource(benchSeedPrimary))
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				start := rng.Intn(tc.datasetSize - tc.span)
 				it, err := idx.RangeScan(ctx, uint64(start), uint64(start+tc.span-1))
 				if err != nil {

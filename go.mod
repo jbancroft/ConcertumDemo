@@ -1,3 +1,5 @@
 module github.com/jbancroft/ConcertumDemo
 
-go 1.22
+go 1.27.0
+
+toolchain go1.27.3

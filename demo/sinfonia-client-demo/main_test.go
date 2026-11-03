@@ -11,7 +11,7 @@ import (
 )
 
 func TestDemonstrationPreservesBalancesAfterAbortedTransfer(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), demoTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), demoTimeout)
 	defer cancel()
 	executable := os.Getenv("MEMNODE_BIN")
 	cluster, err := democluster.Start(ctx, executable, t.TempDir(), balanceSize)

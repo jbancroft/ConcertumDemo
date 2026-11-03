@@ -54,7 +54,7 @@ func TestSingleParticipantUses1PCFastPath(t *testing.T) {
 	defer coord.Close()
 	c := &Client{coordinator: coord}
 
-	execution := c.NewMiniTransaction().Write(1, 0, []byte("x")).ExecuteAndCommit(context.Background())
+	execution := c.NewMiniTransaction().Write(1, 0, []byte("x")).ExecuteAndCommit(t.Context())
 
 	committed, status := execution.Committed, execution.Status
 	if !committed || status != StatusCommitted {
@@ -72,7 +72,7 @@ func TestSingleParticipantUses1PCFastPath(t *testing.T) {
 }
 
 func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	n1 := newTestParticipant(t, 1, 4096)
 	n2 := newTestParticipant(t, 2, 4096)
@@ -82,11 +82,8 @@ func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
 
 	const txns = 64
 	var wg sync.WaitGroup
-	wg.Add(txns)
-	for i := 0; i < txns; i++ {
-		i := i
-		go func() {
-			defer wg.Done()
+	for i := range txns {
+		wg.Go(func() {
 			execution := c.NewMiniTransaction().
 				Write(1, uint64(i), []byte{byte(i)}).
 				Write(2, uint64(i), []byte{byte(i)}).
@@ -95,7 +92,7 @@ func TestCoordinatorPipeliningConcurrentTransactions(t *testing.T) {
 			if !committed {
 				t.Errorf("txn %d aborted", i)
 			}
-		}()
+		})
 	}
 	// Finish all API calls before Close, including when the context expires.
 	wg.Wait()
@@ -108,8 +105,8 @@ func TestCommitMessageBatchingReducesIndividualCommitRPCs(t *testing.T) {
 	defer coord.Close()
 	c := &Client{coordinator: coord}
 
-	for i := 0; i < 200; i++ {
-		execution := c.NewMiniTransaction().Write(1, uint64(i%64), []byte("a")).Write(2, uint64(i%64), []byte("b")).ExecuteAndCommit(context.Background())
+	for i := range 200 {
+		execution := c.NewMiniTransaction().Write(1, uint64(i%64), []byte("a")).Write(2, uint64(i%64), []byte("b")).ExecuteAndCommit(t.Context())
 		committed := execution.Committed
 		if !committed {
 			t.Fatalf("unexpected abort at %d", i)
@@ -142,21 +139,21 @@ func TestFlushPendingCommitsAppliesQueuedDecisions(t *testing.T) {
 	execution := c.NewMiniTransaction().
 		Write(1, 4, []byte("one")).
 		Write(2, 8, []byte("two")).
-		ExecuteAndCommit(context.Background())
+		ExecuteAndCommit(t.Context())
 
 	committed, status := execution.Committed, execution.Status
 	if !committed || status != StatusCommitted {
 		t.Fatalf("unexpected transaction outcome: committed=%v status=%v", committed, status)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	if err := c.FlushPendingCommits(ctx); err != nil {
 		t.Fatalf("flush pending commits: %v", err)
 	}
-	if got, _ := c.Read(context.Background(), 1, 4, 3); string(got) != "one" {
+	if got, _ := c.Read(t.Context(), 1, 4, 3); string(got) != "one" {
 		t.Fatalf("node 1 write not applied after flush: %q", got)
 	}
-	if got, _ := c.Read(context.Background(), 2, 8, 3); string(got) != "two" {
+	if got, _ := c.Read(t.Context(), 2, 8, 3); string(got) != "two" {
 		t.Fatalf("node 2 write not applied after flush: %q", got)
 	}
 }

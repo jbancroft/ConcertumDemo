@@ -1,6 +1,8 @@
 package memnode
 
 import (
+	"slices"
+
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/minitxn"
 )
@@ -142,8 +144,8 @@ func (n *Participant) tryTransactionLocksLocked(compares []sinfonia.CmpItem, rea
 }
 
 func (n *Participant) releaseLocks(locks []RangeLock) {
-	for i := len(locks) - 1; i >= 0; i-- {
-		n.locks.unlock(locks[i])
+	for _, lock := range slices.Backward(locks) {
+		n.locks.unlock(lock)
 	}
 }
 

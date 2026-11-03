@@ -10,14 +10,14 @@ import (
 
 func TestPublicAPISignaturesDoNotExposeInternalPackages(t *testing.T) {
 	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.NewClient))
-	checkNoInternalType(t, reflect.TypeOf(&sinfoniaclient.Client{}))
-	checkNoInternalType(t, reflect.TypeOf(&sinfoniaclient.MiniTransaction{}))
-	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.ExecResult{}))
-	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.ReadKey{}))
-	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.CompareItem{}))
-	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.ReadItem{}))
-	checkNoInternalType(t, reflect.TypeOf(sinfoniaclient.WriteItem{}))
-	checkNoInternalType(t, reflect.TypeOf((*sinfoniaclient.TxnClient)(nil)).Elem())
+	checkNoInternalType(t, reflect.TypeFor[*sinfoniaclient.Client]())
+	checkNoInternalType(t, reflect.TypeFor[*sinfoniaclient.MiniTransaction]())
+	checkNoInternalType(t, reflect.TypeFor[sinfoniaclient.ExecResult]())
+	checkNoInternalType(t, reflect.TypeFor[sinfoniaclient.ReadKey]())
+	checkNoInternalType(t, reflect.TypeFor[sinfoniaclient.CompareItem]())
+	checkNoInternalType(t, reflect.TypeFor[sinfoniaclient.ReadItem]())
+	checkNoInternalType(t, reflect.TypeFor[sinfoniaclient.WriteItem]())
+	checkNoInternalType(t, reflect.TypeFor[sinfoniaclient.TxnClient]())
 }
 
 var _ sinfoniaclient.TxnClient = (*sinfoniaclient.Client)(nil)
@@ -44,25 +44,25 @@ func checkNoInternalType(t *testing.T, typ reflect.Type) {
 			walk(cur.Key())
 			walk(cur.Elem())
 		case reflect.Struct:
-			for i := 0; i < cur.NumField(); i++ {
-				if field := cur.Field(i); field.IsExported() {
+			for field := range cur.Fields() {
+				if field.IsExported() {
 					walk(field.Type)
 				}
 			}
 		case reflect.Interface:
-			for i := 0; i < cur.NumMethod(); i++ {
-				walk(cur.Method(i).Type)
+			for method := range cur.Methods() {
+				walk(method.Type)
 			}
 		case reflect.Func:
-			for i := 0; i < cur.NumIn(); i++ {
-				walk(cur.In(i))
+			for in := range cur.Ins() {
+				walk(in)
 			}
-			for i := 0; i < cur.NumOut(); i++ {
-				walk(cur.Out(i))
+			for out := range cur.Outs() {
+				walk(out)
 			}
 		}
-		for i := 0; i < cur.NumMethod(); i++ {
-			walk(cur.Method(i).Type)
+		for method := range cur.Methods() {
+			walk(method.Type)
 		}
 	}
 	walk(typ)

@@ -1,13 +1,15 @@
 package client
 
 import (
+	"cmp"
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/binary"
 	"errors"
 	"log"
+	"maps"
 	"math/rand"
-	"sort"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -88,10 +90,7 @@ type Coordinator struct {
 }
 
 func NewCoordinator(nodes map[uint32]Participant) *Coordinator {
-	cpy := make(map[uint32]Participant, len(nodes))
-	for id, node := range nodes {
-		cpy[id] = node
-	}
+	cpy := maps.Clone(nodes)
 	c := &Coordinator{nodes: cpy, coordID: newCoordinatorID(), epoch: sinfonia.EpochAt(time.Now()), backoff: RandomBackoff{}, maxRetries: defaultMaxRetries, workers: map[uint32]*rpcWorker{}}
 	for id, node := range cpy {
 		c.workers[id] = newRPCWorker(id, node)
@@ -124,10 +123,7 @@ func newCoordinatorID() uint64 {
 		}
 	}
 	id := uint64(time.Now().UnixNano()) ^ coordinatorIDFallback.Add(1)
-	if id == 0 {
-		return 1
-	}
-	return id
+	return cmp.Or(id, 1)
 }
 
 func (c *Coordinator) SetBackoffForTest(backoff BackoffStrategy) {
@@ -141,9 +137,7 @@ func (c *Coordinator) SetMaxRetriesForTest(max int) {
 func (c *Coordinator) nextTID() sinfonia.TransactionID {
 	c.genMu.Lock()
 	defer c.genMu.Unlock()
-	if epoch := sinfonia.EpochAt(time.Now()); epoch > c.epoch {
-		c.epoch = epoch
-	}
+	c.epoch = max(c.epoch, sinfonia.EpochAt(time.Now()))
 	c.tidCounter++
 	return sinfonia.TransactionID{CoordinatorID: c.coordID, Counter: c.tidCounter, Epoch: c.epoch}
 }
@@ -154,9 +148,7 @@ func (c *Coordinator) observeEpoch(epoch uint64) {
 	}
 	c.genMu.Lock()
 	defer c.genMu.Unlock()
-	if epoch > c.epoch {
-		c.epoch = epoch
-	}
+	c.epoch = max(c.epoch, epoch)
 }
 
 type ExecResult struct {
@@ -196,11 +188,7 @@ func (c *Coordinator) ExecuteAndCommit(ctx context.Context, compares []sinfonia.
 	for _, i := range writes {
 		seen[i.MemID] = struct{}{}
 	}
-	hostIds := make([]uint32, 0, len(seen))
-	for hostId := range seen {
-		hostIds = append(hostIds, hostId)
-	}
-	sort.Slice(hostIds, func(i, j int) bool { return hostIds[i] < hostIds[j] })
+	hostIds := slices.Sorted(maps.Keys(seen))
 	// Reject local configuration errors before any participant can prepare.
 	for _, hostId := range hostIds {
 		if _, ok := c.nodes[hostId]; !ok {
@@ -260,9 +248,7 @@ func (c *Coordinator) FlushPendingCommits(ctx context.Context) error {
 	}
 	var firstErr error
 	for range c.workers {
-		if err := <-results; err != nil && firstErr == nil {
-			firstErr = err
-		}
+		firstErr = cmp.Or(firstErr, <-results)
 	}
 	return firstErr
 }
@@ -275,14 +261,12 @@ type prepareCall struct {
 
 func newRPCWorker(hostId uint32, node Participant) *rpcWorker {
 	w := &rpcWorker{hostId: hostId, node: node, prepareCh: make(chan prepareCall, prepareQueueSize), commitCh: make(chan commitDispatch, commitQueueSize), batchDelay: commitBatchDelay, batchMax: commitBatchSize}
-	w.done.Add(2)
-	go w.runPrepare()
-	go w.runCommitBatcher()
+	w.done.Go(w.runPrepare)
+	w.done.Go(w.runCommitBatcher)
 	return w
 }
 
 func (w *rpcWorker) runPrepare() {
-	defer w.done.Done()
 	for req := range w.prepareCh {
 		if err := req.ctx.Err(); err != nil {
 			req.respC <- prepareResult{hostId: w.hostId, err: err}
@@ -300,27 +284,17 @@ func (w *rpcWorker) runPrepare() {
 }
 
 func (w *rpcWorker) runCommitBatcher() {
-	defer w.done.Done()
 	t := time.NewTimer(time.Hour)
-	if !t.Stop() {
-		<-t.C
-	}
+	t.Stop()
 	defer t.Stop()
 
 	batch := make([]commitDispatch, 0, w.batchMax)
 	rememberDeliveryErr := func(err error) {
-		if err != nil && w.deliveryErr == nil {
-			w.deliveryErr = err
-		}
+		w.deliveryErr = cmp.Or(w.deliveryErr, err)
 	}
 	var timerC <-chan time.Time
 	stopTimer := func() {
-		if !t.Stop() {
-			select {
-			case <-t.C:
-			default:
-			}
-		}
+		t.Stop()
 		timerC = nil
 	}
 	flush := func() error {
@@ -339,9 +313,7 @@ func (w *rpcWorker) runCommitBatcher() {
 				commitResp, err2 := w.node.Commit(context.Background(), sinfonia.CommitRequest{TID: d.tid, RequestID: d.requestID, ActionCommit: d.actionCommit})
 				if err2 != nil {
 					log.Printf("commit rpc failed for memnode %d tid=%+v: %v", w.hostId, d.tid, err2)
-					if firstErr == nil {
-						firstErr = err2
-					}
+					firstErr = cmp.Or(firstErr, err2)
 				} else if !commitResp.Ack {
 					log.Printf("commit not acknowledged for memnode %d tid=%+v", w.hostId, d.tid)
 					if firstErr == nil {
@@ -425,15 +397,13 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 	var dispatches sync.WaitGroup
 	defer dispatches.Wait()
 	for _, hostId := range hostIds {
-		dispatches.Add(1)
-		go func(hostId uint32) {
-			defer dispatches.Done()
+		dispatches.Go(func() {
 			worker := c.workers[hostId]
 			reqReads := readItemsForHost(hostId, reads)
 			call := prepareCall{ctx: ctx, req: sinfonia.ExecPrepareRequest{
 				TID:          txId,
 				RequestID:    sinfonia.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
-				Participants: append([]uint32(nil), hostIds...),
+				Participants: slices.Clone(hostIds),
 				HasWrites:    len(writes) > 0,
 				CmpItems:     compareItemsForHost(hostId, compares),
 				ReadItems:    reqReads,
@@ -445,7 +415,7 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 			case <-ctx.Done():
 				results <- prepareResult{hostId: hostId, err: ctx.Err()}
 			}
-		}(hostId)
+		})
 	}
 
 	decideCommit := true

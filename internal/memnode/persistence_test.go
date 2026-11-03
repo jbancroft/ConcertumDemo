@@ -49,7 +49,7 @@ func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
 	for _, phase := range []string{"one-phase", "prepare/commit"} {
 		for _, kind := range []string{"read", "compare-only"} {
 			t.Run(phase+"/"+kind, func(t *testing.T) {
-				ctx := context.Background()
+				ctx := t.Context()
 				dir := t.TempDir()
 				node := newRecoveredFailureTestNode(t, 1, dir)
 				var compares []sinfonia.CmpItem
@@ -113,7 +113,7 @@ func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
 }
 
 func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	n, err := memnode.NewParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +211,7 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 }
 
 func TestOnePCOutOfBoundsWriteDoesNotPersistSuccess(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := filepath.Join(t.TempDir(), "node")
 	n, err := memnode.NewParticipant(1, 32, dir)
 	if err != nil {
@@ -239,7 +239,7 @@ func TestDurableLargeWritesSurviveRestart(t *testing.T) {
 	)
 	for _, interrupted := range []bool{false, true} {
 		t.Run(map[bool]string{false: "applied", true: "committed before apply"}[interrupted], func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			dir := t.TempDir()
 			node, err := memnode.NewParticipant(1, memorySize, dir)
 			if err != nil {
@@ -303,7 +303,7 @@ func TestDurableLargeWritesSurviveRestart(t *testing.T) {
 }
 
 func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	dir := t.TempDir()
 	node, err := memnode.NewParticipant(1, 16, dir)
@@ -398,7 +398,7 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 		}
 
 		t.Run(path, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			dir := t.TempDir()
 			node := newRecoveredFailureTestNode(t, 1, dir)
 			injected := errors.New("acknowledgement lost after persistence")
@@ -463,7 +463,7 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 }
 
 func TestUncertainForcedAbortRequiresRestart(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	node := newRecoveredFailureTestNode(t, 1, dir)
 	injected := errors.New("acknowledgement lost after forced-abort persistence")
@@ -505,7 +505,7 @@ func TestUncertainForcedAbortRequiresRestart(t *testing.T) {
 }
 
 func TestRedoFailureBeforeWriteResolvesAbortAfterRestart(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	node := newRecoveredFailureTestNode(t, 1, dir)
 	// Make opening the log fail before writing any bytes.
@@ -547,7 +547,7 @@ func newRecoveredFailureTestNode(t *testing.T, id uint32, dir string) *memnode.P
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = node.Close() })
-	if err := node.Recover(context.Background()); err != nil {
+	if err := node.Recover(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	return node
@@ -555,7 +555,7 @@ func newRecoveredFailureTestNode(t *testing.T, id uint32, dir string) *memnode.P
 
 func assertParticipantFaulted(t *testing.T, node *memnode.Participant, tid sinfonia.TransactionID) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	pending, err := node.QueryInDoubt(ctx, sinfonia.QueryInDoubtRequest{})
 	if err != nil || len(pending.Entries) != 1 || pending.Entries[0].TID != tid {
 		t.Fatalf("fault discarded pending transaction: %+v, %v", pending, err)
@@ -568,7 +568,7 @@ func assertParticipantFaulted(t *testing.T, node *memnode.Participant, tid sinfo
 
 func assertFaultedParticipantRejectsRequests(t *testing.T, node *memnode.Participant, tid sinfonia.TransactionID) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	assertParticipantReady(t, node, false)
 	unknown := sinfonia.TransactionID{CoordinatorID: 42, Epoch: sinfonia.EpochAt(time.Now())}
 	for _, probe := range []sinfonia.TransactionID{tid, unknown} {
@@ -600,7 +600,7 @@ func assertFaultedParticipantRejectsRequests(t *testing.T, node *memnode.Partici
 
 func pendingTransactionID(t *testing.T, node *memnode.Participant) sinfonia.TransactionID {
 	t.Helper()
-	pending, err := node.QueryInDoubt(context.Background(), sinfonia.QueryInDoubtRequest{})
+	pending, err := node.QueryInDoubt(t.Context(), sinfonia.QueryInDoubtRequest{})
 	if err != nil || len(pending.Entries) != 1 {
 		t.Fatalf("expected one pending transaction: %+v, %v", pending, err)
 	}

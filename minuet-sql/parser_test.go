@@ -77,7 +77,6 @@ func TestParseRejectsUnsupportedSyntax(t *testing.T) {
 	}
 
 	for _, sql := range unsupported {
-		sql := sql
 		t.Run(sql, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(sql)

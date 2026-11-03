@@ -1,6 +1,7 @@
 .PHONY: prepare check fmt-check vet staticcheck build test race memnode demo repl sinfonia-client-demo bench
 
 export TMPDIR := $(CURDIR)/tmp
+GOFMT := $(shell go env GOROOT)/bin/gofmt
 MEMNODE_BIN := $(CURDIR)/bin/memnode
 MEMNODE_RACE_BIN := $(CURDIR)/bin/memnode-race
 REPL_BIN := $(CURDIR)/bin/repl
@@ -14,8 +15,8 @@ prepare:
 check: fmt-check vet staticcheck build test
 
 fmt-check:
-	@test -z "$$(gofmt -l cmd demo internal minitxn minuet-index minuet-sql sinfonia-client)" || \
-		{ gofmt -l cmd demo internal minitxn minuet-index minuet-sql sinfonia-client; exit 1; }
+	@test -z "$$("$(GOFMT)" -l cmd demo internal minitxn minuet-index minuet-sql sinfonia-client)" || \
+		{ "$(GOFMT)" -l cmd demo internal minitxn minuet-index minuet-sql sinfonia-client; exit 1; }
 
 vet: prepare
 	go vet ./...

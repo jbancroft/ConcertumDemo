@@ -59,8 +59,8 @@ func (m *memTxnClient) ExecuteAndCommit(_ context.Context, compares []sinfoniacl
 
 type conflictInjectingClient struct {
 	base         *memTxnClient
-	rejectFirstN int32
-	calls        int32
+	rejectFirstN atomic.Int32
+	calls        atomic.Int32
 }
 
 func (c *conflictInjectingClient) Read(ctx context.Context, hostId uint32, addr uint64, length uint32) ([]byte, error) {
@@ -73,8 +73,8 @@ func (c *conflictInjectingClient) Write(ctx context.Context, hostId uint32, addr
 
 func (c *conflictInjectingClient) ExecuteAndCommit(ctx context.Context, compares []sinfoniaclient.CompareItem, reads []sinfoniaclient.ReadItem, writes []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
 	_ = reads
-	call := atomic.AddInt32(&c.calls, 1)
-	if call <= atomic.LoadInt32(&c.rejectFirstN) {
+	call := c.calls.Add(1)
+	if call <= c.rejectFirstN.Load() {
 		return sinfoniaclient.ExecResult{Committed: false, Status: sinfoniaclient.StatusAborted, ReadResults: map[sinfoniaclient.ReadKey][]byte{}}
 	}
 	return c.base.ExecuteAndCommit(ctx, compares, reads, writes)
@@ -122,7 +122,7 @@ func (c *unknownOutcomeClient) ExecuteAndCommit(ctx context.Context, compares []
 }
 
 func TestEngineCreateInsertSelectDelete(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newTestEngine(t)
 
 	statements := []string{
@@ -176,7 +176,7 @@ func TestEngineCreateInsertSelectDelete(t *testing.T) {
 }
 
 func TestEngineRejectsDuplicatePrimaryKey(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newTestEngine(t)
 	_, _ = e.Exec(ctx, "CREATE TABLE t")
 	_, _ = e.Exec(ctx, "INSERT INTO t VALUES (7, 70)")
@@ -187,12 +187,12 @@ func TestEngineRejectsDuplicatePrimaryKey(t *testing.T) {
 }
 
 func TestEngineMissingDeletesReleaseKeyLocks(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newTestEngine(t)
 	if _, err := e.Exec(ctx, "CREATE TABLE t"); err != nil {
 		t.Fatal(err)
 	}
-	for id := 0; id < 256; id++ {
+	for id := range 256 {
 		if _, err := e.Exec(ctx, fmt.Sprintf("DELETE FROM t WHERE id = %d", id)); !errors.Is(err, ErrRowNotFound) {
 			t.Fatalf("delete id %d: %v, want ErrRowNotFound", id, err)
 		}
@@ -211,12 +211,10 @@ func TestKeyLockerConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	count := 0
-	for worker := 0; worker < workers; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			<-start
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				_, _ = locker.withLock(7, func() (QueryResult, error) {
 					previous := count
 					// Let waiters contend while the callback owns the lock.
@@ -225,7 +223,7 @@ func TestKeyLockerConcurrentAccess(t *testing.T) {
 					return QueryResult{}, nil
 				})
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()
@@ -238,7 +236,7 @@ func TestKeyLockerConcurrentAccess(t *testing.T) {
 }
 
 func TestEngineRejectsTransactionBoundariesWithoutGroupingStatements(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newTestEngine(t)
 	for _, sql := range []string{
 		"CREATE TABLE generated_parents",
@@ -280,7 +278,7 @@ func TestEngineRejectsTransactionBoundariesWithoutGroupingStatements(t *testing.
 }
 
 func TestEngineConcurrentInsertSamePrimaryKeyDeterministic(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newTestEngine(t)
 	if _, err := e.Exec(ctx, "CREATE TABLE t"); err != nil {
 		t.Fatalf("create table: %v", err)
@@ -324,7 +322,7 @@ func TestEngineConcurrentInsertSamePrimaryKeyDeterministic(t *testing.T) {
 }
 
 func TestEngineConcurrentDeleteSelectSamePrimaryKey(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newTestEngine(t)
 	if _, err := e.Exec(ctx, "CREATE TABLE t"); err != nil {
 		t.Fatalf("create table: %v", err)
@@ -374,8 +372,8 @@ func TestEngineConcurrentDeleteSelectSamePrimaryKey(t *testing.T) {
 }
 
 func TestEngineConflictRetryBudgetMapsToErrBusy(t *testing.T) {
-	ctx := context.Background()
-	client := &conflictInjectingClient{base: newMemTxnClient(), rejectFirstN: 0}
+	ctx := t.Context()
+	client := &conflictInjectingClient{base: newMemTxnClient()}
 	e, err := NewEngine(Config{
 		HostId:       1,
 		TxnClient:    client,
@@ -389,8 +387,8 @@ func TestEngineConflictRetryBudgetMapsToErrBusy(t *testing.T) {
 	if _, err := e.Exec(ctx, "CREATE TABLE t"); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
-	atomic.StoreInt32(&client.calls, 0)
-	atomic.StoreInt32(&client.rejectFirstN, 100)
+	client.calls.Store(0)
+	client.rejectFirstN.Store(100)
 	_, err = e.Exec(ctx, "INSERT INTO t VALUES (12, 120)")
 	if !errors.Is(err, ErrBusy) {
 		t.Fatalf("insert err=%v want=%v", err, ErrBusy)
@@ -398,14 +396,15 @@ func TestEngineConflictRetryBudgetMapsToErrBusy(t *testing.T) {
 }
 
 func TestCreateTableRetriesConfirmedAbort(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := newMemTxnClient()
-	client := &conflictInjectingClient{base: base, rejectFirstN: 2}
+	client := &conflictInjectingClient{base: base}
+	client.rejectFirstN.Store(2)
 	engine := newTestEngineWithClient(t, client)
 	if _, err := engine.Exec(ctx, "CREATE TABLE scores"); err != nil {
 		t.Fatal(err)
 	}
-	if attempts := atomic.LoadInt32(&client.calls); attempts != 3 {
+	if attempts := client.calls.Load(); attempts != 3 {
 		t.Fatalf("commit attempts = %d, want 3", attempts)
 	}
 	reopened := newTestEngineWithClient(t, base)
@@ -425,7 +424,7 @@ func (c *cancelOnAbortClient) ExecuteAndCommit(context.Context, []sinfoniaclient
 }
 
 func TestCreateTableCancellationInterruptsRetryBackoff(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	client := &cancelOnAbortClient{TxnClient: newMemTxnClient(), cancel: cancel}
 	engine, err := NewEngine(Config{TxnClient: client, MemorySize: testMemorySize, RetryBackoff: time.Hour})
@@ -456,7 +455,7 @@ func TestCreateTableUnknownOutcomeIsNotRetried(t *testing.T) {
 		{name: "lost commit reply", applyWrites: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			base := newMemTxnClient()
 			client := &unknownOutcomeClient{TxnClient: base, applyWrites: test.applyWrites, failure: errors.New("lost reply")}
 			engine := newTestEngineWithClient(t, client)
@@ -501,7 +500,7 @@ func TestRowMutationPropagatesUnknownOutcome(t *testing.T) {
 		{name: "delete with lost commit reply", delete: true, applyWrites: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			base := newMemTxnClient()
 			seed := newTestEngineWithClient(t, base)
 			if _, err := seed.Exec(ctx, "CREATE TABLE scores"); err != nil {

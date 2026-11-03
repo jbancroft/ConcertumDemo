@@ -16,7 +16,7 @@ import (
 func TestRPCExecutionLimitSharedAcrossPrepareAndOnePhase(t *testing.T) {
 	n := newTestParticipant(t, 1, 16)
 	client := startAdmissionTestRPC(t, n)
-	ctx := context.Background()
+	ctx := t.Context()
 	epoch := sinfonia.EpochAt(time.Now())
 	tid := func(counter int) sinfonia.TransactionID {
 		return sinfonia.TransactionID{CoordinatorID: 1, Counter: uint64(counter), Epoch: epoch}
@@ -28,12 +28,10 @@ func TestRPCExecutionLimitSharedAcrossPrepareAndOnePhase(t *testing.T) {
 	var calls sync.WaitGroup
 	defer func() { unblock(); calls.Wait() }()
 	results := make(chan error, maxConcurrentExecutions)
-	for i := 0; i < maxConcurrentExecutions; i++ {
-		calls.Add(1)
-		go func(i int) {
-			defer calls.Done()
+	for i := range maxConcurrentExecutions {
+		calls.Go(func() {
 			results <- callAdmissionTestRPC(ctx, client, i%2 == 0, tid(i+1))
-		}(i)
+		})
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	// Observe admission only to synchronize the requests; assertions below
@@ -48,15 +46,14 @@ func TestRPCExecutionLimitSharedAcrossPrepareAndOnePhase(t *testing.T) {
 		probe, cancel := context.WithTimeout(ctx, time.Second)
 		err := callAdmissionTestRPC(probe, client, onePhase, tid(maxConcurrentExecutions+1))
 		cancel()
-		var remote *rpcwire.RemoteError
-		if !errors.As(err, &remote) || remote.Message != ErrResourceExhausted.Error() {
+		if remote, ok := errors.AsType[*rpcwire.RemoteError](err); !ok || remote.Message != ErrResourceExhausted.Error() {
 			t.Fatalf("onePhase=%t: excess execution = %v, want resource exhaustion", onePhase, err)
 		}
 	}
 
 	unblock()
 	calls.Wait()
-	for i := 0; i < maxConcurrentExecutions; i++ {
+	for range maxConcurrentExecutions {
 		if err := <-results; err != nil {
 			t.Fatalf("accepted execution failed: %v", err)
 		}
@@ -72,12 +69,11 @@ func TestRPCExecutionLimitReleasesRejectedRequests(t *testing.T) {
 	n := newTestParticipant(t, 1, 16)
 	n.recoveryComplete = false
 	client := startAdmissionTestRPC(t, n)
-	ctx := context.Background()
+	ctx := t.Context()
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Epoch: sinfonia.EpochAt(time.Now())}
-	for i := 0; i <= 2*maxConcurrentExecutions; i++ {
+	for i := range 2*maxConcurrentExecutions + 1 {
 		err := callAdmissionTestRPC(ctx, client, i%2 == 0, tid)
-		var remote *rpcwire.RemoteError
-		if !errors.As(err, &remote) || remote.Message != ErrRecoveryPending.Error() {
+		if remote, ok := errors.AsType[*rpcwire.RemoteError](err); !ok || remote.Message != ErrRecoveryPending.Error() {
 			t.Fatalf("request %d: %v, want recovery pending", i, err)
 		}
 	}
