@@ -60,6 +60,8 @@ available to a later flush or `Close()`.
 Transactions retry lock conflicts and stale epochs within a bounded retry budget.
 A failed comparison or other non-retryable rejection aborts without retry, even
 when another participant reports a lock conflict or stale epoch.
+A rejection received by the coordinator remains an abort if another prepare call
+fails or the caller cancels. Communication errors accompany that known outcome.
 Unconfigured node IDs are rejected before contacting any participant.
 
 Cross-node reads and comparisons retain durable votes to preserve atomicity

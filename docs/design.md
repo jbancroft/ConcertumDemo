@@ -121,10 +121,15 @@ call instead.
 
 If an RPC fails after the request might have arrived, the caller can't assume
 the transaction aborted. This includes server errors after a saved vote or
-commit decision; an error is not an abort vote. The API reports committed,
-aborted, or unknown. An ambiguous result returns immediately without resolving or
-retrying the operation. Both the direct client and transaction builder return
-`ExecResult`, preserving uncertainty and its cause.
+commit decision; an error is not an abort vote. An explicit rejection from another
+participant does establish abort, even if later replies fail or the caller cancels.
+The coordinator preserves that rejection and reports communication errors
+alongside it, without retrying the attempt. It offers a known decision to every
+available worker queue even after cancellation. Full queues wait only until the
+caller deadline; recovery finishes delivery where enqueueing could not complete.
+The API reports committed, aborted, or unknown. An ambiguous result returns
+without resolving or retrying the operation. Both the direct client and
+transaction builder return `ExecResult`, preserving uncertainty and its cause.
 Participants cache replies in memory so duplicate requests can get the same
 result without applying writes twice while the cache entry exists. After restart,
 a transaction still retained in redo cannot execute again, but its original

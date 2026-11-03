@@ -431,19 +431,21 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 	retry := true
 	aggregatedReads := map[sinfonia.ReadItem][]byte{}
 	participantVotes := map[uint32]sinfonia.Vote{}
-	var prepareErr error
+	var transportErr error
+collect:
 	for range hostIds {
 		var r prepareResult
 		select {
 		case r = <-results:
 		case <-ctx.Done():
-			return ExecResult{UnknownOutcome: true, Status: sinfonia.VoteBadInternal, TransportErr: ctx.Err()}, false
+			transportErr = errors.Join(transportErr, ctx.Err())
+			break collect
 		}
 		if r.err != nil {
 			participantVotes[r.hostId] = sinfonia.VoteBadInternal
 			// An error may follow a saved yes vote; only a returned vote
 			// establishes that this participant rejected the transaction.
-			prepareErr = errors.Join(prepareErr, r.err)
+			transportErr = errors.Join(transportErr, r.err)
 			continue
 		}
 		participantVotes[r.hostId] = r.resp.Vote
@@ -466,27 +468,35 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 		}
 		c.observeEpoch(r.resp.CurrentEpoch)
 	}
-	if prepareErr != nil {
-		return ExecResult{UnknownOutcome: true, Status: sinfonia.VoteBadInternal, ParticipantVotes: participantVotes, TransportErr: prepareErr}, false
+	// One explicit rejection establishes abort even if other votes are missing.
+	if transportErr != nil && decideCommit {
+		return ExecResult{UnknownOutcome: true, Status: sinfonia.VoteBadInternal, ParticipantVotes: participantVotes, TransportErr: transportErr}, false
 	}
 	for _, hostId := range hostIds {
 		worker := c.workers[hostId]
 		if worker != nil {
 			decision := commitDispatch{tid: txId, requestID: sinfonia.RequestID(txId.CorrelationID() + ":commit:" + strconv.FormatUint(uint64(hostId), 10)), actionCommit: decideCommit}
+			// Prefer handing off a known decision even after caller cancellation.
+			// Delivery runs independently; only a full queue needs a deadline.
+			select {
+			case worker.commitCh <- decision:
+				continue
+			default:
+			}
 			select {
 			case worker.commitCh <- decision:
 			case <-ctx.Done():
-				// The votes already establish the decision. Participant recovery finishes
-				// delivery if the caller cannot wait for room in the dispatch queue.
-				return ExecResult{Committed: decideCommit, ReadResults: aggregatedReads, Status: status, ParticipantVotes: participantVotes, TransportErr: ctx.Err()}, false
+				// Still try the remaining workers. Recovery finishes delivery
+				// where the queue could not accept the decision before the deadline.
+				transportErr = errors.Join(transportErr, ctx.Err())
 			}
 		}
 	}
 
 	if !decideCommit {
-		return ExecResult{Committed: false, ReadResults: map[sinfonia.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes}, retry
+		return ExecResult{Committed: false, ReadResults: map[sinfonia.ReadItem][]byte{}, Status: status, ParticipantVotes: participantVotes, TransportErr: transportErr}, retry && transportErr == nil
 	}
-	return ExecResult{Committed: true, ReadResults: aggregatedReads, Status: sinfonia.VoteOk, ParticipantVotes: participantVotes}, false
+	return ExecResult{Committed: true, ReadResults: aggregatedReads, Status: sinfonia.VoteOk, ParticipantVotes: participantVotes, TransportErr: transportErr}, false
 }
 
 func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId sinfonia.TransactionID, hostId uint32, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ExecResult {
