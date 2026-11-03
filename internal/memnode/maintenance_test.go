@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,196 @@ import (
 )
 
 // Log and epoch cleanup preserve the evidence required for subsequent recovery.
+
+func commitGCTransaction(t *testing.T, a, b *memnode.Participant, counter uint64) sinfonia.TransactionID {
+	t.Helper()
+	ctx := context.Background()
+	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: counter, Epoch: sinfonia.EpochAt(time.Now())}
+	for i, node := range []*memnode.Participant{a, b} {
+		resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
+			TID: tid, Participants: []uint32{1, 2}, HasWrites: true,
+			WriteItems: []sinfonia.WriteItem{{MemID: uint32(i + 1), Addr: counter - 1, Data: []byte("X")}},
+		})
+		if err != nil || resp.Vote != sinfonia.VoteOk {
+			t.Fatalf("prepare node %d: %+v, %v", i+1, resp, err)
+		}
+	}
+	for _, node := range []*memnode.Participant{a, b} {
+		if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: true}); err != nil || !resp.Ack {
+			t.Fatalf("commit: %+v, %v", resp, err)
+		}
+	}
+	return tid
+}
+
+func TestRedoLogGCAfterPeerCollectedAndReceiverRestarted(t *testing.T) {
+	ctx := context.Background()
+	a := newRecoveredFailureTestNode(t, 1, t.TempDir())
+	bDir := t.TempDir()
+	b := newRecoveredFailureTestNode(t, 2, bDir)
+	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
+	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	tid := commitGCTransaction(t, a, b, 1)
+	a.FlushAppliedNotifications(ctx)
+	b.FlushAppliedNotifications(ctx)
+	if err := a.RunRedoLogGC(ctx); err != nil || a.RedoEntryCountForTest() != 0 {
+		t.Fatalf("first node GC: %v", err)
+	}
+	// A later entry must also be collected once the older entry stops blocking.
+	later := tid
+	later.Counter++
+	if resp, err := b.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{
+		TID: later, WriteItems: []sinfonia.WriteItem{{MemID: 2, Addr: 1, Data: []byte("Y")}},
+	}); err != nil || resp.Vote != sinfonia.VoteOk {
+		t.Fatalf("later write: %+v, %v", resp, err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b = newRecoveredFailureTestNode(t, 2, bDir)
+	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	if err := b.RunRedoLogGC(ctx); err != nil || b.RedoEntryCountForTest() != 0 {
+		t.Fatalf("restarted node retained completed prefix: %d entries, %v", b.RedoEntryCountForTest(), err)
+	}
+	if got, err := b.ReadBytesForTest(0, 2); err != nil || string(got) != "XY" {
+		t.Fatalf("GC changed recovered data: %q, %v", got, err)
+	}
+	if receipts, err := storage.LoadAppliedReceipts(bDir); err != nil || len(receipts) != 0 {
+		t.Fatalf("collected receipt snapshot = %v, %v", receipts, err)
+	}
+}
+
+type failingAppliedPeer struct {
+	memnode.RecoveryPeer
+	fail      atomic.Bool
+	dropReply bool
+}
+
+func (p *failingAppliedPeer) NotifyApplied(ctx context.Context, req sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error) {
+	if !p.fail.Load() {
+		return p.RecoveryPeer.NotifyApplied(ctx, req)
+	}
+	if p.dropReply {
+		if _, err := p.RecoveryPeer.NotifyApplied(ctx, req); err != nil {
+			return sinfonia.NotifyAppliedResponse{}, err
+		}
+	}
+	return sinfonia.NotifyAppliedResponse{}, errors.New("lost applied notification or acknowledgment")
+}
+
+func TestRedoLogGCRetainsUndeliveredNotifications(t *testing.T) {
+	for _, dropReply := range []bool{false, true} {
+		t.Run(map[bool]string{false: "lost request", true: "lost acknowledgment"}[dropReply], func(t *testing.T) {
+			ctx := context.Background()
+			aDir := t.TempDir()
+			a := newRecoveredFailureTestNode(t, 1, aDir)
+			b := newRecoveredFailureTestNode(t, 2, t.TempDir())
+			peer := &failingAppliedPeer{RecoveryPeer: b, dropReply: dropReply}
+			peer.fail.Store(true)
+			a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: peer})
+			b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+			commitGCTransaction(t, a, b, 1)
+			b.FlushAppliedNotifications(ctx)
+			if err := a.RunRedoLogGC(ctx); err != nil || a.RedoEntryCountForTest() != 1 {
+				t.Fatalf("GC discarded undelivered evidence: %d entries, %v", a.RedoEntryCountForTest(), err)
+			}
+			// Restart must reconstruct the outgoing queue from retained redo.
+			if err := a.Close(); err != nil {
+				t.Fatal(err)
+			}
+			a = newRecoveredFailureTestNode(t, 1, aDir)
+			a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: peer})
+			b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+			peer.fail.Store(false)
+			for _, node := range []*memnode.Participant{a, b} {
+				if err := node.RunRedoLogGC(ctx); err != nil || node.RedoEntryCountForTest() != 0 {
+					t.Fatalf("GC did not resume after delivery: %d entries, %v", node.RedoEntryCountForTest(), err)
+				}
+			}
+		})
+	}
+}
+
+func TestAppliedReceiptWriteFailureDoesNotAcknowledge(t *testing.T) {
+	ctx := context.Background()
+	a := newRecoveredFailureTestNode(t, 1, t.TempDir())
+	bDir := t.TempDir()
+	b := newRecoveredFailureTestNode(t, 2, bDir)
+	// Delay A's outgoing delivery until the receipt destination is blocked.
+	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	tid := commitGCTransaction(t, a, b, 1)
+	b.FlushAppliedNotifications(ctx)
+	path := filepath.Join(bDir, "applied.gob")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	req := sinfonia.NotifyAppliedRequest{FromMemID: 1, TIDs: []sinfonia.TransactionID{tid}}
+	// The duplicate must not acknowledge the receipt left only in memory.
+	for attempt := 0; attempt < 2; attempt++ {
+		if resp, err := b.NotifyApplied(ctx, req); resp.Ack || !errors.Is(err, memnode.ErrRestartRequired) {
+			t.Fatalf("failed receipt acknowledged: %+v, %v", resp, err)
+		}
+	}
+	assertParticipantReady(t, b, false)
+	if err := b.Recover(ctx); !errors.Is(err, memnode.ErrRestartRequired) {
+		t.Fatalf("faulted instance recovered: %v", err)
+	}
+	if err := b.RunRedoLogGC(ctx); !errors.Is(err, memnode.ErrRestartRequired) {
+		t.Fatalf("faulted instance collected redo: %v", err)
+	}
+	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
+	if err := a.RunRedoLogGC(ctx); err != nil || a.RedoEntryCountForTest() != 1 {
+		t.Fatalf("sender discarded unacknowledged evidence: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	b = newRecoveredFailureTestNode(t, 2, bDir)
+	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
+	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	for _, node := range []*memnode.Participant{a, b} {
+		if err := node.RunRedoLogGC(ctx); err != nil || node.RedoEntryCountForTest() != 0 {
+			t.Fatalf("GC after repair: %d entries, %v", node.RedoEntryCountForTest(), err)
+		}
+	}
+}
+
+func TestAppliedReceiptCleanupResumesAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	aDir := t.TempDir()
+	a := newRecoveredFailureTestNode(t, 1, aDir)
+	b := newRecoveredFailureTestNode(t, 2, t.TempDir())
+	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
+	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	removed := commitGCTransaction(t, a, b, 1)
+	retained := commitGCTransaction(t, a, b, 2)
+	a.FlushAppliedNotifications(ctx)
+	b.FlushAppliedNotifications(ctx)
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Emulate a crash after redo replacement, before receipt/decision cleanup.
+	redo, err := storage.OpenRedoLog(aDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := redo.TruncateHead(1); err != nil {
+		t.Fatal(err)
+	}
+	a = newRecoveredFailureTestNode(t, 1, aDir)
+	receipts, err := storage.LoadAppliedReceipts(aDir)
+	if err != nil || len(receipts) != 1 || !receipts[retained][2] || receipts[removed][2] {
+		t.Fatalf("startup lost retained receipts or kept orphan receipts: %v, %v", receipts, err)
+	}
+	a.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
+	b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: a})
+	if err := a.RunRedoLogGC(ctx); err != nil || a.RedoEntryCountForTest() != 0 {
+		t.Fatalf("remaining redo could not be collected: %v", err)
+	}
+}
 
 func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 	ctx := context.Background()

@@ -90,6 +90,10 @@ func NewParticipant(hostId uint32, size int, dir string) (_ *Participant, err er
 	if err != nil {
 		return nil, err
 	}
+	appliedRemote, err := storage.LoadAppliedReceipts(dir)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now()
 	n := &Participant{
 		hostId:           hostId,
@@ -106,7 +110,7 @@ func NewParticipant(hostId uint32, size int, dir string) (_ *Participant, err er
 		participants:     map[uint32]RecoveryPeer{},
 		nowFn:            time.Now,
 		appliedLocal:     map[sinfonia.TransactionID]bool{},
-		appliedRemote:    map[sinfonia.TransactionID]map[uint32]bool{},
+		appliedRemote:    appliedRemote,
 		pendingNotify:    map[uint32]map[sinfonia.TransactionID]struct{}{},
 		prepareOutcomes:  map[sinfonia.TransactionID]prepareOutcome{},
 		onePCOutcomes:    map[sinfonia.TransactionID]onePCOutcome{},

@@ -5,11 +5,19 @@ import (
 	"os"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
+	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
 func (n *Participant) NotifyApplied(ctx context.Context, req sinfonia.NotifyAppliedRequest) (sinfonia.NotifyAppliedResponse, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.restartRequired != nil {
+		return sinfonia.NotifyAppliedResponse{}, n.restartRequired
+	}
+	if err := ctx.Err(); err != nil {
+		return sinfonia.NotifyAppliedResponse{}, err
+	}
+	changed := false
 	for _, txId := range req.TIDs {
 		if _, ok := n.allLogTxIds[txId]; !ok {
 			continue
@@ -17,7 +25,15 @@ func (n *Participant) NotifyApplied(ctx context.Context, req sinfonia.NotifyAppl
 		if _, ok := n.appliedRemote[txId]; !ok {
 			n.appliedRemote[txId] = map[uint32]bool{}
 		}
-		n.appliedRemote[txId][req.FromMemID] = true
+		if !n.appliedRemote[txId][req.FromMemID] {
+			n.appliedRemote[txId][req.FromMemID] = true
+			changed = true
+		}
+	}
+	if changed {
+		if err := storage.StoreAppliedReceipts(n.storageDir, n.appliedRemote); err != nil {
+			return sinfonia.NotifyAppliedResponse{}, n.failUncertainLocked("save applied receipts", err)
+		}
 	}
 	return sinfonia.NotifyAppliedResponse{Ack: true}, nil
 }
@@ -36,6 +52,10 @@ func (n *Participant) enqueueAppliedNotificationsLocked(txId sinfonia.Transactio
 
 func (n *Participant) FlushAppliedNotifications(ctx context.Context) {
 	n.mu.Lock()
+	if n.restartRequired != nil {
+		n.mu.Unlock()
+		return
+	}
 	peers := make(map[uint32]RecoveryPeer, len(n.participants))
 	for pid, p := range n.participants {
 		peers[pid] = p
@@ -79,6 +99,9 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 	n.FlushAppliedNotifications(ctx)
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.restartRequired != nil {
+		return n.restartRequired
+	}
 	// Startup recovery uses a snapshot of log indexes and writes its checkpoint
 	// between entries. Do not compact that log until recovery has finished.
 	if !n.recoveryComplete {
@@ -107,6 +130,12 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 				allApplied = false
 				break
 			}
+			// Peers must durably know we applied this entry before we discard
+			// the redo needed to reconstruct its outgoing notification.
+			if _, pending := n.pendingNotify[pid][entry.TransactionId]; pending {
+				allApplied = false
+				break
+			}
 		}
 		if !allApplied {
 			break
@@ -127,7 +156,6 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 		delete(n.onePCOutcomes, entry.TransactionId)
 		delete(n.commitOutcomes, entry.TransactionId)
 		delete(n.appliedLocal, entry.TransactionId)
-		delete(n.appliedRemote, entry.TransactionId)
 		for pid, txIds := range n.pendingNotify {
 			delete(txIds, entry.TransactionId)
 			if len(txIds) == 0 {
@@ -140,6 +168,24 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 	if err := n.decided.Retain(n.allLogTxIds); err != nil {
 		n.recoveryComplete = false
 		return err
+	}
+	return n.retainAppliedReceiptsLocked()
+}
+
+// Redo removal must already be durable. Startup also calls this to finish a
+// cleanup interrupted between replacing redo and replacing its receipt snapshot.
+func (n *Participant) retainAppliedReceiptsLocked() error {
+	changed := false
+	for tid := range n.appliedRemote {
+		if _, logged := n.allLogTxIds[tid]; !logged {
+			delete(n.appliedRemote, tid)
+			changed = true
+		}
+	}
+	if changed {
+		if err := storage.StoreAppliedReceipts(n.storageDir, n.appliedRemote); err != nil {
+			return n.failUncertainLocked("collect applied receipts", err)
+		}
 	}
 	return nil
 }

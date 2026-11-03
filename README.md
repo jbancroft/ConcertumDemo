@@ -92,7 +92,8 @@ participant restart; issue a fresh read-only transaction if needed.
 Malformed or unterminated decision and forced-abort records block startup with an
 error identifying the file and line. The log is preserved for manual repair;
 automatic repair is not implemented.
-An uncertain redo or forced-abort append faults the node until storage is reopened
+An uncertain redo or forced-abort append, or a failed applied-receipt write,
+faults the node until storage is reopened
 and recovery succeeds; retrying recovery on the same participant cannot clear it.
 Embedded participants use `RunRecovery` for background recovery and reply expiration.
 Stop serving requests and join that worker before calling `Participant.Close()`.
@@ -101,9 +102,11 @@ Redo cleanup removes each decision after durably removing its redo entry.
 Committed entries remain until all participants have applied their writes.
 Startup finishes decision cleanup if a crash interrupts those steps. Collected
 transactions have no retained history or duplicate-execution guarantee.
-Applied acknowledgments are currently kept only in memory. If one participant
-collects a transaction and another restarts before collecting it, redo cleanup on
-the restarted node can stall indefinitely, retaining subsequent entries too.
+Applied notifications are acknowledged only after saving their receipts in
+`applied.gob`. Redo cleanup also waits for acknowledgment of outgoing notifications,
+so a lost message or a peer restart cannot discard the only remaining cleanup
+evidence. Receipt cleanup follows durable redo removal and resumes on restart.
+The background recovery worker does not schedule redo cleanup automatically.
 
 ## Minuet
 

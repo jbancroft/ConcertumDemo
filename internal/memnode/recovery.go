@@ -249,6 +249,10 @@ func (n *Participant) Recover(ctx context.Context) error {
 		n.mu.Unlock()
 		return err
 	}
+	if err := n.retainAppliedReceiptsLocked(); err != nil {
+		n.mu.Unlock()
+		return err
+	}
 	if err := n.gcOutcomesLocked(); err != nil {
 		n.mu.Unlock()
 		return err

@@ -127,7 +127,8 @@ limit. This assumes roughly synchronized system clocks.
 ## Disk storage and recovery
 
 Every node keeps its working data in memory and saves its memory image, redo
-entries, decisions, and forced-abort records to its required data directory.
+entries, decisions, forced-abort records, and applied-notification receipts to its
+required data directory.
 `memnode.NewParticipant` takes the node ID, image size, and directory. Callers
 configure peers and complete `Recover` before serving application requests.
 On restart the node uses those records and asks recovery
@@ -225,12 +226,26 @@ restart recovery.
 Tests cover full and partial cleanup after a nonzero checkpoint, interrupted
 recovery, failed writes, duplicate requests, and forced aborts.
 
-Applied acknowledgments are volatile. If one participant collects a transaction
-and another restarts before collecting it, the restarted node loses the first
-node's acknowledgment and that node no longer has the evidence to resend.
-Cleanup can then retain that entry and every later redo entry indefinitely.
-Preserving cleanup progress across this sequence requires durable acknowledgment
-tracking, which is not implemented.
+Applied-notification receipts are saved in `applied.gob`, a single framed gob
+snapshot mapping transaction IDs to the peers that applied them. Each changed
+notification batch replaces the snapshot using a synced temporary file, rename,
+and directory sync before acknowledging receipt. Duplicates need no rewrite.
+The whole receipt set is rewritten to keep storage simple; large retained logs
+make this more expensive. Malformed snapshots block startup without modification.
+A failed receipt write faults the node until storage is reopened and recovered.
+
+Committed redo can be collected only when every peer has applied its writes and
+acknowledged our own applied notification. Pending outgoing notifications are
+reconstructed from retained committed redo after restart, so lost requests and
+lost acknowledgments can be retried. Peers that already collected a transaction
+acknowledge late notifications without recreating its receipts. Receipt records
+are removed only after their local redo entries are durably removed; startup
+finishes receipt cleanup if a crash interrupts these steps. Receipt retention
+does not depend on transaction age.
+
+Redo cleanup is invoked explicitly; the background recovery worker does not
+schedule it. The durable receipts protect future notification exchanges and
+cannot reconstruct evidence already lost by an older execution.
 
 Before discarding old replies or forced-abort records, each node saves an
 epoch floor. Restarts preserve that floor so a clock rollback cannot make a
