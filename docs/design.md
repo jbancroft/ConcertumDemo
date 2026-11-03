@@ -112,6 +112,10 @@ For ordinary transactions, everyone's yes vote establishes the commit decision.
 The coordinator has no durable transaction log. Workers send decisions in the
 background, so `ExecuteAndCommit` can return before all nodes have applied their
 writes. `FlushPendingCommits` waits for delivery and reports delivery errors.
+Canceling a flush stops waiting, not decision delivery. Each worker retains its
+pending delivery error until a flush receives it; the flush combines all worker
+errors so cancellation at one node cannot hide a failure at another. A later
+flush or `Close` reports errors that were not handed to a previous flush.
 A transaction that touches just one participant uses a combined execute/commit
 call instead.
 

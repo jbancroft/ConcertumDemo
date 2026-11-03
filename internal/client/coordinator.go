@@ -223,7 +223,7 @@ type commitDispatch struct {
 	tid          sinfonia.TransactionID
 	requestID    sinfonia.RequestID
 	actionCommit bool
-	barrier      bool
+	barrierCtx   context.Context
 	respC        chan error
 }
 
@@ -239,6 +239,7 @@ type rpcWorker struct {
 }
 
 // FlushPendingCommits waits for queued commit/abort messages and reports errors.
+// Cancellation leaves unreported delivery errors for a later flush or Close.
 func (c *Coordinator) FlushPendingCommits(ctx context.Context) error {
 	results := make(chan error, len(c.workers))
 	for _, worker := range c.workers {
@@ -246,11 +247,13 @@ func (c *Coordinator) FlushPendingCommits(ctx context.Context) error {
 			results <- worker.flushPending(ctx)
 		}(worker)
 	}
-	var firstErr error
+	var flushErr error
+	// Collect every result so cancellation at one worker cannot hide a delivery
+	// failure that another worker has already handed to this caller.
 	for range c.workers {
-		firstErr = cmp.Or(firstErr, <-results)
+		flushErr = errors.Join(flushErr, <-results)
 	}
-	return firstErr
+	return flushErr
 }
 
 type prepareCall struct {
@@ -350,10 +353,15 @@ func (w *rpcWorker) runCommitBatcher() {
 				rememberDeliveryErr(flush())
 				return
 			}
-			if d.barrier {
+			if d.barrierCtx != nil {
 				rememberDeliveryErr(flush())
-				d.respC <- w.deliveryErr
-				w.deliveryErr = nil
+				select {
+				case d.respC <- w.deliveryErr:
+					// The unbuffered handoff confirms the caller received it.
+					w.deliveryErr = nil
+				case <-d.barrierCtx.Done():
+					// Leave the error for a later flush or Close.
+				}
 				continue
 			}
 			batch = append(batch, d)
@@ -371,9 +379,9 @@ func (w *rpcWorker) runCommitBatcher() {
 }
 
 func (w *rpcWorker) flushPending(ctx context.Context) error {
-	done := make(chan error, 1)
+	done := make(chan error)
 	select {
-	case w.commitCh <- commitDispatch{barrier: true, respC: done}:
+	case w.commitCh <- commitDispatch{barrierCtx: ctx, respC: done}:
 	case <-ctx.Done():
 		return ctx.Err()
 	}

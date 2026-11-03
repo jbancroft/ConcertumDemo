@@ -54,6 +54,8 @@ After all client calls have returned, call `Client.Close()` to drain queued
 decisions and release RPC workers and connections. Check its error for failed
 delivery; closing does not undo a known commit. Only repeated `Close` calls are
 allowed afterward. The demos and REPL close their clients automatically.
+Canceling `FlushPendingCommits` stops waiting; unreported delivery errors remain
+available to a later flush or `Close()`.
 
 Transactions retry lock conflicts and stale epochs within a bounded retry budget.
 A failed comparison or other non-retryable rejection aborts without retry, even
