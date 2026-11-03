@@ -112,6 +112,76 @@ func TestDecidedLogReaderEOFAndMalformedRecords(t *testing.T) {
 	}
 }
 
+func TestDecidedLogWriteFailureAndRetry(t *testing.T) {
+	for _, phase := range []string{"partial-write", "directory-sync"} {
+		t.Run(phase, func(t *testing.T) {
+			dir := t.TempDir()
+			log, err := OpenDecidedTransactionLog(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := sinfonia.TransactionID{Counter: 1, Epoch: 100}
+			later := sinfonia.TransactionID{Counter: 2, Epoch: 100}
+			if err := log.AddItem(old, false); err != nil {
+				t.Fatal(err)
+			}
+			checkOriginal := unchangedOpenLog(t, filepath.Join(dir, "decided.log"))
+			injected := errors.New("injected decision write failure")
+			published := phase == "directory-sync"
+			if published {
+				log.SetSyncDirHookForTest(func(string) error { return injected })
+			} else {
+				log.writeStringFn = func(w io.Writer, record string) (int, error) {
+					n, err := io.WriteString(w, record[:len(record)/2])
+					if err != nil {
+						return n, err
+					}
+					return n, injected
+				}
+			}
+			if err := log.AddItem(later, true); !errors.Is(err, injected) || errors.Is(err, ErrDecisionUncertain) != published {
+				t.Errorf("decision write error = %v, want injected error with uncertainty=%t", err, published)
+			}
+			if committed, known := log.Get(later); known != published || committed != published {
+				t.Errorf("decision after failed write = %t, %t; published=%t", committed, known, published)
+			}
+			// Even before a retry, only a complete old or new snapshot is visible.
+			reopened, err := OpenDecidedTransactionLog(dir)
+			if err != nil {
+				t.Errorf("failed write prevented reopening: %v", err)
+			} else if committed, known := reopened.Get(later); known != published || committed != published {
+				t.Errorf("reopened decision = %t, %t; published=%t", committed, known, published)
+			}
+			if published {
+				if err != nil {
+					t.Fatal(err)
+				}
+				log = reopened
+			}
+			log.writeStringFn = io.WriteString
+			log.SetSyncDirHookForTest(nil)
+			if err := log.AddItem(later, true); err != nil {
+				t.Fatal(err)
+			}
+			checkOriginal()
+			reopened, err = OpenDecidedTransactionLog(dir)
+			if err != nil {
+				t.Fatalf("successful retry prevented reopening: %v", err)
+			}
+			if committed, known := reopened.Get(old); committed || !known {
+				t.Fatal("replacement lost the original abort")
+			}
+			if committed, known := reopened.Get(later); !committed || !known {
+				t.Fatal("replacement lost the retried commit")
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("replacement leaked temporary files: %v, %v", entries, err)
+			}
+		})
+	}
+}
+
 func TestDecidedRetentionFollowsRedoRegardlessOfEpoch(t *testing.T) {
 	dir := t.TempDir()
 	log, err := OpenDecidedTransactionLog(dir)

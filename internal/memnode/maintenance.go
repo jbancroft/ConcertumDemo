@@ -162,7 +162,7 @@ func (n *Participant) RunRedoLogGC(ctx context.Context) error {
 	// steps leaves harmless extra decisions that startup recovery removes.
 	if err := n.decided.Retain(n.allLogTxIds); err != nil {
 		n.recoveryComplete = false
-		return err
+		return n.decisionWriteErrorLocked(err)
 	}
 	return n.retainAppliedReceiptsLocked()
 }

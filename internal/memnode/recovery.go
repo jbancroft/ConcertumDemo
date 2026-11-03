@@ -192,6 +192,7 @@ func (n *Participant) Recover(ctx context.Context) error {
 		if decidedCommit, decided := n.decided.Get(entry.TransactionId); decided {
 			outcomeCommit = decidedCommit
 		} else if err := n.decided.AddItem(entry.TransactionId, outcomeCommit); err != nil {
+			err = n.decisionWriteErrorLocked(err)
 			n.mu.Unlock()
 			return err
 		}
@@ -243,6 +244,7 @@ func (n *Participant) Recover(ctx context.Context) error {
 		return err
 	}
 	if err := n.decided.Retain(n.allLogTxIds); err != nil {
+		err = n.decisionWriteErrorLocked(err)
 		n.mu.Unlock()
 		return err
 	}

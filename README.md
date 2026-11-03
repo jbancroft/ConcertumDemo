@@ -77,6 +77,8 @@ recover its data. Add `-peer ID=ADDRESS` for each recovery peer. Ctrl-C stops th
   use the same size on restart; existing images cannot be resized.
 - Nodes are not replicated. An unavailable node can block transactions; there
   is no automatic failover or backup/restore.
+- Decision updates use atomic file replacement; their I/O cost grows with
+  retained transaction history.
 - `ErrUnknownOutcome` means a write may have committed. Check application state
   before deciding whether to retry it.
 

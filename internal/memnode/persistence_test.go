@@ -61,7 +61,7 @@ func TestOnePCReadOnlyMinitransactionNotLogged(t *testing.T) {
 			decisionPath := filepath.Join(dir, "decided.log")
 			for _, blocked := range []bool{false, true} {
 				if blocked {
-					// Opening the decision log for append must not be necessary.
+					// Writing the decision log must not be necessary.
 					if err := os.Remove(decisionPath); err != nil {
 						t.Fatal(err)
 					}
@@ -300,7 +300,7 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Fail only the decision append; the redo log must remain writable.
+	// Fail only decision publication; the redo log must remain writable.
 	decisionPath := filepath.Join(dir, "decided.log")
 	if err := os.Remove(decisionPath); err != nil {
 		t.Fatal(err)
@@ -373,6 +373,69 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 		t.Fatalf("recovered write did not survive restart: %q, %v", got, err)
 	}
 	assertParticipantReady(t, node, true)
+}
+
+func TestUncertainDecisionPublicationRequiresRestart(t *testing.T) {
+	for _, path := range []string{"commit", "abort", "one_pc", "recovery"} {
+		t.Run(path, func(t *testing.T) {
+			ctx := t.Context()
+			dir := t.TempDir()
+			node := newRecoveredFailureTestNode(t, 1, dir)
+			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+			writes := []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}
+			if path != "one_pc" {
+				resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1}, WriteItems: writes})
+				if err != nil || resp.Vote != sinfonia.VoteOk {
+					t.Fatalf("prepare: %+v, %v", resp, err)
+				}
+			}
+			injected := errors.New("injected decision directory sync failure")
+			node.SetDecisionSyncDirHookForTest(func(string) error { return injected })
+			var err error
+			switch path {
+			case "one_pc":
+				var resp sinfonia.ExecCommit1PCResponse
+				resp, err = node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, WriteItems: writes})
+				if resp.Vote == sinfonia.VoteOk {
+					t.Fatal("acknowledged an uncertain decision")
+				}
+			case "recovery":
+				err = node.Recover(ctx)
+			default:
+				var resp sinfonia.CommitResponse
+				resp, err = node.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: path == "commit"})
+				if resp.Ack {
+					t.Fatal("acknowledged an uncertain decision")
+				}
+			}
+			if !errors.Is(err, injected) || !errors.Is(err, memnode.ErrRestartRequired) {
+				t.Fatalf("uncertain decision error = %v", err)
+			}
+			if got, err := node.ReadBytesForTest(0, 1); err != nil || string(got) != "\x00" {
+				t.Fatalf("applied a write before decision durability: %q, %v", got, err)
+			}
+			node.SetDecisionSyncDirHookForTest(nil)
+			assertParticipantFaulted(t, node, tid)
+			if err := node.Close(); err != nil {
+				t.Fatal(err)
+			}
+			restarted := newRecoveredFailureTestNode(t, 1, dir)
+			want := "A"
+			if path == "abort" {
+				want = "\x00"
+			}
+			if got, err := restarted.ReadBytesForTest(0, 1); err != nil || string(got) != want {
+				t.Fatalf("recovery did not honor the published decision: %q, %v; want %q", got, err, want)
+			}
+			status, err := restarted.QueryTidStatus(ctx, sinfonia.QueryTidStatusRequest{TID: tid})
+			if err != nil || !status.KnownDecision || (status.Outcome == sinfonia.TidOutcomeCommit) != (path != "abort") {
+				t.Fatalf("reopened decision: %+v, %v", status, err)
+			}
+			if restarted.ActiveLockCountForTest() != 0 {
+				t.Fatal("recovery retained transaction locks")
+			}
+		})
+	}
 }
 
 func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {

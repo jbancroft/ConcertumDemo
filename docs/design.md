@@ -186,6 +186,16 @@ with a newline; decision records also require a `commit` or `abort` outcome.
 Malformed or unterminated records block startup with a file-and-line error; the
 log is preserved for manual repair.
 
+Each decision update replaces `decided.log` with a complete snapshot of retained
+outcomes using a synced temporary file, rename, and directory sync. A failed
+temporary write leaves the previous snapshot intact, so retrying cannot append
+onto an incomplete record. Failures before publication retain pending writes
+and locks and allow retry without reopening. A directory-sync failure after
+publication sets `ErrRestartRequired`: no decision is acknowledged or transaction
+write applied while its durability is uncertain. Reopening syncs the directory
+before exposing decisions to recovery. This reuses the compaction mechanism and
+record format, at the cost of rewriting all retained decisions for each update.
+
 Startup replay and the background [recovery coordinator](../internal/recovery/resolve.go)
 use the same concurrent vote discovery and decision selection. A node that has
 not voted records a forced abort and rejects a late request for that transaction
@@ -213,7 +223,8 @@ A failed image write leaves a node unavailable until recovery succeeds and relea
 the retained transaction locks; the background worker does not repair failed storage.
 If a one-node transaction cannot save its decision after logging redo, it retains
 its pending writes and locks and returns an unknown-outcome error to the caller.
-Node recovery can finish that same attempt.
+Node recovery can finish that same attempt; uncertain decision publication first
+requires reopening the storage.
 
 A redo append error is ambiguous: bytes can reach disk before `fsync` reports
 failure, leaving the log's in-memory index incomplete. This retains the full

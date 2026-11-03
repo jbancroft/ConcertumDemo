@@ -25,6 +25,12 @@ func (n *Participant) SetForcedAbortFsyncHookForTest(fn func(*os.File) error) {
 	n.forcedAborts.SetFsyncHookForTest(fn)
 }
 
+func (n *Participant) SetDecisionSyncDirHookForTest(fn func(string) error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.decided.SetSyncDirHookForTest(fn)
+}
+
 func (n *Participant) SetClockForTest(now func() time.Time) {
 	n.mu.Lock()
 	defer n.mu.Unlock()

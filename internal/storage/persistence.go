@@ -22,6 +22,10 @@ const (
 	redoTempPrefix        = ".redo.log.tmp-"
 )
 
+// ErrDecisionUncertain means a decision snapshot was published but its directory
+// sync failed. Callers must stop using this instance's decisions until reopening.
+var ErrDecisionUncertain = errors.New("decision snapshot durability uncertain")
+
 type RedoLogItem struct {
 	TransactionId sinfonia.TransactionID
 	HostIds       []uint32
@@ -241,9 +245,11 @@ func rewriteRedoLogFile(path string, entries []RedoLogItem) error {
 }
 
 type DecidedTransactionLog struct {
-	mu       sync.Mutex
-	path     string
-	outcomes map[string]bool
+	mu            sync.Mutex
+	path          string
+	outcomes      map[string]bool
+	syncDirFn     func(string) error
+	writeStringFn func(io.Writer, string) (int, error)
 }
 
 func OpenDecidedTransactionLog(dir string) (*DecidedTransactionLog, error) {
@@ -414,7 +420,21 @@ func openOutcomeStore(path string) (*DecidedTransactionLog, error) {
 			return nil, fmt.Errorf("%s:%d: invalid transaction decision %q", path, lineNumber, parts[1])
 		}
 	}
-	return &DecidedTransactionLog{path: path, outcomes: m}, nil
+	// A previous instance may have failed its directory sync after renaming a
+	// complete snapshot. Establish durability before recovery trusts that file.
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	return &DecidedTransactionLog{path: path, outcomes: m, syncDirFn: syncDir, writeStringFn: io.WriteString}, nil
+}
+
+func (s *DecidedTransactionLog) SetSyncDirHookForTest(fn func(string) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if fn == nil {
+		fn = syncDir
+	}
+	s.syncDirFn = fn
 }
 
 func (s *DecidedTransactionLog) Get(txId sinfonia.TransactionID) (bool, bool) {
@@ -424,27 +444,14 @@ func (s *DecidedTransactionLog) Get(txId sinfonia.TransactionID) (bool, bool) {
 	return v, ok
 }
 
+// AddItem replaces the complete decision snapshot so a failed write cannot leave
+// a partial record in the live file. Pre-publication failures are safe to retry.
 func (s *DecidedTransactionLog) AddItem(txId sinfonia.TransactionID, committed bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := tidKey(txId)
-	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	state := "abort"
-	if committed {
-		state = "commit"
-	}
-	if _, err := f.WriteString(k + " " + state + "\n"); err != nil {
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	s.outcomes[k] = committed
-	return nil
+	updated := maps.Clone(s.outcomes)
+	updated[tidKey(txId)] = committed
+	return s.rewriteLocked(updated)
 }
 
 // Retain removes decisions whose redo entries have already been durably removed.
@@ -472,7 +479,7 @@ func (s *DecidedTransactionLog) rewriteLocked(retained map[string]bool) error {
 			if retained[key] {
 				state = "commit"
 			}
-			if _, err := io.WriteString(w, key+" "+state+"\n"); err != nil {
+			if _, err := s.writeStringFn(w, key+" "+state+"\n"); err != nil {
 				return err
 			}
 		}
@@ -481,7 +488,10 @@ func (s *DecidedTransactionLog) rewriteLocked(retained map[string]bool) error {
 		return err
 	}
 	s.outcomes = retained
-	return syncDir(filepath.Dir(s.path))
+	if err := s.syncDirFn(filepath.Dir(s.path)); err != nil {
+		return fmt.Errorf("%w: %w", ErrDecisionUncertain, err)
+	}
+	return nil
 }
 
 func LoadProcessedPointer(dir string) (int, error) {

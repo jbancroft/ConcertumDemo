@@ -56,7 +56,7 @@ func (n *Participant) commit(ctx context.Context, req sinfonia.CommitRequest, re
 	}
 	if logged && !knownDecision {
 		if err := n.decided.AddItem(req.TID, req.ActionCommit); err != nil {
-			return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
+			return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, n.decisionWriteErrorLocked(err)
 		}
 	}
 
@@ -95,7 +95,7 @@ func (n *Participant) commitLocked(req sinfonia.CommitRequest) (sinfonia.CommitR
 		if durableAction, decided := n.decided.Get(req.TID); decided {
 			req.ActionCommit = durableAction
 		} else if err := n.decided.AddItem(req.TID, req.ActionCommit); err != nil {
-			return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
+			return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, n.decisionWriteErrorLocked(err)
 		}
 	}
 
@@ -210,7 +210,7 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 		if _, known := n.decided.Get(req.TID); !known {
 			if err := n.decided.AddItem(req.TID, true); err != nil {
 				n.recoveryComplete = false
-				return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
+				return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, n.decisionWriteErrorLocked(err)
 			}
 		}
 	}
