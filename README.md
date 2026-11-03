@@ -66,54 +66,19 @@ To run a [memnode](cmd/memnode/main.go) independently:
 go run ./cmd/memnode -id 1 -listen 127.0.0.1:7001 -data-dir tmp/node-1
 ```
 
-Every node is durable and requires `-data-dir`. It keeps its working data in
-memory and persists its image and recovery records to that directory. Add
-`-peer ID=ADDRESS` for recovery peers. Use a separate ID and data directory for
-each node; reopen the same directory to recover its data. Ctrl-C stops the node.
-Nodes are not replicated and there is no automatic failover; an unavailable node
-can block transactions until it returns. Backup and restore are not implemented.
-Nodes accept at most 256 concurrent transaction-execution RPCs. Commit and
-recovery requests are exempt from this limit.
-The image size defaults to 2 MiB; use `-size BYTES` to choose another size when
-creating a node. Reopen nodes with the same size: a mismatch fails startup
-without resizing the image. Resizing existing images is not supported.
+Nodes keep working data in memory and persist it to the required `-data-dir`.
+Give each node its own ID and directory; restart with the same directory to
+recover its data. Add `-peer ID=ADDRESS` for each recovery peer. Ctrl-C stops the node.
 
-`redo.log` uses framed gob records to store transaction writes for recovery.
-Existing JSON redo logs are unsupported; use a fresh data directory when upgrading
-from that format. Original replies are cached only in memory and are lost on
-restart. No replay log is created or read; an old `replay.log` is unused and can be
-deleted. An ambiguous request returns `ErrUnknownOutcome` without retrying the
-operation. Nodes still recover unfinished transactions, but there is no public
-transaction-history query or `Resolve` API. Callers must not retry uncertain
-writes blindly.
-Read-only and compare-only minitransactions append neither redo nor decision
-records. Their original outcomes and read results are not recoverable after a
-participant restart; issue a fresh read-only transaction if needed.
+- The memory image defaults to 2 MiB. Set `-size BYTES` when creating a node and
+  use the same size on restart; existing images cannot be resized.
+- Nodes are not replicated. An unavailable node can block transactions; there
+  is no automatic failover or backup/restore.
+- `ErrUnknownOutcome` means a write may have committed. Check application state
+  before deciding whether to retry it.
 
-Malformed or unterminated decision and forced-abort records block startup with an
-error identifying the file and line. The log is preserved for manual repair;
-automatic repair is not implemented.
-An uncertain redo or forced-abort append, or a failed applied-receipt write,
-faults the node until storage is reopened
-and recovery succeeds; retrying recovery on the same participant cannot clear it.
-Embedded participants use `RunRecovery` for background recovery and reply expiration.
-Both direct and RPC execution require completed `Recover`, including duplicate
-requests. Readiness is checked under the execution mutex, preventing new execution
-from overtaking recovery's redo snapshot. Commit and recovery RPCs remain available.
-Stop serving requests and join that worker before calling `Participant.Close()`.
-Recovery treats expired transactions without retained evidence as unknown.
-Startup and background recovery share concurrent vote discovery. A retained
-decision or an abort vote can resolve a transaction even when another peer is
-unavailable; insufficient evidence still leaves startup pending.
-Redo cleanup removes each decision after durably removing its redo entry.
-Committed entries remain until all participants have applied their writes.
-Startup finishes decision cleanup if a crash interrupts those steps. Collected
-transactions have no retained history or duplicate-execution guarantee.
-Applied notifications are acknowledged only after saving their receipts in
-`applied.gob`. Redo cleanup also waits for acknowledgment of outgoing notifications,
-so a lost message or a peer restart cannot discard the only remaining cleanup
-evidence. Receipt cleanup follows durable redo removal and resumes on restart.
-The background recovery worker does not schedule redo cleanup automatically.
+See [storage and recovery](docs/design.md#disk-storage-and-recovery) and
+[unknown outcomes](docs/design.md#unknown-outcomes) for details.
 
 ## Minuet
 
