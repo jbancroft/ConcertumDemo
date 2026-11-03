@@ -60,6 +60,58 @@ func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDecidedLogReaderEOFAndMalformedRecords(t *testing.T) {
+	first := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: 100}
+	later := sinfonia.TransactionID{CoordinatorID: 1, Counter: 3, Epoch: 100}
+	for _, tc := range []struct {
+		name    string
+		data    string
+		wantErr bool
+	}{
+		{name: "empty"},
+		{name: "complete record", data: "1:1:100 commit\n"},
+		{name: "multiple records", data: "1:1:100 commit\n1:2:100 abort\n"},
+		{name: "unterminated commit", data: "1:1:100 commit\n1:2:100 commit", wantErr: true},
+		{name: "unterminated abort", data: "1:1:100 commit\n1:2:100 abort", wantErr: true},
+		{name: "partial outcome", data: "1:1:100 commit\n1:2:100 com\n", wantErr: true},
+		{name: "invalid ID", data: "1:1:100 commit\ninvalid abort\n", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "decided.log")
+			if err := os.WriteFile(path, []byte(tc.data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			log, err := OpenDecidedTransactionLog(dir)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), path+":2:") {
+					t.Fatalf("expected malformed record error identifying file and line: %v", err)
+				}
+				if got, err := os.ReadFile(path); err != nil || string(got) != tc.data {
+					t.Fatalf("failed open modified decision log: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := log.AddItem(later, false); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := OpenDecidedTransactionLog(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if committed, known := reopened.Get(later); committed || !known {
+				t.Fatal("appended abort was not preserved on reopen")
+			}
+			if committed, known := reopened.Get(first); known != (tc.data != "") || committed != known {
+				t.Fatal("reopening lost or invented the original commit")
+			}
+		})
+	}
+}
+
 func TestDecidedRetentionFollowsRedoRegardlessOfEpoch(t *testing.T) {
 	dir := t.TempDir()
 	log, err := OpenDecidedTransactionLog(dir)

@@ -387,11 +387,19 @@ func openOutcomeStore(path string) (*DecidedTransactionLog, error) {
 	}
 	defer f.Close()
 	m := map[string]bool{}
-	s := bufio.NewScanner(f)
-	lineNumber := 0
-	for s.Scan() {
-		lineNumber++
-		parts := strings.Fields(s.Text())
+	reader := bufio.NewReader(f)
+	for lineNumber := 1; ; lineNumber++ {
+		line, err := reader.ReadString('\n')
+		if err == io.EOF {
+			if len(line) == 0 {
+				break
+			}
+			return nil, fmt.Errorf("%s:%d: incomplete decision record: missing newline", path, lineNumber)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s:%d: read decision record: %w", path, lineNumber, err)
+		}
+		parts := strings.Fields(line)
 		if len(parts) == 0 {
 			continue
 		}
@@ -410,9 +418,6 @@ func openOutcomeStore(path string) (*DecidedTransactionLog, error) {
 		default:
 			return nil, fmt.Errorf("%s:%d: invalid transaction decision %q", path, lineNumber, parts[1])
 		}
-	}
-	if err := s.Err(); err != nil {
-		return nil, fmt.Errorf("%s:%d: read decision record: %w", path, lineNumber+1, err)
 	}
 	return &DecidedTransactionLog{path: path, outcomes: m}, nil
 }

@@ -201,6 +201,13 @@ func (c *Coordinator) ExecuteAndCommit(ctx context.Context, compares []sinfonia.
 		hostIds = append(hostIds, hostId)
 	}
 	sort.Slice(hostIds, func(i, j int) bool { return hostIds[i] < hostIds[j] })
+	// Reject local configuration errors before any participant can prepare.
+	for _, hostId := range hostIds {
+		if _, ok := c.nodes[hostId]; !ok {
+			return ExecResult{Status: sinfonia.VoteBadInternal, TransportErr: ErrUnknownMemNode,
+				ParticipantVotes: map[uint32]sinfonia.Vote{hostId: sinfonia.VoteBadInternal}}
+		}
+	}
 
 	attempt := 0
 	for {
@@ -421,11 +428,7 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 		dispatches.Add(1)
 		go func(hostId uint32) {
 			defer dispatches.Done()
-			worker, ok := c.workers[hostId]
-			if !ok {
-				results <- prepareResult{hostId: hostId, err: ErrUnknownMemNode}
-				return
-			}
+			worker := c.workers[hostId]
 			reqReads := readItemsForHost(hostId, reads)
 			call := prepareCall{ctx: ctx, req: sinfonia.ExecPrepareRequest{
 				TID:          txId,
@@ -510,10 +513,7 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 }
 
 func (c *Coordinator) execSingleParticipant1PC(ctx context.Context, txId sinfonia.TransactionID, hostId uint32, compares []sinfonia.CmpItem, reads []sinfonia.ReadItem, writes []sinfonia.WriteItem) ExecResult {
-	node, ok := c.nodes[hostId]
-	if !ok {
-		return ExecResult{Committed: false, Status: sinfonia.VoteBadInternal, ReadResults: map[sinfonia.ReadItem][]byte{}, ParticipantVotes: map[uint32]sinfonia.Vote{hostId: sinfonia.VoteBadInternal}}
-	}
+	node := c.nodes[hostId]
 	reqReads := readItemsForHost(hostId, reads)
 	resp, err := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{
 		TID:        txId,

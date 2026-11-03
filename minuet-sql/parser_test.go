@@ -46,12 +46,14 @@ func TestParseSupportedStatements(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := Parse(tc.sql)
-			if err != nil {
-				t.Fatalf("Parse(%q): %v", tc.sql, err)
-			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("Parse(%q) = %#v, want %#v", tc.sql, got, tc.want)
+			for _, sql := range []string{tc.sql, tc.sql + ";", " \t" + tc.sql + "; \t\n"} {
+				got, err := Parse(sql)
+				if err != nil {
+					t.Fatalf("Parse(%q): %v", sql, err)
+				}
+				if !reflect.DeepEqual(got, tc.want) {
+					t.Fatalf("Parse(%q) = %#v, want %#v", sql, got, tc.want)
+				}
 			}
 		})
 	}

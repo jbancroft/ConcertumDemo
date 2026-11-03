@@ -197,6 +197,17 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 	if got := n.RedoEntryCountForTest(); got != 1 {
 		t.Fatalf("redo entry count after idempotent recovery retry = %d, want 1", got)
 	}
+	// Fresh transactions must be able to use the recovered range, not just raw
+	// test reads or retries of the original transaction ID.
+	txId.Counter++
+	fresh, err := n.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{
+		TID:        txId,
+		ReadItems:  []sinfonia.ReadItem{{MemID: 1, Addr: 4, Len: 4}},
+		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 4, Data: []byte("next")}},
+	})
+	if err != nil || fresh.Vote != sinfonia.VoteOk || string(fresh.ReadData[0]) != "redo" {
+		t.Fatalf("new transaction after recovery = %+v, %v", fresh, err)
+	}
 }
 
 func TestOnePCOutOfBoundsWriteDoesNotPersistSuccess(t *testing.T) {

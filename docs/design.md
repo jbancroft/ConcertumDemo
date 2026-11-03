@@ -76,6 +76,7 @@ For the main walkthrough, follow `ExecAndPrepare` in `prepare.go` and then
 
 All byte addresses must be known before the transaction starts. For a transaction
 that touches several nodes, the coordinator sends each node its part in parallel.
+It first rejects any unconfigured node ID, before sending requests to any node.
 Each participant tries to lock its ranges without waiting, checks comparisons,
 collects reads, and logs prepared writes before voting yes.
 A participant with no local writes still logs its yes vote if the transaction
@@ -162,7 +163,8 @@ Malformed or incomplete redo records block startup without modifying the log,
 since discarding one could lose transaction evidence. Recovery never treats a
 missing original reply as an abort decision.
 
-Forced-abort records must contain a valid transaction ID and end with a newline.
+Decision and forced-abort records must contain a valid transaction ID and end
+with a newline; decision records also require a `commit` or `abort` outcome.
 Malformed or unterminated records block startup with a file-and-line error; the
 log is preserved for manual repair.
 
@@ -185,11 +187,11 @@ using itself and its configured peers. Several nodes can help the same transacti
 concurrently. Each attempt is bounded to one second; unresolved entries are
 checked again on later scans. Shutdown cancels and joins the worker. Embedded
 participants can opt in by running `RunRecovery` with their peers and a context.
-A failed storage write leaves a node unavailable until successful restart recovery;
-the background worker does not repair failed storage. If a one-node transaction
-cannot save its decision after logging redo, it retains its pending writes and
-locks and returns an unknown-outcome error to the caller. Node recovery can
-finish that same attempt.
+A failed image write leaves a node unavailable until recovery succeeds and releases
+the retained transaction locks; the background worker does not repair failed storage.
+If a one-node transaction cannot save its decision after logging redo, it retains
+its pending writes and locks and returns an unknown-outcome error to the caller.
+Node recovery can finish that same attempt.
 
 A redo append error is ambiguous: bytes can reach disk before `fsync` reports
 failure, leaving the log's in-memory index incomplete. This retains the full
@@ -222,6 +224,13 @@ serving requests. A cleanup storage failure makes the node unavailable until
 restart recovery.
 Tests cover full and partial cleanup after a nonzero checkpoint, interrupted
 recovery, failed writes, duplicate requests, and forced aborts.
+
+Applied acknowledgments are volatile. If one participant collects a transaction
+and another restarts before collecting it, the restarted node loses the first
+node's acknowledgment and that node no longer has the evidence to resend.
+Cleanup can then retain that entry and every later redo entry indefinitely.
+Preserving cleanup progress across this sequence requires durable acknowledgment
+tracking, which is not implemented.
 
 Before discarding old replies or forced-abort records, each node saves an
 epoch floor. Restarts preserve that floor so a clock rollback cannot make a

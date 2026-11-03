@@ -276,7 +276,13 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 		case sinfoniaclient.StatusCommitted:
 			// Publish the table below only after a confirmed commit.
 		case sinfoniaclient.StatusAborted:
-			time.Sleep(e.cfg.RetryBackoff)
+			timer := time.NewTimer(e.cfg.RetryBackoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
 			continue
 		default:
 			return result.OutcomeError()

@@ -32,6 +32,40 @@ func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant 
 	return node
 }
 
+func TestCoordinatorRejectsUnknownHostBeforePreparing(t *testing.T) {
+	for _, kind := range []string{"compare", "read", "write"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			node := newTestParticipant(t, 1, 16)
+			coord := NewCoordinator(map[uint32]Participant{1: node})
+			defer coord.Close()
+			var compares []sinfonia.CmpItem
+			var reads []sinfonia.ReadItem
+			writes := []sinfonia.WriteItem{{MemID: 1, Data: []byte("A")}}
+			switch kind {
+			case "compare":
+				compares = []sinfonia.CmpItem{{MemID: 99, Data: []byte{0}}}
+			case "read":
+				reads = []sinfonia.ReadItem{{MemID: 99, Len: 1}}
+			case "write":
+				writes = append(writes, sinfonia.WriteItem{MemID: 99, Data: []byte("B")})
+			}
+			res := coord.ExecuteAndCommit(ctx, compares, reads, writes)
+			if res.Committed || res.UnknownOutcome || !errors.Is(res.TransportErr, ErrUnknownMemNode) {
+				t.Fatalf("unknown host must reject the whole transaction: %+v", res)
+			}
+			pending, err := node.QueryInDoubt(ctx, sinfonia.QueryInDoubtRequest{})
+			if err != nil || len(pending.Entries) != 0 {
+				t.Fatalf("invalid transaction left prepared work: %+v, %v", pending, err)
+			}
+			got, err := coord.Read(ctx, 1, 0, 1)
+			if err != nil || len(got) != 1 || got[0] != 0 {
+				t.Fatalf("rejected transaction changed or locked the valid node: %x, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestCoordinatorReportsUnknownAfter1PCResponseLost(t *testing.T) {
 	failure := errors.New("lost 1pc response")
 	n := &lost1PCNode{Participant: newTestParticipant(t, 1, 16), failure: failure}

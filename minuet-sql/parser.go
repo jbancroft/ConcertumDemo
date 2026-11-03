@@ -29,7 +29,7 @@ func (selectStmt) isStatement()      {}
 func (deleteStmt) isStatement()      {}
 
 func Parse(sql string) (statement, error) {
-	s := strings.TrimSpace(strings.TrimSuffix(sql, ";"))
+	s := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(sql), ";"))
 	upper := upperASCII(s)
 	switch {
 	case strings.HasPrefix(upper, "CREATE TABLE "):

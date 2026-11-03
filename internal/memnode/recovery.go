@@ -230,6 +230,9 @@ func (n *Participant) Recover(ctx context.Context) error {
 			resp:         sinfonia.CommitResponse{Ack: true},
 			actionCommit: outcomeCommit,
 		}
+		if txn := n.inDoubt[entry.TransactionId]; txn != nil {
+			n.releaseLocks(txn.heldLocks)
+		}
 		delete(n.inDoubt, entry.TransactionId)
 		n.mu.Unlock()
 		if flushNotify {

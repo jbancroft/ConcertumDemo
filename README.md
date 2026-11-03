@@ -57,6 +57,7 @@ allowed afterward. The demos and REPL close their clients automatically.
 Transactions retry lock conflicts and stale epochs within a bounded retry budget.
 A failed comparison or other non-retryable rejection aborts without retry, even
 when another participant reports a lock conflict or stale epoch.
+Unconfigured node IDs are rejected before contacting any participant.
 
 To run a [memnode](cmd/memnode/main.go) independently:
 
@@ -88,9 +89,9 @@ Read-only and compare-only minitransactions append neither redo nor decision
 records. Their original outcomes and read results are not recoverable after a
 participant restart; issue a fresh read-only transaction if needed.
 
-Malformed decision-log records and malformed or unterminated forced-abort records
-block startup with an error identifying the file and line. The log is preserved
-for manual repair; automatic repair is not implemented.
+Malformed or unterminated decision and forced-abort records block startup with an
+error identifying the file and line. The log is preserved for manual repair;
+automatic repair is not implemented.
 An uncertain redo or forced-abort append faults the node until storage is reopened
 and recovery succeeds; retrying recovery on the same participant cannot clear it.
 Embedded participants use `RunRecovery` for background recovery and reply expiration.
@@ -100,6 +101,9 @@ Redo cleanup removes each decision after durably removing its redo entry.
 Committed entries remain until all participants have applied their writes.
 Startup finishes decision cleanup if a crash interrupts those steps. Collected
 transactions have no retained history or duplicate-execution guarantee.
+Applied acknowledgments are currently kept only in memory. If one participant
+collects a transaction and another restarts before collecting it, redo cleanup on
+the restarted node can stall indefinitely, retaining subsequent entries too.
 
 ## Minuet
 

@@ -414,6 +414,39 @@ func TestCreateTableRetriesConfirmedAbort(t *testing.T) {
 	}
 }
 
+type cancelOnAbortClient struct {
+	sinfoniaclient.TxnClient
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnAbortClient) ExecuteAndCommit(context.Context, []sinfoniaclient.CompareItem, []sinfoniaclient.ReadItem, []sinfoniaclient.WriteItem) sinfoniaclient.ExecResult {
+	c.cancel()
+	return sinfoniaclient.ExecResult{Status: sinfoniaclient.StatusAborted}
+}
+
+func TestCreateTableCancellationInterruptsRetryBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &cancelOnAbortClient{TxnClient: newMemTxnClient(), cancel: cancel}
+	engine, err := NewEngine(Config{TxnClient: client, MemorySize: testMemorySize, RetryBackoff: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.Exec(ctx, "CREATE TABLE scores")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled creation returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not interrupt the retry backoff")
+	}
+}
+
 func TestCreateTableUnknownOutcomeIsNotRetried(t *testing.T) {
 	for _, test := range []struct {
 		name        string
