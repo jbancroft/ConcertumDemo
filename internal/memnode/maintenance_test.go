@@ -23,7 +23,7 @@ func commitGCTransaction(t *testing.T, a, b *memnode.Participant, counter uint64
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: counter, Epoch: sinfonia.EpochAt(time.Now())}
 	for i, node := range []*memnode.Participant{a, b} {
 		resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-			TID: tid, Participants: []uint32{1, 2}, HasWrites: true,
+			TID: tid, Participants: []uint32{1, 2},
 			WriteItems: []sinfonia.WriteItem{{MemID: uint32(i + 1), Addr: counter - 1, Data: []byte("X")}},
 		})
 		if err != nil || resp.Vote != sinfonia.VoteOk {

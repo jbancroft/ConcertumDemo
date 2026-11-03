@@ -26,8 +26,8 @@ func TestProcessesRecoverPreparedTransactionThroughPeerRPC(t *testing.T) {
 		peer := rpcwire.NewClient(cluster.config[id].RPCAddress, rpcwire.ClientOptions{})
 		request := sinfonia.ExecPrepareRequest{
 			TID: tid, RequestID: sinfonia.RequestID(fmt.Sprintf("prepare-%d", id)), Epoch: tid.Epoch,
-			Participants: []uint32{1, 2}, HasWrites: true,
-			WriteItems: []sinfonia.WriteItem{{MemID: id, Addr: 0, Data: []byte{byte(id)}}},
+			Participants: []uint32{1, 2},
+			WriteItems:   []sinfonia.WriteItem{{MemID: id, Addr: 0, Data: []byte{byte(id)}}},
 		}
 		var vote sinfonia.ExecPrepareResponse
 		callErr := peer.Call(ctx, sinfonia.MethodExecPrepare, request, &vote)
@@ -109,7 +109,7 @@ func TestProcessesRecoverAbandonedCoordinatorWithoutRestart(t *testing.T) {
 			for id := uint32(1); id <= count; id++ {
 				peer := rpcwire.NewClient(cluster.config[id].RPCAddress, rpcwire.ClientOptions{})
 				var vote sinfonia.ExecPrepareResponse
-				err := peer.Call(ctx, sinfonia.MethodExecPrepare, sinfonia.ExecPrepareRequest{TID: tid, Epoch: tid.Epoch, Participants: []uint32{1, 2}, HasWrites: true, WriteItems: []sinfonia.WriteItem{{MemID: id, Data: []byte{byte(id)}}}}, &vote)
+				err := peer.Call(ctx, sinfonia.MethodExecPrepare, sinfonia.ExecPrepareRequest{TID: tid, Epoch: tid.Epoch, Participants: []uint32{1, 2}, WriteItems: []sinfonia.WriteItem{{MemID: id, Data: []byte{byte(id)}}}}, &vote)
 				peer.Close()
 				if err != nil || vote.Vote != sinfonia.VoteOk {
 					t.Fatalf("prepare node %d: %+v, %v", id, vote, err)

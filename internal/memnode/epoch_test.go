@@ -169,7 +169,7 @@ func TestForcedAbortGCRetainsRecentVoteAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp, err := restarted.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-		TID: recent, Participants: []uint32{1, 2}, HasWrites: true,
+		TID: recent, Participants: []uint32{1, 2},
 		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("late")}},
 	})
 	if err != nil || resp.Vote != sinfonia.VoteBadForced {

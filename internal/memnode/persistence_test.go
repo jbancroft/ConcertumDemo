@@ -45,70 +45,55 @@ func TestParticipantRequiresStorageConfiguration(t *testing.T) {
 	}
 }
 
-func TestReadOnlyMinitransactionNotLogged(t *testing.T) {
-	for _, phase := range []string{"one-phase", "prepare/commit"} {
-		for _, kind := range []string{"read", "compare-only"} {
-			t.Run(phase+"/"+kind, func(t *testing.T) {
-				ctx := t.Context()
-				dir := t.TempDir()
-				node := newRecoveredFailureTestNode(t, 1, dir)
-				var compares []sinfonia.CmpItem
-				var reads []sinfonia.ReadItem
-				if kind == "read" {
-					reads = []sinfonia.ReadItem{{Addr: 0, Len: 1}}
-				} else {
-					compares = []sinfonia.CmpItem{{Addr: 0, Data: []byte{0}}}
-				}
-				decisionPath := filepath.Join(dir, "decided.log")
-				for _, blocked := range []bool{false, true} {
-					if blocked {
-						// Opening the decision log for append must not be necessary.
-						if err := os.Remove(decisionPath); err != nil {
-							t.Fatal(err)
-						}
-						if err := os.Mkdir(decisionPath, 0o700); err != nil {
-							t.Fatal(err)
-						}
+func TestOnePCReadOnlyMinitransactionNotLogged(t *testing.T) {
+	for _, kind := range []string{"read", "compare-only"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := t.Context()
+			dir := t.TempDir()
+			node := newRecoveredFailureTestNode(t, 1, dir)
+			var compares []sinfonia.CmpItem
+			var reads []sinfonia.ReadItem
+			if kind == "read" {
+				reads = []sinfonia.ReadItem{{Addr: 0, Len: 1}}
+			} else {
+				compares = []sinfonia.CmpItem{{Addr: 0, Data: []byte{0}}}
+			}
+			decisionPath := filepath.Join(dir, "decided.log")
+			for _, blocked := range []bool{false, true} {
+				if blocked {
+					// Opening the decision log for append must not be necessary.
+					if err := os.Remove(decisionPath); err != nil {
+						t.Fatal(err)
 					}
-					tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
-					if blocked {
-						tid.Counter++
-					}
-					var data map[uint32][]byte
-					if phase == "one-phase" {
-						resp, err := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, CmpItems: compares, ReadItems: reads})
-						if err != nil || resp.Vote != sinfonia.VoteOk {
-							t.Fatalf("execute (blocked=%t) = %+v, %v", blocked, resp, err)
-						}
-						data = resp.ReadData
-					} else {
-						resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1}, CmpItems: compares, ReadItems: reads})
-						if err != nil || resp.Vote != sinfonia.VoteOk {
-							t.Fatalf("prepare (blocked=%t) = %+v, %v", blocked, resp, err)
-						}
-						data = resp.ReadData
-						if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: true}); err != nil || !resp.Ack {
-							t.Fatalf("commit (blocked=%t) = %+v, %v", blocked, resp, err)
-						}
-					}
-					if kind == "read" && !bytes.Equal(data[0], []byte{0}) {
-						t.Fatalf("read result = %v", data)
-					}
-					if node.HasDecidedForTest(tid) || node.ActiveLockCountForTest() != 0 {
-						t.Fatal("read-only transaction saved a decision or retained locks")
-					}
-					assertParticipantReady(t, node, true)
-					for _, name := range []string{"redo.log", "decided.log"} {
-						if blocked && name == "decided.log" {
-							continue
-						}
-						if contents, err := os.ReadFile(filepath.Join(dir, name)); err != nil || len(contents) != 0 {
-							t.Fatalf("read-only transaction wrote %s: %q, %v", name, contents, err)
-						}
+					if err := os.Mkdir(decisionPath, 0o700); err != nil {
+						t.Fatal(err)
 					}
 				}
-			})
-		}
+				tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+				if blocked {
+					tid.Counter++
+				}
+				resp, err := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, CmpItems: compares, ReadItems: reads})
+				if err != nil || resp.Vote != sinfonia.VoteOk {
+					t.Fatalf("execute (blocked=%t) = %+v, %v", blocked, resp, err)
+				}
+				if kind == "read" && !bytes.Equal(resp.ReadData[0], []byte{0}) {
+					t.Fatalf("read result = %v", resp.ReadData)
+				}
+				if node.HasDecidedForTest(tid) || node.ActiveLockCountForTest() != 0 {
+					t.Fatal("read-only transaction saved a decision or retained locks")
+				}
+				assertParticipantReady(t, node, true)
+				for _, name := range []string{"redo.log", "decided.log"} {
+					if blocked && name == "decided.log" {
+						continue
+					}
+					if contents, err := os.ReadFile(filepath.Join(dir, name)); err != nil || len(contents) != 0 {
+						t.Fatalf("read-only transaction wrote %s: %q, %v", name, contents, err)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -391,12 +376,7 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 }
 
 func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
-	for _, multi := range []bool{false, true} {
-		path := "one_pc"
-		if multi {
-			path = "prepare"
-		}
-
+	for _, path := range []string{"one_pc", "prepare", "read_only_prepare", "compare_only_prepare"} {
 		t.Run(path, func(t *testing.T) {
 			ctx := t.Context()
 			dir := t.TempDir()
@@ -412,13 +392,25 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 
 			other := newTestParticipant(t, 2, 16)
 			nodes := map[uint32]client.Participant{1: node, 2: other}
+			multi := path != "one_pc"
+			var compares []sinfonia.CmpItem
+			var reads []sinfonia.ReadItem
+			want := []byte("A")
 			writes := []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}
 			if multi {
 				writes = append(writes, sinfonia.WriteItem{MemID: 2, Addr: 0, Data: []byte("B")})
 			}
+			switch path {
+			case "read_only_prepare":
+				writes, want = nil, []byte{0}
+				reads = []sinfonia.ReadItem{{MemID: 1, Len: 1}, {MemID: 2, Len: 1}}
+			case "compare_only_prepare":
+				writes, want = nil, []byte{0}
+				compares = []sinfonia.CmpItem{{MemID: 1, Data: []byte{0}}, {MemID: 2, Data: []byte{0}}}
+			}
 			coord := client.NewCoordinator(nodes)
 			defer coord.Close()
-			result := coord.ExecuteAndCommit(ctx, nil, nil, writes)
+			result := coord.ExecuteAndCommit(ctx, compares, reads, writes)
 			if !result.UnknownOutcome || result.Committed || result.TransportErr == nil {
 				t.Fatalf("ambiguous persistence must return unknown: %+v", result)
 			}
@@ -445,8 +437,8 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 			if err := restarted.Recover(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if got, err := restarted.ReadBytesForTest(0, 1); err != nil || string(got) != "A" {
-				t.Fatalf("restart lost persisted write: %q, %v", got, err)
+			if got, err := restarted.ReadBytesForTest(0, 1); err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("recovered data = %q, %v; want %q", got, err, want)
 			}
 
 			ids := []uint32{1}
@@ -488,7 +480,7 @@ func TestUncertainForcedAbortRequiresRestart(t *testing.T) {
 
 	restarted := newRecoveredFailureTestNode(t, 1, dir)
 	prepare := sinfonia.ExecPrepareRequest{
-		TID: tid, Participants: []uint32{1}, HasWrites: true,
+		TID: tid, Participants: []uint32{1},
 		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
 	}
 	response, err := restarted.ExecAndPrepare(ctx, prepare)

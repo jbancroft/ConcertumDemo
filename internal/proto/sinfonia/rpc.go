@@ -8,7 +8,6 @@ type ExecPrepareRequest struct {
 	TID          TransactionID
 	RequestID    RequestID
 	Participants []uint32
-	HasWrites    bool
 	CmpItems     []CmpItem
 	ReadItems    []ReadItem
 	WriteItems   []WriteItem

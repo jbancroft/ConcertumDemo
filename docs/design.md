@@ -49,9 +49,11 @@ used only inside node operations.
 These convenience methods return `ErrTransactionAborted` for an explicit
 rejection and `ErrUnknownOutcome` when the outcome cannot be established. Separate
 reads are separate transactions, so callers still need validation or a combined
-minitransaction to obtain a snapshot across several ranges. Read-only and
-compare-only minitransactions append neither redo nor decision records, including
-on the single-participant path. Original replies are cached only in memory.
+minitransaction to obtain a snapshot across several ranges. Single-participant
+read-only and compare-only minitransactions append neither redo nor decision
+records: their execution and completion happen under one participant's mutex.
+Two-phase transactions durably record every yes vote, including read-only and
+compare-only prepares. Original replies are cached only in memory.
 
 ## Finding the participant code
 
@@ -78,9 +80,17 @@ All byte addresses must be known before the transaction starts. For a transactio
 that touches several nodes, the coordinator sends each node its part in parallel.
 It first rejects any unconfigured node ID, before sending requests to any node.
 Each participant tries to lock its ranges without waiting, checks comparisons,
-collects reads, and logs prepared writes before voting yes.
-A participant with no local writes still logs its yes vote if the transaction
-writes elsewhere, so recovery can account for everyone's vote.
+collects reads, and durably logs its yes vote and any prepared writes before
+replying. A participant with no local writes records an empty write set, even
+when the entire transaction is read-only, so recovery can account for every vote.
+
+A restart loses read locks. Retaining the vote ensures the node resolves the
+transaction before accepting new work: a peer that has not prepared is forced
+to abort, while all yes votes establish commit. Without this record, a delayed
+read or comparison at another node could succeed against newer data and produce
+a result that never existed atomically. Distributed read-only transactions use
+the usual decision, applied-notification, and cleanup paths, paying the same
+logging and retention costs as other two-phase transactions.
 
 Readers can share locks. A writer needs exclusive access to its range. Both
 transaction paths collect all nonempty compare/read ranges as shared locks and

@@ -404,7 +404,6 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 				TID:          txId,
 				RequestID:    sinfonia.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
 				Participants: slices.Clone(hostIds),
-				HasWrites:    len(writes) > 0,
 				CmpItems:     compareItemsForHost(hostId, compares),
 				ReadItems:    reqReads,
 				WriteItems:   writeItemsForHost(hostId, writes),

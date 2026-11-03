@@ -60,6 +60,9 @@ A failed comparison or other non-retryable rejection aborts without retry, even
 when another participant reports a lock conflict or stale epoch.
 Unconfigured node IDs are rejected before contacting any participant.
 
+Cross-node reads and comparisons retain durable votes to preserve atomicity
+across node restarts. Single-node reads and comparisons do not write recovery logs.
+
 To run a [memnode](cmd/memnode/main.go) independently:
 
 ```sh

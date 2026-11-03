@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jbancroft/ConcertumDemo/internal/client"
 	"github.com/jbancroft/ConcertumDemo/internal/memnode"
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
@@ -20,6 +21,105 @@ import (
 )
 
 // Recovery decisions from peer evidence, in-flight work, and readiness gating.
+
+func TestReadOnlyPrepareRecovery(t *testing.T) {
+	for _, kind := range []string{"read", "compare-only"} {
+		for _, peerPrepared := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/peer-prepared=%t", kind, peerPrepared), func(t *testing.T) {
+				ctx := t.Context()
+				aDir := t.TempDir()
+				a := newRecoveredFailureTestNode(t, 1, aDir)
+				b := newRecoveredFailureTestNode(t, 2, t.TempDir())
+				tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+				request := func(id uint32, expected byte) sinfonia.ExecPrepareRequest {
+					req := sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1, 2}}
+					if kind == "read" {
+						req.ReadItems = []sinfonia.ReadItem{{MemID: id, Len: 1}}
+					} else {
+						req.CmpItems = []sinfonia.CmpItem{{MemID: id, Data: []byte{expected}}}
+					}
+					return req
+				}
+				first, err := a.ExecAndPrepare(ctx, request(1, 0))
+				if err != nil || first.Vote != sinfonia.VoteOk {
+					t.Fatalf("first prepare = %+v, %v", first, err)
+				}
+				if kind == "read" && !bytes.Equal(first.ReadData[0], []byte{0}) {
+					t.Fatalf("first read = %v, want 0", first.ReadData)
+				}
+				if peerPrepared {
+					if resp, err := b.ExecAndPrepare(ctx, request(2, 0)); err != nil || resp.Vote != sinfonia.VoteOk {
+						t.Fatalf("peer prepare = %+v, %v", resp, err)
+					}
+				}
+
+				if err := a.Close(); err != nil {
+					t.Fatal(err)
+				}
+				restarted, err := memnode.NewParticipant(1, 16, aDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = restarted.Close() })
+				// Even an empty write set needs peer evidence before new execution.
+				if err := restarted.Recover(ctx); !errors.Is(err, memnode.ErrRecoveryPending) {
+					t.Fatalf("recovery without peer evidence = %v, want pending", err)
+				}
+				assertParticipantReady(t, restarted, false)
+				restarted.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: b})
+				b.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{1: restarted})
+				if err := restarted.Recover(ctx); err != nil {
+					t.Fatal(err)
+				}
+				wantOutcome := sinfonia.TidOutcomeAbort
+				if peerPrepared {
+					wantOutcome = sinfonia.TidOutcomeCommit
+				}
+				status, err := restarted.QueryTidStatus(ctx, sinfonia.QueryTidStatusRequest{TID: tid})
+				if err != nil || !status.KnownDecision || status.Outcome != wantOutcome {
+					t.Fatalf("recovered outcome = %+v, %v; want %v", status, err, wantOutcome)
+				}
+
+				if peerPrepared {
+					if resp, err := b.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: true}); err != nil || !resp.Ack {
+						t.Fatalf("finish peer commit = %+v, %v", resp, err)
+					}
+				} else {
+					// The original coordinator still has A's old yes vote. Change
+					// both values before delivering its delayed request to B.
+					coord := client.NewCoordinator(map[uint32]client.Participant{1: restarted, 2: b})
+					defer coord.Close()
+					result := coord.ExecuteAndCommit(ctx, nil, nil, []sinfonia.WriteItem{
+						{MemID: 1, Data: []byte{1}}, {MemID: 2, Data: []byte{1}},
+					})
+					if !result.Committed {
+						t.Fatalf("update after recovery = %+v", result)
+					}
+					if err := coord.FlushPendingCommits(ctx); err != nil {
+						t.Fatal(err)
+					}
+					// A successful read would yield (0, 1); successful compares
+					// would validate values that never existed together.
+					if resp, err := b.ExecAndPrepare(ctx, request(2, 1)); err != nil || resp.Vote != sinfonia.VoteBadForced {
+						t.Fatalf("delayed prepare = %+v, %v; want forced abort", resp, err)
+					}
+				}
+
+				// Empty-write commits use the same receipt and cleanup protocol.
+				restarted.FlushAppliedNotifications(ctx)
+				b.FlushAppliedNotifications(ctx)
+				for _, node := range []*memnode.Participant{restarted, b} {
+					if err := node.RunRedoLogGC(ctx); err != nil {
+						t.Fatal(err)
+					}
+					if node.RedoEntryCountForTest() != 0 || node.HasDecidedForTest(tid) || node.ActiveLockCountForTest() != 0 {
+						t.Fatal("completed transaction retained redo, a decision, or locks")
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 	ctx := t.Context()
@@ -97,7 +197,7 @@ func TestRecoveryRejectsTornCommitRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 		resp, err := participant.node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-			TID: tid, Participants: []uint32{1, 2}, HasWrites: true,
+			TID: tid, Participants: []uint32{1, 2},
 			WriteItems: []sinfonia.WriteItem{{MemID: participant.id, Addr: 0, Data: []byte{7}}},
 		})
 		if err != nil || resp.Vote != sinfonia.VoteOk {
@@ -219,13 +319,13 @@ func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
 	txId := sinfonia.TransactionID{CoordinatorID: 42, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	participants := []uint32{1, 2}
 	if resp, err := a.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-		TID: txId, Participants: participants, HasWrites: true,
+		TID: txId, Participants: participants,
 		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
 	}); err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("prepare a failed vote=%v err=%v", resp.Vote, err)
 	}
 	if resp, err := b.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-		TID: txId, Participants: participants, HasWrites: true,
+		TID: txId, Participants: participants,
 		WriteItems: []sinfonia.WriteItem{{MemID: 2, Addr: 0, Data: []byte("B")}},
 	}); err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("prepare b failed vote=%v err=%v", resp.Vote, err)
@@ -280,7 +380,7 @@ func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
 		data   string
 	}{{a, 1, "A"}, {b, 2, "B"}} {
 		resp, err := prepared.node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-			TID: txId, Participants: participants, HasWrites: true,
+			TID: txId, Participants: participants,
 			WriteItems: []sinfonia.WriteItem{{MemID: prepared.hostId, Addr: 0, Data: []byte(prepared.data)}},
 		})
 		if err != nil || resp.Vote != sinfonia.VoteOk {
@@ -344,7 +444,7 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 			recoverTestParticipants(t, node)
 			txId := sinfonia.TransactionID{CoordinatorID: 80, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 			if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-				TID: txId, Participants: []uint32{1, 2}, HasWrites: true,
+				TID: txId, Participants: []uint32{1, 2},
 				WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
 			}); err != nil || resp.Vote != sinfonia.VoteOk {
 				t.Fatalf("prepare resp=%+v err=%v", resp, err)
@@ -386,7 +486,7 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 	recoverTestParticipants(t, node)
 	txId := sinfonia.TransactionID{CoordinatorID: 81, Counter: 1, Epoch: sinfonia.EpochAt(before)}
 	if resp, err := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-		TID: txId, Participants: []uint32{1, 2}, HasWrites: true,
+		TID: txId, Participants: []uint32{1, 2},
 		WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}},
 	}); err != nil || resp.Vote != sinfonia.VoteOk {
 		t.Fatalf("prepare resp=%+v err=%v", resp, err)
@@ -1010,7 +1110,7 @@ func TestRecoveryAndDuplicateWaitForDurableVote(t *testing.T) {
 					resp, callErr := node.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{TID: tid, RequestID: requestID, ReadItems: reads, WriteItems: writes})
 					vote, data, err = resp.Vote, resp.ReadData, callErr
 				} else {
-					resp, callErr := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, RequestID: requestID, Participants: []uint32{1}, HasWrites: true, ReadItems: reads, WriteItems: writes})
+					resp, callErr := node.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{TID: tid, RequestID: requestID, Participants: []uint32{1}, ReadItems: reads, WriteItems: writes})
 					vote, data, err = resp.Vote, resp.ReadData, callErr
 				}
 				if err != nil || vote != sinfonia.VoteOk || string(data[0]) != "\x00" {

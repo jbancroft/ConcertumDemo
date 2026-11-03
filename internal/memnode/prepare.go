@@ -3,6 +3,7 @@ package memnode
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
@@ -10,7 +11,7 @@ import (
 )
 
 // preparedTxn keeps the writes and locks until a commit or abort decision arrives.
-// Prepared writes are also logged so they can recover after a restart.
+// Two-phase yes votes are logged so recovery resolves them before new work.
 type preparedTxn struct {
 	writes        []sinfonia.WriteItem
 	readData      map[uint32][]byte
@@ -93,17 +94,18 @@ func (n *Participant) ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepa
 	original := sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteOk, ReadData: cloneReadData(readData), CurrentEpoch: currentEpoch}
 	txn.prepareResponse = &original
 
-	// Save our yes vote before replying. Even with no local writes, we need an
-	// empty entry if the transaction writes elsewhere: recovery needs every vote.
-	if req.HasWrites || len(req.WriteItems) > 0 {
-		participants := append([]uint32(nil), req.Participants...)
-		clonedWrites := cloneWrites(req.WriteItems)
-		if err := n.redoLog.AddItem(storage.RedoLogItem{TransactionId: req.TID, HostIds: participants, WriteItems: clonedWrites}); err != nil {
-			return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, n.failUncertainLocked("append prepare redo", err)
-		}
-		n.allLogTxIds[req.TID] = struct{}{}
-		txn.redoLoggedTid = true
+	// Save every yes vote before replying, including read-only prepares. After
+	// a restart loses their locks, recovery must resolve them before new work.
+	entry := storage.RedoLogItem{
+		TransactionId: req.TID,
+		HostIds:       slices.Clone(req.Participants),
+		WriteItems:    cloneWrites(req.WriteItems),
 	}
+	if err := n.redoLog.AddItem(entry); err != nil {
+		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, n.failUncertainLocked("append prepare redo", err)
+	}
+	n.allLogTxIds[req.TID] = struct{}{}
+	txn.redoLoggedTid = true
 	resp := clonePrepareResponse(original)
 	if err := n.callResponseBoundaryHookLocked("prepare-before-response", req.TID); err != nil {
 		return sinfonia.ExecPrepareResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err

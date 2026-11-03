@@ -45,7 +45,7 @@ func TestClientReadAndWriteRespectPreparedLocks(t *testing.T) {
 	c, _ := accessClient(t, n)
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	prepared, err := n.ExecAndPrepare(ctx, sinfonia.ExecPrepareRequest{
-		TID: tid, Participants: []uint32{1}, HasWrites: true,
+		TID: tid, Participants: []uint32{1},
 		CmpItems:   []sinfonia.CmpItem{{Addr: 0, Data: []byte{0, 0}}},
 		WriteItems: []sinfonia.WriteItem{{Addr: 0, Data: []byte{1}}},
 	})
