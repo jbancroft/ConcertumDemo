@@ -220,10 +220,8 @@ func (n *Participant) Recover(ctx context.Context) error {
 			n.mu.Unlock()
 			return err
 		}
-		if err := storage.StoreProcessedPointer(n.storageDir, i+1); err != nil {
-			n.mu.Unlock()
-			return err
-		}
+		// Finish local processing before publishing a checkpoint that can skip
+		// this entry on retry, even if publication reports a directory-sync error.
 		n.commitOutcomes[entry.TransactionId] = commitOutcome{
 			resp:         sinfonia.CommitResponse{Ack: true},
 			actionCommit: outcomeCommit,
@@ -232,6 +230,10 @@ func (n *Participant) Recover(ctx context.Context) error {
 			n.releaseLocks(txn.heldLocks)
 		}
 		delete(n.inDoubt, entry.TransactionId)
+		if err := storage.StoreProcessedPointer(n.storageDir, i+1); err != nil {
+			n.mu.Unlock()
+			return err
+		}
 		n.mu.Unlock()
 		if flushNotify {
 			go n.FlushAppliedNotifications(context.Background())

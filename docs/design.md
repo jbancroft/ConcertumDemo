@@ -223,6 +223,15 @@ in redo order before advancing the checkpoint. It can finish with a known outcom
 even when another peer is unavailable. Background recovery additionally delivers
 the decision to reachable participants.
 
+Recovery releases each resolved transaction's locks and finishes its local
+bookkeeping before publishing the checkpoint. Checkpoint publication can succeed
+before a directory-sync error is reported. Retrying `Recover` on the same instance
+then skips only transactions that have finished local processing; an older
+checkpoint instead replays their durable decisions and writes. Execution and redo
+cleanup remain blocked until recovery succeeds. A checkpoint error alone does not
+require reopening the participant, and recovery retains the redo entries for the
+usual cleanup protocol.
+
 After startup recovery, each standalone memnode runs a scan every 250 ms for
 prepared transactions at least one second old. It runs the same recovery protocol
 using itself and its configured peers. Several nodes can help the same transaction
