@@ -403,13 +403,12 @@ func (c *Coordinator) execAttempt(ctx context.Context, txId sinfonia.Transaction
 	for _, hostId := range hostIds {
 		dispatches.Go(func() {
 			worker := c.workers[hostId]
-			reqReads := readItemsForHost(hostId, reads)
 			call := prepareCall{ctx: ctx, req: sinfonia.ExecPrepareRequest{
 				TID:          txId,
 				RequestID:    sinfonia.RequestID(txId.CorrelationID() + ":prepare:" + strconv.FormatUint(uint64(hostId), 10)),
 				Participants: slices.Clone(hostIds),
 				CmpItems:     compareItemsForHost(hostId, compares),
-				ReadItems:    reqReads,
+				ReadItems:    readItemsForHost(hostId, reads),
 				WriteItems:   writeItemsForHost(hostId, writes),
 				Epoch:        txId.Epoch,
 			}, respC: results}
