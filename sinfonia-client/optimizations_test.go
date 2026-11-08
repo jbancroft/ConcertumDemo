@@ -112,7 +112,9 @@ func TestCommitMessageBatchingReducesIndividualCommitRPCs(t *testing.T) {
 			t.Fatalf("unexpected abort at %d", i)
 		}
 	}
-	time.Sleep(50 * time.Millisecond)
+	if err := c.FlushPendingCommits(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	n1.mu.Lock()
 	b1, c1 := n1.commitBatchN, n1.commitN
