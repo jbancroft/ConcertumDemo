@@ -23,6 +23,7 @@ import (
 // Recovery decisions from peer evidence, in-flight work, and readiness gating.
 
 func TestReadOnlyPrepareRecovery(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"read", "compare-only"} {
 		for _, peerPrepared := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/peer-prepared=%t", kind, peerPrepared), func(t *testing.T) {
@@ -122,6 +123,7 @@ func TestReadOnlyPrepareRecovery(t *testing.T) {
 }
 
 func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	aDir := filepath.Join(dir, "a")
@@ -174,6 +176,7 @@ func TestDurabilityCrashAfterPrepareBeforeCommitApply(t *testing.T) {
 }
 
 func TestRecoveryRejectsTornCommitRecord(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	aDir, bDir := filepath.Join(root, "a"), filepath.Join(root, "b")
@@ -253,6 +256,7 @@ func TestRecoveryRejectsTornCommitRecord(t *testing.T) {
 }
 
 func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	aDir := filepath.Join(dir, "a")
@@ -300,6 +304,7 @@ func TestRecoveryOutcomeDiscoveryFromPeerDecision(t *testing.T) {
 }
 
 func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
@@ -357,6 +362,7 @@ func TestParticipantRecoveryCommitsFromAllPositiveVotes(t *testing.T) {
 }
 
 func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
@@ -411,6 +417,7 @@ func TestParticipantRecoveryUsesDurableAbortDecision(t *testing.T) {
 }
 
 func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	for _, tc := range []struct {
 		name  string
@@ -473,6 +480,7 @@ func TestLateCommitDoesNotAcknowledgeForcedOrFinalAbort(t *testing.T) {
 }
 
 func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	node, err := memnode.NewParticipant(1, 64, dir)
@@ -522,6 +530,7 @@ func TestForcedAbortRemainsAuthoritativeAcrossClockReversalAndRestart(t *testing
 }
 
 func TestRecoveryAbortRejectsLateOnePhaseRequest(t *testing.T) {
+	t.Parallel()
 	node := newTestParticipant(t, 1, 16)
 	ctx := t.Context()
 	tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
@@ -555,6 +564,7 @@ func (unavailableRecoveryPeer) NotifyApplied(context.Context, sinfonia.NotifyApp
 }
 
 func TestStartupRecoveryUsesAvailableEvidence(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name        string
 		decision    string
@@ -643,6 +653,7 @@ func TestStartupRecoveryUsesAvailableEvidence(t *testing.T) {
 }
 
 func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
@@ -788,6 +799,7 @@ func TestParticipantRecoveryWaitsForMissingPeerEvidence(t *testing.T) {
 }
 
 func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
+	t.Parallel()
 	for _, failurePhase := range []string{"apply-before", "apply-after", "pointer-before"} {
 		t.Run(failurePhase, func(t *testing.T) {
 			ctx := t.Context()
@@ -942,6 +954,7 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 }
 
 func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
+	t.Parallel()
 	node, err := memnode.NewParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
 		t.Fatal(err)
@@ -979,6 +992,7 @@ func TestRPCRejectsClientWorkUntilRecoveryCompletes(t *testing.T) {
 }
 
 func TestExecutionCannotOvertakeRecoverySnapshot(t *testing.T) {
+	t.Parallel()
 	for _, onePC := range []bool{false, true} {
 		t.Run(fmt.Sprintf("onePC=%t", onePC), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -1082,6 +1096,7 @@ func TestExecutionCannotOvertakeRecoverySnapshot(t *testing.T) {
 }
 
 func TestRecoveryAndDuplicateWaitForDurableVote(t *testing.T) {
+	t.Parallel()
 	for _, onePC := range []bool{false, true} {
 		t.Run(fmt.Sprintf("onePC=%t", onePC), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)

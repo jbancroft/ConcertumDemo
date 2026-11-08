@@ -13,6 +13,7 @@ import (
 )
 
 func TestParticipantEpochSharedAndMonotonic(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(100*3600, 0)
 	first, err := NewParticipant(1, 64, t.TempDir())
 	if err != nil {
@@ -44,6 +45,7 @@ func TestParticipantEpochSharedAndMonotonic(t *testing.T) {
 }
 
 func TestEpochFloorProtectsDiscardedHistory(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"forced-abort", "cached reply"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx := t.Context()
@@ -121,6 +123,7 @@ func TestEpochFloorProtectsDiscardedHistory(t *testing.T) {
 }
 
 func TestParticipantRejectsCorruptEpochFloor(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "epoch.floor"), []byte("invalid"), 0o600); err != nil {
 		t.Fatal(err)
@@ -132,6 +135,7 @@ func TestParticipantRejectsCorruptEpochFloor(t *testing.T) {
 }
 
 func TestForcedAbortGCRetainsRecentVoteAfterRestart(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	node, err := NewParticipant(1, 64, dir)
@@ -178,6 +182,7 @@ func TestForcedAbortGCRetainsRecentVoteAfterRestart(t *testing.T) {
 }
 
 func TestBackgroundTransactionRetention(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	node, err := NewParticipant(1, 64, dir)
@@ -272,6 +277,7 @@ func TestBackgroundTransactionRetention(t *testing.T) {
 }
 
 func TestTransactionRetentionFailureAndRestart(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	node, err := NewParticipant(1, 64, dir)
@@ -352,6 +358,7 @@ func TestTransactionRetentionFailureAndRestart(t *testing.T) {
 }
 
 func TestStaleRequestPersistsEpochFloor(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"prepare", "one-pc"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx := t.Context()
@@ -392,6 +399,7 @@ func TestStaleRequestPersistsEpochFloor(t *testing.T) {
 }
 
 func TestRecoveryOfOldTransaction(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"prepared", "never voted", "retained commit"} {
 		t.Run(state, func(t *testing.T) {
 			ctx := t.Context()

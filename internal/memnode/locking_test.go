@@ -23,6 +23,7 @@ func (m *LockManager) tryLockWithConflict(start, end uint64, write bool) (bool, 
 // The zero-length, same-offset, overlapping, and disjoint cases come from
 // gofonia/mutex/range_lock_test.go, using the retained endpoint representation.
 func TestRangeLockOverlapsWith(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name          string
 		first, second RangeLock
@@ -47,6 +48,7 @@ func TestRangeLockOverlapsWith(t *testing.T) {
 }
 
 func TestLockManagerChecksEarlierLongReadLocks(t *testing.T) {
+	t.Parallel()
 	manager := LockManager{}
 	if !manager.tryLock(0, 100, false) || !manager.tryLock(10, 20, false) {
 		t.Fatal("compatible nested readers were rejected")
@@ -63,6 +65,7 @@ func TestLockManagerChecksEarlierLongReadLocks(t *testing.T) {
 }
 
 func TestPreparedComparisonProtectsPartiallyWrittenRange(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	n := newTestParticipant(t, 1, 2)
 	first := sinfonia.ExecPrepareRequest{
@@ -93,6 +96,7 @@ func TestPreparedComparisonProtectsPartiallyWrittenRange(t *testing.T) {
 }
 
 func TestTransactionPartialReadLockConflicts(t *testing.T) {
+	t.Parallel()
 	for _, onePhase := range []bool{false, true} {
 		for _, kind := range []string{"compare", "read"} {
 			for _, heldAddr := range []uint64{0, 2} {
@@ -151,6 +155,7 @@ func TestTransactionPartialReadLockConflicts(t *testing.T) {
 }
 
 func TestTransactionOverlappingItemsReleaseLocks(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		onePhase bool
@@ -204,6 +209,7 @@ func TestTransactionOverlappingItemsReleaseLocks(t *testing.T) {
 }
 
 func TestTransactionReadLocksRemainShared(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	n := newTestParticipant(t, 1, 3)
 	for counter := uint64(1); counter <= 2; counter++ {
@@ -255,6 +261,7 @@ func runLockTestRequest(t *testing.T, n *Participant, onePhase bool, req sinfoni
 }
 
 func TestBadLockIncludesConflictContext(t *testing.T) {
+	t.Parallel()
 	n := newTestParticipant(t, 1, 64)
 	ctx := t.Context()
 	tid1 := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}

@@ -14,6 +14,7 @@ import (
 )
 
 func TestRPCExecutionLimitSharedAcrossPrepareAndOnePhase(t *testing.T) {
+	t.Parallel()
 	n := newTestParticipant(t, 1, 16)
 	client := startAdmissionTestRPC(t, n)
 	ctx := t.Context()
@@ -66,6 +67,7 @@ func TestRPCExecutionLimitSharedAcrossPrepareAndOnePhase(t *testing.T) {
 }
 
 func TestRPCExecutionLimitReleasesRejectedRequests(t *testing.T) {
+	t.Parallel()
 	n := newTestParticipant(t, 1, 16)
 	n.recoveryComplete = false
 	client := startAdmissionTestRPC(t, n)

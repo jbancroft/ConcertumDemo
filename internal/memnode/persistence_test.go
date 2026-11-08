@@ -21,6 +21,7 @@ import (
 // Durable transaction records, write boundaries, and uncertain persistence failures.
 
 func TestParticipantRequiresStorageConfiguration(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		id   uint32
@@ -46,6 +47,7 @@ func TestParticipantRequiresStorageConfiguration(t *testing.T) {
 }
 
 func TestOnePCReadOnlyMinitransactionNotLogged(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"read", "compare-only"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx := t.Context()
@@ -98,6 +100,7 @@ func TestOnePCReadOnlyMinitransactionNotLogged(t *testing.T) {
 }
 
 func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	n, err := memnode.NewParticipant(1, 64, filepath.Join(t.TempDir(), "node"))
 	if err != nil {
@@ -196,6 +199,7 @@ func TestDurableOnePCWriteApplyFailureRecoversFromRedo(t *testing.T) {
 }
 
 func TestOnePCOutOfBoundsWriteDoesNotPersistSuccess(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := filepath.Join(t.TempDir(), "node")
 	n, err := memnode.NewParticipant(1, 32, dir)
@@ -216,6 +220,7 @@ func TestOnePCOutOfBoundsWriteDoesNotPersistSuccess(t *testing.T) {
 }
 
 func TestDurableLargeWritesSurviveRestart(t *testing.T) {
+	t.Parallel()
 	// Ordered by dependency: write sizes precede the combined memory size.
 	const (
 		firstWriteSize  = 64 << 10
@@ -288,6 +293,7 @@ func TestDurableLargeWritesSurviveRestart(t *testing.T) {
 }
 
 func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	dir := t.TempDir()
@@ -376,6 +382,7 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 }
 
 func TestUncertainDecisionPublicationRequiresRestart(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"commit", "abort", "one_pc", "recovery"} {
 		t.Run(path, func(t *testing.T) {
 			ctx := t.Context()
@@ -439,6 +446,7 @@ func TestUncertainDecisionPublicationRequiresRestart(t *testing.T) {
 }
 
 func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"one_pc", "prepare", "read_only_prepare", "compare_only_prepare"} {
 		t.Run(path, func(t *testing.T) {
 			ctx := t.Context()
@@ -518,6 +526,7 @@ func TestUncertainPrepareAndOnePCRequireRestart(t *testing.T) {
 }
 
 func TestUncertainForcedAbortRequiresRestart(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	node := newRecoveredFailureTestNode(t, 1, dir)
@@ -560,6 +569,7 @@ func TestUncertainForcedAbortRequiresRestart(t *testing.T) {
 }
 
 func TestRedoFailureBeforeWriteResolvesAbortAfterRestart(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	node := newRecoveredFailureTestNode(t, 1, dir)

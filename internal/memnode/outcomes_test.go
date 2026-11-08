@@ -14,6 +14,7 @@ import (
 // Duplicate requests preserve the original response without reapplying writes.
 
 func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testing.T) {
+	t.Parallel()
 	n := newTestParticipant(t, 1, 8)
 	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
 	req := sinfonia.ExecCommit1PCRequest{TID: txId, RequestID: "first", ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
@@ -35,6 +36,7 @@ func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testin
 }
 
 func TestPrepareAndCommitDuplicateTIDReturnOriginalOutcomeAfterResponseLoss(t *testing.T) {
+	t.Parallel()
 	n := newTestParticipant(t, 1, 8)
 	txId := sinfonia.TransactionID{CoordinatorID: 7, Counter: 2, Epoch: sinfonia.EpochAt(time.Now())}
 	prep := sinfonia.ExecPrepareRequest{TID: txId, RequestID: "prepare-1", Participants: []uint32{1}, ReadItems: []sinfonia.ReadItem{{MemID: 1, Addr: 0, Len: 1}}, WriteItems: []sinfonia.WriteItem{{MemID: 1, Addr: 0, Data: []byte("A")}}}
@@ -66,6 +68,7 @@ func TestPrepareAndCommitDuplicateTIDReturnOriginalOutcomeAfterResponseLoss(t *t
 }
 
 func TestDurableResponsesAreNotLoggedOrRestored(t *testing.T) {
+	t.Parallel()
 	for _, onePC := range []bool{false, true} {
 		name := "prepare"
 		if onePC {
@@ -132,6 +135,7 @@ func TestDurableResponsesAreNotLoggedOrRestored(t *testing.T) {
 }
 
 func TestPrepareCrashAfterRedoBeforeResponseDoesNotReexecuteKnownTID(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := filepath.Join(t.TempDir(), "node")
 	n, err := memnode.NewParticipant(1, 32, dir)
@@ -198,6 +202,7 @@ func TestPrepareCrashAfterRedoBeforeResponseDoesNotReexecuteKnownTID(t *testing.
 }
 
 func TestOnePCCrashAfterDecisionBeforeResponseDoesNotReexecuteKnownTID(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := filepath.Join(t.TempDir(), "node")
 	now := time.Unix(100*3600, 0)
@@ -281,6 +286,7 @@ func TestOnePCCrashAfterDecisionBeforeResponseDoesNotReexecuteKnownTID(t *testin
 }
 
 func TestOnePCRetryWaitsForPendingRecoveryWrites(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	node := newRecoveredFailureTestNode(t, 1, dir)

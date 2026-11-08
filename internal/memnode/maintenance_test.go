@@ -39,6 +39,7 @@ func commitGCTransaction(t *testing.T, a, b *memnode.Participant, counter uint64
 }
 
 func TestRedoLogGCAfterPeerCollectedAndReceiverRestarted(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	a := newRecoveredFailureTestNode(t, 1, t.TempDir())
 	bDir := t.TempDir()
@@ -94,6 +95,7 @@ func (p *failingAppliedPeer) NotifyApplied(ctx context.Context, req sinfonia.Not
 }
 
 func TestRedoLogGCRetainsUndeliveredNotifications(t *testing.T) {
+	t.Parallel()
 	for _, dropReply := range []bool{false, true} {
 		t.Run(map[bool]string{false: "lost request", true: "lost acknowledgment"}[dropReply], func(t *testing.T) {
 			ctx := t.Context()
@@ -127,6 +129,7 @@ func TestRedoLogGCRetainsUndeliveredNotifications(t *testing.T) {
 }
 
 func TestAppliedReceiptWriteFailureDoesNotAcknowledge(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	a := newRecoveredFailureTestNode(t, 1, t.TempDir())
 	bDir := t.TempDir()
@@ -174,6 +177,7 @@ func TestAppliedReceiptWriteFailureDoesNotAcknowledge(t *testing.T) {
 }
 
 func TestAppliedReceiptCleanupResumesAfterRestart(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	aDir := t.TempDir()
 	a := newRecoveredFailureTestNode(t, 1, aDir)
@@ -208,6 +212,7 @@ func TestAppliedReceiptCleanupResumesAfterRestart(t *testing.T) {
 }
 
 func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	a, _ := memnode.NewParticipant(1, 64, filepath.Join(root, "a"))
@@ -242,6 +247,7 @@ func TestRedoLogGCCommitAfterAllApplied(t *testing.T) {
 }
 
 func TestRedoLogGCNoPrematureTruncationWithoutRemoteConfirm(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	a, _ := memnode.NewParticipant(1, 64, filepath.Join(root, "a"))
@@ -263,6 +269,7 @@ func TestRedoLogGCNoPrematureTruncationWithoutRemoteConfirm(t *testing.T) {
 }
 
 func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	a, _ := memnode.NewParticipant(1, 64, filepath.Join(root, "a"))
@@ -300,6 +307,7 @@ func TestRedoLogGCAbortRemovedImmediately(t *testing.T) {
 }
 
 func TestRedoLogGCFailurePreservesRecoveryEvidence(t *testing.T) {
+	t.Parallel()
 	for _, blocked := range []string{"redo.log", "decided.log"} {
 		t.Run(blocked, func(t *testing.T) {
 			ctx := t.Context()
@@ -362,6 +370,7 @@ func TestRedoLogGCFailurePreservesRecoveryEvidence(t *testing.T) {
 }
 
 func TestForcedAbortEpochGC(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	n, _ := memnode.NewParticipant(1, 64, filepath.Join(root, "n"))
@@ -386,6 +395,7 @@ func TestForcedAbortEpochGC(t *testing.T) {
 }
 
 func TestRecoveryAfterPartialGC(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
@@ -434,6 +444,7 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 }
 
 func TestRecoveryAfterGCWithProcessedCheckpoint(t *testing.T) {
+	t.Parallel()
 	for _, partial := range []bool{false, true} {
 		t.Run(map[bool]string{false: "full", true: "partial"}[partial], func(t *testing.T) {
 			ctx := t.Context()
@@ -523,6 +534,7 @@ func TestRecoveryAfterGCWithProcessedCheckpoint(t *testing.T) {
 }
 
 func TestRedoLogGCRejectsConcurrentStartupRecovery(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	dir := t.TempDir()
@@ -583,6 +595,7 @@ func TestRedoLogGCRejectsConcurrentStartupRecovery(t *testing.T) {
 }
 
 func TestRedoLogGCCheckpointFailurePreservesLog(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dir := t.TempDir()
 	node, err := memnode.NewParticipant(1, 16, dir)
