@@ -168,6 +168,9 @@ fails. After requests and externally started recovery workers have stopped,
 `Participant.Close` closes the image. Each redo append writes and syncs its record
 before returning success. Appends and compaction share the log mutex.
 
+Log replacement buffers its output and flushes that buffer before syncing and
+publishing the new file.
+
 The configured memory size must match the existing image file exactly. Only a
 newly created image is initialized to that size; mismatches fail startup without
 resizing the image. Resizing existing images is not supported.

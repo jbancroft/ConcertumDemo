@@ -219,7 +219,11 @@ func publishLogFile(path, tempPrefix string, write func(io.Writer) error) error 
 	if err := f.Chmod(0o644); err != nil {
 		return err
 	}
-	if err := write(f); err != nil {
+	buffer := bufio.NewWriter(f)
+	if err := write(buffer); err != nil {
+		return err
+	}
+	if err := buffer.Flush(); err != nil {
 		return err
 	}
 	if err := f.Sync(); err != nil {
