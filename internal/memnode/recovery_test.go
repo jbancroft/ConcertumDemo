@@ -898,6 +898,7 @@ func TestParticipantRecoveryFailurePreservesDurableDecision(t *testing.T) {
 }
 
 func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	aDir := filepath.Join(root, "a")
@@ -929,10 +930,10 @@ func TestParticipantRecoveryRetriesUnavailablePeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = restarted.Close() })
+	// Finish receipt persistence before the peer's temporary directory is removed.
+	defer restarted.FlushAppliedNotifications(ctx)
 	restarted.SetRecoveryPeers(map[uint32]memnode.RecoveryPeer{2: unavailableRecoveryPeer{}})
-	attempt, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-	err = restarted.Recover(attempt)
-	cancel()
+	err = restarted.Recover(ctx)
 	if !errors.Is(err, memnode.ErrRecoveryPending) {
 		t.Fatalf("Recover() error = %v, want ErrRecoveryPending", err)
 	}
