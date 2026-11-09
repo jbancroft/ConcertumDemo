@@ -144,4 +144,8 @@ make staticcheck # Run only Staticcheck
 make race
 ```
 
+The checks include real disk persistence, TCP, and process restarts. Independent
+memnode tests run in parallel; coordinator batching and pipelining tests use
+protocol stubs to avoid repeating storage work already covered by durable tests.
+
 [MIT License](LICENSE)
