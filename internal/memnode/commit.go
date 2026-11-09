@@ -106,11 +106,9 @@ func (n *Participant) commitLocked(req sinfonia.CommitRequest) (sinfonia.CommitR
 
 	flushNotify := false
 	if req.ActionCommit {
-		for _, item := range txn.writes {
-			if err := n.write(item.Addr, item.Data); err != nil {
-				n.recoveryComplete = false
-				return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
-			}
+		if err := n.applyWrites(txn.writes); err != nil {
+			n.recoveryComplete = false
+			return sinfonia.CommitResponse{RequestID: req.RequestID, Ack: false}, err
 		}
 		if txn.redoLoggedTid {
 			n.appliedLocal[req.TID] = true
@@ -218,11 +216,9 @@ func (n *Participant) ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit
 		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
 	resp := clone1PCResponse(original)
-	for _, item := range req.WriteItems {
-		if err := n.write(item.Addr, item.Data); err != nil {
-			n.recoveryComplete = false
-			return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
-		}
+	if err := n.applyWrites(req.WriteItems); err != nil {
+		n.recoveryComplete = false
+		return sinfonia.ExecCommit1PCResponse{RequestID: req.RequestID, Vote: sinfonia.VoteBadInternal, CurrentEpoch: currentEpoch}, err
 	}
 	resp = n.rememberOnePCOutcomeLocked(req.TID, resp)
 	n.releaseLocks(txn.heldLocks)

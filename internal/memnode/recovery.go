@@ -202,11 +202,9 @@ func (n *Participant) Recover(ctx context.Context) error {
 				n.mu.Unlock()
 				return err
 			}
-			for _, w := range entry.WriteItems {
-				if err := n.write(w.Addr, w.Data); err != nil {
-					n.mu.Unlock()
-					return err
-				}
+			if err := n.applyWrites(entry.WriteItems); err != nil {
+				n.mu.Unlock()
+				return err
 			}
 			n.appliedLocal[entry.TransactionId] = true
 			n.enqueueAppliedNotificationsLocked(entry.TransactionId, entry.HostIds)

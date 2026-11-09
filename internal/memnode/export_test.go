@@ -44,7 +44,7 @@ func (n *Participant) SetClockForTest(now func() time.Time) {
 func (n *Participant) ApplyWriteForTest(addr uint64, data []byte) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.write(addr, data)
+	return n.applyWrites([]sinfonia.WriteItem{{Addr: addr, Data: data}})
 }
 
 // ReadBytesForTest inspects physical memory, including unready nodes.

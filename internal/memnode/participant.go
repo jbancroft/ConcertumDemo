@@ -165,16 +165,17 @@ func (n *Participant) read(addr uint64, length uint32) ([]byte, error) {
 	return bytes.Clone(n.memory[addr:end]), nil
 }
 
-func (n *Participant) write(addr uint64, data []byte) error {
-	end := addr + uint64(len(data))
-	if end < addr || end > uint64(len(n.memory)) {
-		return ErrOutOfBounds
+func (n *Participant) applyWrites(writes []sinfonia.WriteItem) error {
+	if err := n.validateWriteRangesLocked(writes); err != nil {
+		return err
 	}
-	copy(n.memory[addr:end], data)
-	if n.writeApplyFaultHook != nil {
-		if err := n.writeApplyFaultHook(addr, data); err != nil {
-			return err
+	for _, item := range writes {
+		copy(n.memory[item.Addr:], item.Data)
+		if n.writeApplyFaultHook != nil {
+			if err := n.writeApplyFaultHook(item.Addr, item.Data); err != nil {
+				return err
+			}
 		}
 	}
-	return n.diskImage.ApplyWrite(addr, data)
+	return n.diskImage.ApplyWrites(writes)
 }

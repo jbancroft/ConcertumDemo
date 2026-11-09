@@ -20,6 +20,70 @@ import (
 
 // Durable transaction records, write boundaries, and uncertain persistence failures.
 
+func TestInterruptedWriteSetRecoversAllRanges(t *testing.T) {
+	t.Parallel()
+	for _, onePC := range []bool{false, true} {
+		name := "two-phase"
+		if onePC {
+			name = "one-phase"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			node, err := memnode.NewParticipant(1, 8, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = node.Close() })
+			recoverTestParticipants(t, node)
+			fault := errors.New("interrupted write set")
+			node.SetWriteApplyFaultForTest(func(addr uint64, _ []byte) error {
+				if addr == 2 {
+					return fault
+				}
+				return nil
+			})
+			tid := sinfonia.TransactionID{CoordinatorID: 1, Counter: 1, Epoch: sinfonia.EpochAt(time.Now())}
+			writes := []sinfonia.WriteItem{
+				{MemID: 1, Data: []byte("abcd")},
+				{MemID: 1, Addr: 2, Data: []byte("XY")},
+				{MemID: 1, Addr: 7, Data: []byte("z")},
+			}
+			if onePC {
+				resp, applyErr := node.ExecCommit1PC(t.Context(), sinfonia.ExecCommit1PCRequest{TID: tid, WriteItems: writes})
+				if !errors.Is(applyErr, fault) || resp.Vote == sinfonia.VoteOk {
+					t.Fatalf("interrupted one-phase call: %+v, %v", resp, applyErr)
+				}
+			} else {
+				vote, err := node.ExecAndPrepare(t.Context(), sinfonia.ExecPrepareRequest{TID: tid, Participants: []uint32{1}, WriteItems: writes})
+				if err != nil || vote.Vote != sinfonia.VoteOk {
+					t.Fatalf("prepare: %+v, %v", vote, err)
+				}
+				resp, applyErr := node.Commit(t.Context(), sinfonia.CommitRequest{TID: tid, ActionCommit: true})
+				if !errors.Is(applyErr, fault) || resp.Ack {
+					t.Fatalf("interrupted commit: %+v, %v", resp, applyErr)
+				}
+			}
+			assertParticipantReady(t, node, false)
+			if node.ActiveLockCountForTest() == 0 || node.RedoEntryCountForTest() != 1 {
+				t.Fatal("interrupted application lost its locks or redo evidence")
+			}
+			if err := node.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := memnode.NewParticipant(1, 8, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+			recoverTestParticipants(t, reopened)
+			data, err := os.ReadFile(filepath.Join(dir, "image.bin"))
+			if err != nil || string(data) != "abXY\x00\x00\x00z" {
+				t.Fatalf("recovered write set: %q, %v", data, err)
+			}
+		})
+	}
+}
+
 func TestParticipantRequiresStorageConfiguration(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

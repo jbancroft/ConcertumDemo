@@ -34,8 +34,14 @@ type RedoLogItem struct {
 
 type DiskImage struct {
 	mu   sync.Mutex
-	file *os.File
+	file imageFile
 	size int
+}
+
+type imageFile interface {
+	WriteAt([]byte, int64) (int, error)
+	Sync() error
+	Close() error
 }
 
 // OpenDiskImage initializes a new image or opens an existing image of exactly
@@ -80,15 +86,27 @@ func OpenDiskImage(dir string, size int) (*DiskImage, []byte, error) {
 	return &DiskImage{file: f, size: size}, buf, nil
 }
 
-func (d *DiskImage) ApplyWrite(addr uint64, data []byte) error {
+// ApplyWrites persists a transaction's writes in order with one final sync.
+// The caller retains redo evidence until the whole write set is durable.
+func (d *DiskImage) ApplyWrites(writes []sinfonia.WriteItem) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	end := addr + uint64(len(data))
-	if end > uint64(d.size) {
-		return fmt.Errorf("disk image out of bounds")
+	for _, item := range writes {
+		if item.Addr > uint64(d.size) || uint64(len(item.Data)) > uint64(d.size)-item.Addr {
+			return fmt.Errorf("disk image out of bounds")
+		}
 	}
-	if _, err := d.file.WriteAt(data, int64(addr)); err != nil {
-		return err
+	for _, item := range writes {
+		n, err := d.file.WriteAt(item.Data, int64(item.Addr))
+		if err != nil {
+			return err
+		}
+		if n != len(item.Data) {
+			return io.ErrShortWrite
+		}
+	}
+	if len(writes) == 0 {
+		return nil
 	}
 	return d.file.Sync()
 }

@@ -168,7 +168,11 @@ fails. After requests and externally started recovery workers have stopped,
 `Participant.Close` closes the image. Each redo append writes and syncs its record
 before returning success. Appends and compaction share the log mutex.
 
-Log replacement buffers its output and flushes that buffer before syncing and
+Applying a committed transaction writes its image ranges in request order and
+syncs the image once for the complete write set, before acknowledging application
+or advancing a recovery checkpoint. A partial write or failed sync retains the
+redo evidence and leaves the node unavailable until recovery succeeds. Log
+replacement buffers its output and flushes that buffer before syncing and
 publishing the new file.
 
 The configured memory size must match the existing image file exactly. Only a
