@@ -55,7 +55,6 @@ func TestClientReadAndWriteRespectPreparedLocks(t *testing.T) {
 	if data, err := c.Read(ctx, 1, 0, 1); !errors.Is(err, ErrTransactionAborted) || data != nil {
 		t.Fatalf("read bypassed prepared write: %v, %v", data, err)
 	}
-	// The comparison's shared lock permits reads but must reject writes.
 	if data, err := c.Read(ctx, 1, 1, 1); err != nil || len(data) != 1 || data[0] != 0 {
 		t.Fatalf("shared read = %v, %v", data, err)
 	}

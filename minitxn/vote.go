@@ -1,6 +1,5 @@
 package minitxn
 
-// Vote is a participant's answer to a prepare request.
 type Vote int32
 
 // Ordered by wire value; keep these numeric values stable (VoteOk == 0).
@@ -15,7 +14,6 @@ const (
 
 const VoteUnknown Vote = -1
 
-// String returns the vote names used in gofonia.
 func (v Vote) String() string {
 	switch v {
 	case VoteOk:

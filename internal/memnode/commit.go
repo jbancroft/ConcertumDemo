@@ -85,8 +85,6 @@ func (n *Participant) CommitBatch(ctx context.Context, req sinfonia.CommitBatchR
 	return sinfonia.CommitBatchResponse{Acks: acks}, nil
 }
 
-// commitLocked saves decisions for logged transactions before applying writes,
-// then releases the transaction's locks.
 func (n *Participant) commitLocked(req sinfonia.CommitRequest) (sinfonia.CommitResponse, error) {
 	if n.restartRequired != nil {
 		return sinfonia.CommitResponse{RequestID: req.RequestID}, n.restartRequired

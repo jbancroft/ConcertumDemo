@@ -16,8 +16,6 @@ const (
 	recoveryScanInterval      = 250 * time.Millisecond
 )
 
-// RunRecovery finishes old prepared transactions and expires saved replies until
-// ctx is cancelled.
 // Concurrent recovery coordinators are safe: participants never reverse votes.
 // Call after startup recovery, and wait for it to stop before closing the node.
 func (n *Participant) RunRecovery(ctx context.Context, remote map[uint32]recovery.Participant) {

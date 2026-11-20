@@ -10,7 +10,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
-// preparedTxn keeps the writes and locks until a commit or abort decision arrives.
 // Two-phase yes votes are logged so recovery resolves them before new work.
 type preparedTxn struct {
 	writes        []sinfonia.WriteItem

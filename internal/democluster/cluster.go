@@ -1,4 +1,3 @@
-// Package democluster starts standalone memnode processes for the local demos.
 package democluster
 
 import (
@@ -36,7 +35,6 @@ type Cluster struct {
 	err    error
 }
 
-// Start launches two durable nodes using separate subdirectories of dataDir.
 func Start(ctx context.Context, binary, dataDir string, memorySize int) (_ *Cluster, err error) {
 	if binary == "" {
 		return nil, errors.New("memnode executable required; use the Makefile demo or test target")

@@ -1,4 +1,3 @@
-// Command memnode serves a durable Sinfonia participant over TCP.
 package main
 
 import (

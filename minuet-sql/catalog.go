@@ -20,7 +20,6 @@ const (
 	minuetIndexSuperblockSize = 64
 )
 
-// Byte offsets in the catalog header and table records.
 const (
 	catalogNextBaseAddrOffset     = 16
 	catalogNextTableIDOffset      = 8

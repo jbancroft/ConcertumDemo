@@ -52,8 +52,8 @@ type Participant struct {
 	writeApplyFaultHook  func(addr uint64, data []byte) error
 }
 
-// NewParticipant opens durable storage. Configure recovery peers and call Recover
-// before serving execution requests; every participant requires its own directory.
+// Configure recovery peers and call Recover before serving execution requests;
+// every participant requires its own directory.
 func NewParticipant(hostId uint32, size int, dir string) (_ *Participant, err error) {
 	if hostId == 0 || size <= 0 || dir == "" {
 		return nil, errors.New("participant requires a nonzero node ID, positive size, and data directory")
@@ -149,8 +149,8 @@ func (n *Participant) requireRecoveryCompleteLocked() error {
 	return nil
 }
 
-// Close releases the disk image. Callers must first stop
-// serving requests and join any externally started recovery workers.
+// Callers must first stop serving requests and join any externally started
+// recovery workers.
 func (n *Participant) Close() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()

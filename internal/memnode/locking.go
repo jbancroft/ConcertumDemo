@@ -14,7 +14,6 @@ type RangeLock struct {
 }
 
 // OverlapsWith checks [start, end) ranges: touching endpoints don't overlap.
-// This follows the range comparison from gofonia.
 func (rl RangeLock) OverlapsWith(other RangeLock) bool {
 	if rl.start >= rl.end || other.start >= other.end {
 		return false

@@ -107,7 +107,6 @@ collect:
 	return out, votes
 }
 
-// Resolve discovers an outcome and delivers it to reachable participants.
 // A known decision remains known even if delivery fails; another recovery pass
 // can deliver it later. All probe and delivery calls finish before returning.
 func Resolve(ctx context.Context, tid sinfonia.TransactionID, ids []uint32, peers map[uint32]Participant) Result {

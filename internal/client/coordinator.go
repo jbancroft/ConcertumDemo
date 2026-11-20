@@ -31,7 +31,6 @@ const (
 	prepareQueueSize      = 256
 )
 
-// Participant is the node interface used by the coordinator.
 type Participant interface {
 	ExecAndPrepare(ctx context.Context, req sinfonia.ExecPrepareRequest) (sinfonia.ExecPrepareResponse, error)
 	ExecCommit1PC(ctx context.Context, req sinfonia.ExecCommit1PCRequest) (sinfonia.ExecCommit1PCResponse, error)
@@ -75,7 +74,6 @@ func (b RandomBackoff) Wait(ctx context.Context, attempt int) {
 	}
 }
 
-// Coordinator gathers participant votes and sends commit or abort decisions.
 type Coordinator struct {
 	closeOnce  sync.Once
 	closeErr   error
@@ -98,8 +96,8 @@ func NewCoordinator(nodes map[uint32]Participant) *Coordinator {
 	return c
 }
 
-// Close drains queued decisions and joins the workers. Call only after all API
-// calls have returned; the coordinator must not be used afterward except to Close.
+// Call only after all API calls have returned; the coordinator must not be used
+// afterward except to Close.
 // Participants are borrowed; their owner must close them after the coordinator.
 func (c *Coordinator) Close() error {
 	c.closeOnce.Do(func() {
@@ -234,7 +232,6 @@ type rpcWorker struct {
 	batchMax    int
 }
 
-// FlushPendingCommits waits for queued commit/abort messages and reports errors.
 // Cancellation leaves unreported delivery errors for a later flush or Close.
 func (c *Coordinator) FlushPendingCommits(ctx context.Context) error {
 	results := make(chan error, len(c.workers))

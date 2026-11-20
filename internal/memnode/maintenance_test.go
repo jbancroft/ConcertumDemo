@@ -15,8 +15,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
-// Log and epoch cleanup preserve the evidence required for subsequent recovery.
-
 func commitGCTransaction(t *testing.T, a, b *memnode.Participant, counter uint64) sinfonia.TransactionID {
 	t.Helper()
 	ctx := t.Context()
@@ -52,7 +50,6 @@ func TestRedoLogGCAfterPeerCollectedAndReceiverRestarted(t *testing.T) {
 	if err := a.RunRedoLogGC(ctx); err != nil || a.RedoEntryCountForTest() != 0 {
 		t.Fatalf("first node GC: %v", err)
 	}
-	// A later entry must also be collected once the older entry stops blocking.
 	later := tid
 	later.Counter++
 	if resp, err := b.ExecCommit1PC(ctx, sinfonia.ExecCommit1PCRequest{
@@ -420,7 +417,6 @@ func TestRecoveryAfterPartialGC(t *testing.T) {
 	}
 
 	_ = a.Close()
-	// Reject a smaller image without losing the committed byte at address 7.
 	if smaller, err := memnode.NewParticipant(1, 4, aDir); err == nil {
 		_ = smaller.Close()
 		t.Error("expected reopening with a smaller size to fail")

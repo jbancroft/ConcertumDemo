@@ -73,7 +73,6 @@ func TestDiscoverRejectsConflictingDecisions(t *testing.T) {
 		}); err != nil || resp.Vote != sinfonia.VoteOk {
 			t.Fatalf("prepare = %+v, %v", resp, err)
 		}
-		// Inject contradictory durable decisions to verify fail-closed discovery.
 		if resp, err := node.Commit(ctx, sinfonia.CommitRequest{TID: tid, ActionCommit: node == committed}); err != nil || !resp.Ack {
 			t.Fatalf("decision = %+v, %v", resp, err)
 		}

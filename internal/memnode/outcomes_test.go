@@ -11,8 +11,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/proto/sinfonia"
 )
 
-// Duplicate requests preserve the original response without reapplying writes.
-
 func TestExecCommit1PCDuplicateTIDReturnsOriginalOutcomeWithoutReapply(t *testing.T) {
 	t.Parallel()
 	n := newTestParticipant(t, 1, 8)

@@ -14,8 +14,6 @@ import (
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
-// Statement execution, concurrent access, retries, and uncertain transaction outcomes.
-
 type memTxnClient struct {
 	mu  sync.Mutex
 	ram []byte
@@ -287,7 +285,6 @@ func TestEngineRowMutationCancellationWhileWaitingForKey(t *testing.T) {
 			if err := <-holderDone; err != nil {
 				t.Fatal(err)
 			}
-			// An expired context must also skip the callback when the lock is free.
 			if _, err := locker.withLock(ctx, 7, func() (QueryResult, error) {
 				t.Error("expired context entered the callback")
 				return QueryResult{}, nil
@@ -535,7 +532,6 @@ func TestCreateTableUnknownOutcomeIsNotRetried(t *testing.T) {
 			if client.attempts != 1 {
 				t.Errorf("commit attempts = %d, want 1", client.attempts)
 			}
-			// An uncertain creation must not publish a table in this engine's cache.
 			if _, err := engine.Exec(ctx, "SELECT id, value FROM scores"); !errors.Is(err, ErrTableNotFound) {
 				t.Errorf("select in original engine = %v, want ErrTableNotFound", err)
 			}

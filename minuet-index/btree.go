@@ -24,7 +24,6 @@ const (
 	superMagic          = uint32(0x4d4e5433) // ASCII "MNT3": marks the bounded tree metadata.
 )
 
-// Byte offsets and element sizes in the superblock and node pages.
 const (
 	childIDSize           = 4
 	keySize               = 8
@@ -49,7 +48,6 @@ var (
 	ErrRegionFull    = errors.New("minuet-index: region full")
 )
 
-// MinRegionSize holds a superblock and one leaf page.
 const MinRegionSize = superblockSize + pageSize
 
 type Config struct {
@@ -65,14 +63,12 @@ type Entry struct {
 	Value uint64
 }
 
-// BTree stores one tree at a fixed address on one memory node.
 type BTree struct {
 	cfg    Config
 	client sinfoniaclient.TxnClient
 }
 
-// superblock is the tree's starting point: which page is the root and where to
-// allocate next. Version is an update counter, not a storage-format version.
+// Version is an update counter, not a storage-format version.
 type superblock struct {
 	Version    uint64
 	RootPage   uint32
@@ -80,7 +76,6 @@ type superblock struct {
 	RegionSize uint64
 }
 
-// BTreeNode holds either leaf key/value pairs or internal keys and child IDs.
 type BTreeNode struct {
 	ID       uint32
 	isLeaf   bool
@@ -113,8 +108,7 @@ func (it *Iterator) Next() (Entry, bool) {
 	return e, true
 }
 
-// NewBTree requires an exclusive region on the selected node. It checks the
-// bounds here; operations validate saved metadata when they read the tree.
+// NewBTree requires an exclusive region on the selected node.
 func NewBTree(client sinfoniaclient.TxnClient, cfg Config) (*BTree, error) {
 	// NextPage must still fit uint32 when the final page has been allocated.
 	if cfg.RegionSize < MinRegionSize || cfg.RegionSize > math.MaxUint64-cfg.BaseAddress ||
@@ -238,7 +232,6 @@ func (idx *BTree) RangeScan(ctx context.Context, start, end uint64) (*Iterator, 
 	return &Iterator{entries: out}, nil
 }
 
-// mutate retries confirmed aborts with a fresh working copy of the tree.
 func (idx *BTree) mutate(ctx context.Context, fn func(*snapshot) error) error {
 	for range idx.cfg.MaxRetries {
 		s, err := idx.loadSnapshot(ctx)
@@ -256,7 +249,6 @@ func (idx *BTree) mutate(ctx context.Context, fn func(*snapshot) error) error {
 		case sinfoniaclient.StatusCommitted:
 			return nil
 		case sinfoniaclient.StatusAborted:
-			// Back off below, then reload before trying again.
 		default:
 			return sinfoniaclient.ErrUnknownOutcome
 		}
@@ -371,7 +363,6 @@ func (idx *BTree) readNodeRecursive(ctx context.Context, s *snapshot, pageID uin
 	return nil
 }
 
-// commitSnapshot checks the original bytes and writes the changed pages together.
 func (idx *BTree) commitSnapshot(ctx context.Context, s *snapshot) (sinfoniaclient.Status, error) {
 	compares := []sinfoniaclient.CompareItem{{HostId: idx.cfg.HostId, Address: idx.cfg.BaseAddress, Data: s.rawSB}}
 	writes := []sinfoniaclient.WriteItem{{HostId: idx.cfg.HostId, Address: idx.cfg.BaseAddress, Data: encodeSuperblock(s.super)}}

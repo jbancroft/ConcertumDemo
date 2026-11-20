@@ -55,13 +55,13 @@ func TestREPLOverTCPAndDurableReopen(t *testing.T) {
 		"CREATE TABLE scores;",
 		"INSERT INTO scores VALUES (2, 250);",
 		"INSERT INTO scores VALUES (1, 100);",
-		"INSERT INTO scores VALUES (1, 999);", // Errors must leave the session usable.
+		"INSERT INTO scores VALUES (1, 999);",
 		"UPDATE scores SET value = 0;",
 		"SELECT id, value FROM scores;",
 		"DELETE FROM scores WHERE id = 1;",
 		"SELECT id, value FROM scores WHERE id = 1;",
 		".quit",
-		"DELETE FROM scores WHERE id = 2;", // Quitting must not execute pending input.
+		"DELETE FROM scores WHERE id = 2;",
 	}, "\n")
 	if err := run(ctx, args, io.NopCloser(strings.NewReader(input)), &output, &output); err != nil {
 		t.Fatal(err)
@@ -72,8 +72,6 @@ func TestREPLOverTCPAndDurableReopen(t *testing.T) {
 		}
 	}
 	output.Reset()
-	// Quitting the REPL must leave the external node and its data available.
-	// EOF without a final newline also exits normally.
 	if err := run(ctx, args, io.NopCloser(strings.NewReader("SELECT id, value FROM scores;")), &output, &output); err != nil {
 		t.Fatal(err)
 	}

@@ -23,8 +23,6 @@ const (
 	logCrashTimeout  = 10 * time.Second
 )
 
-// Durable log reading, appends, compaction, and interrupted replacement.
-
 func TestRedoLogLargeRecordsRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	log, err := OpenRedoLog(dir)
@@ -654,7 +652,6 @@ func TestTransactionLogFailedReplacementPreservesMemory(t *testing.T) {
 				rewrite = func() error { return log.Retain(map[sinfonia.TransactionID]struct{}{recent: {}}) }
 
 			}
-			// A directory at the destination prevents publishing a replacement.
 			backup := path + ".saved"
 			if err := os.Rename(path, backup); err != nil {
 				t.Fatal(err)
@@ -689,7 +686,6 @@ func TestTransactionLogFailedReplacementPreservesMemory(t *testing.T) {
 	}
 }
 
-// An open reader must keep seeing the complete original file after publication.
 func unchangedOpenLog(t *testing.T, path string) func() {
 	t.Helper()
 	before, err := os.ReadFile(path)

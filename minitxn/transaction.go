@@ -6,14 +6,12 @@ import (
 	"slices"
 )
 
-// Executor runs a completed transaction. The coordinator gives each attempt,
-// including retries, a fresh transaction ID.
+// The coordinator gives each attempt, including retries, a fresh transaction ID.
 type Executor interface {
 	ExecuteAndCommit(ctx context.Context, compares []CompareItem, reads []ReadItem, writes []WriteItem) ExecResult
 }
 
-// MiniTransaction collects operations until ExecuteAndCommit is called.
-// It copies input bytes so callers can safely reuse their buffers.
+// MiniTransaction copies input bytes so callers can safely reuse their buffers.
 type MiniTransaction struct {
 	executor Executor
 	compares []CompareItem
@@ -94,8 +92,7 @@ func (t *MiniTransaction) WriteItemsForHost(hostId uint32) []WriteItem {
 	return result
 }
 
-// UniqueHostIds returns the hosts this transaction touches, sorted without
-// duplicates. Changing the returned slice won't change the transaction.
+// Changing the returned slice won't change the transaction.
 func (t *MiniTransaction) UniqueHostIds() []uint32 {
 	seen := make(map[uint32]struct{})
 	for _, item := range t.compares {

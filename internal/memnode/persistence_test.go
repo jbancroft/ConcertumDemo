@@ -18,8 +18,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/rpcwire"
 )
 
-// Durable transaction records, write boundaries, and uncertain persistence failures.
-
 func TestInterruptedWriteSetRecoversAllRanges(t *testing.T) {
 	t.Parallel()
 	for _, onePC := range []bool{false, true} {
@@ -394,7 +392,6 @@ func TestOnePCDecisionFailureRetainsWritesAndLocksForRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Even direct participant access must not overtake the unfinished write.
 	probe := sinfonia.ExecCommit1PCRequest{
 		TID:       sinfonia.TransactionID{CoordinatorID: 2, Counter: 1, Epoch: tid.Epoch},
 		ReadItems: []sinfonia.ReadItem{{Addr: 0, Len: 1}},

@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// Parsing for the supported SQL subset.
-
 func TestParseSupportedStatements(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

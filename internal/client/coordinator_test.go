@@ -13,8 +13,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
-// Coordinator IDs, transaction projections, retries, and uncertainty after lost replies.
-
 func newTestParticipant(t testing.TB, id uint32, size int) *memnode.Participant {
 	t.Helper()
 	node, err := memnode.NewParticipant(id, size, t.TempDir())

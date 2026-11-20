@@ -1,4 +1,3 @@
-// Command demo runs transactions, an index, and SQL on two local nodes.
 package main
 
 import (
@@ -67,7 +66,6 @@ func run(ctx context.Context, executable, dir string, out io.Writer) (err error)
 		Write(1, balanceAddr, number(75)).Write(2, balanceAddr, number(125))); err != nil {
 		return err
 	}
-	// The balance is now 75, so comparing it with 100 must reject both writes.
 	result := c.Client.NewMiniTransaction().Compare(1, balanceAddr, number(100)).
 		Write(1, balanceAddr, number(0)).Write(2, balanceAddr, number(0)).ExecuteAndCommit(ctx)
 	if result.Committed || result.Status != sinfoniaclient.StatusAborted {

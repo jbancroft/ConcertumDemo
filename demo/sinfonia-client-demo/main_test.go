@@ -27,7 +27,6 @@ func TestDemonstrationPreservesBalancesAfterAbortedTransfer(t *testing.T) {
 	if err := demonstrate(ctx, api, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	// Inspect actual stored bytes, independently of the demo's printed messages.
 	for i, want := range []uint64{75, 125} {
 		id := uint32(i + 1)
 		data, err := api.Read(ctx, id, 0, 8)

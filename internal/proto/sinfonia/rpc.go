@@ -3,7 +3,6 @@ package sinfonia
 // RequestID labels a request delivery attempt within a transaction.
 type RequestID string
 
-// ExecPrepareRequest asks a participant to check and prepare its part of a transaction.
 type ExecPrepareRequest struct {
 	TID          TransactionID
 	RequestID    RequestID
@@ -14,7 +13,6 @@ type ExecPrepareRequest struct {
 	Epoch        uint64
 }
 
-// ExecPrepareResponse returns the participant's vote and any bytes it read.
 type ExecPrepareResponse struct {
 	RequestID    RequestID
 	Vote         Vote
@@ -23,20 +21,17 @@ type ExecPrepareResponse struct {
 	LockConflict *LockConflict
 }
 
-// CommitRequest tells a participant to commit or abort its prepared work.
 type CommitRequest struct {
 	TID          TransactionID
 	RequestID    RequestID
 	ActionCommit bool
 }
 
-// CommitResponse acknowledges a commit or abort request.
 type CommitResponse struct {
 	RequestID RequestID
 	Ack       bool
 }
 
-// ExecCommit1PCRequest combines execution and commit for a single participant.
 type ExecCommit1PCRequest struct {
 	TID        TransactionID
 	RequestID  RequestID
@@ -78,20 +73,17 @@ type RecoverForceAbortRequest struct {
 	Epoch uint64
 }
 
-// RecoverForceAbortResponse returns the participant's vote after that check.
 type RecoverForceAbortResponse struct {
 	Vote           Vote
 	KnownDecision  bool
 	DecisionCommit bool
 }
 
-// RecoverDecideRequest asks the node to apply a recovery decision.
 type RecoverDecideRequest struct {
 	TID          TransactionID
 	ActionCommit bool
 }
 
-// RecoverDecideResponse acknowledges that recovery decision.
 type RecoverDecideResponse struct {
 	Ack bool
 }

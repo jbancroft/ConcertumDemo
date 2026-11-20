@@ -74,7 +74,6 @@ func (n *Participant) recoveryVote(ctx context.Context, tid sinfonia.Transaction
 		return sinfonia.RecoverForceAbortResponse{}, err
 	}
 	out := sinfonia.RecoverForceAbortResponse{Vote: sinfonia.VoteUnknown}
-	// Inspect saved replies without replaying operations.
 	one, oneOK := n.onePCOutcomes[tid]
 	prep, prepOK := n.prepareOutcomes[tid]
 	if oneOK {
@@ -128,7 +127,6 @@ func (n *Participant) RecoveryDecide(ctx context.Context, req sinfonia.RecoverDe
 	return sinfonia.RecoverDecideResponse{Ack: resp.Ack}, nil
 }
 
-// Recover resolves logged transactions using saved decisions and peer evidence.
 // The node stays unavailable if it can't safely finish recovery.
 func (n *Participant) Recover(ctx context.Context) error {
 	n.mu.Lock()

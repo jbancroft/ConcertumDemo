@@ -279,7 +279,6 @@ func (e *Engine) createTable(ctx context.Context, name string) error {
 		result := e.cfg.TxnClient.ExecuteAndCommit(ctx, compares, nil, writes)
 		switch result.Status {
 		case sinfoniaclient.StatusCommitted:
-			// Publish the table below only after a confirmed commit.
 		case sinfoniaclient.StatusAborted:
 			timer := time.NewTimer(e.cfg.RetryBackoff)
 			select {

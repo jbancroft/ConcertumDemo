@@ -1,4 +1,3 @@
-// Command repl runs a small SQL console connected to an existing memnode.
 package main
 
 import (

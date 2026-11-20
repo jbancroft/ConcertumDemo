@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// Fuzz coverage for internal storage decoders.
-
 func FuzzParseTIDKeyNeverPanics(f *testing.F) {
 	f.Add("1:2:3")
 	f.Add("18446744073709551615:18446744073709551615:18446744073709551615")

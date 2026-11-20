@@ -20,8 +20,6 @@ import (
 	"github.com/jbancroft/ConcertumDemo/internal/storage"
 )
 
-// Recovery decisions from peer evidence, in-flight work, and readiness gating.
-
 func TestReadOnlyPrepareRecovery(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []string{"read", "compare-only"} {
@@ -217,9 +215,8 @@ func TestRecoveryRejectsTornCommitRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate a torn append by copying A's decision into B's log with the
-	// final "commit\n" cut short to "comm". This is file corruption injection,
-	// not a physical power-loss test; B's prepared redo remains intact.
+	// This is file corruption injection, not a physical power-loss test;
+	// B's prepared redo remains intact.
 	record, err := os.ReadFile(filepath.Join(aDir, "decided.log"))
 	if err != nil {
 		t.Fatal(err)

@@ -12,8 +12,6 @@ import (
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
-// Catalog capacity, table region allocation, and stored catalog validation.
-
 const smallTableRegionSize = 64 + 3*512 // Superblock, two leaves, and a root; 12 ascending rows fit.
 
 func newRegionTestEngine(t *testing.T, client sinfoniaclient.TxnClient, regionSize, memorySize uint64) *Engine {
@@ -93,7 +91,6 @@ func TestTableRegionsStayIsolatedAndPersistOnReopen(t *testing.T) {
 	if len(result.Rows) != 13 {
 		t.Fatalf("larger new table has %d rows", len(result.Rows))
 	}
-	// Deleting from a full neighbor remains possible and leaves alpha intact.
 	execOK(t, e, "DELETE FROM beta WHERE id = 12")
 	alphaEnd := defaultCatalogNextBase + smallTableRegionSize
 	if !bytes.Equal(before[defaultCatalogNextBase:alphaEnd], client.ram[defaultCatalogNextBase:alphaEnd]) {

@@ -1,4 +1,3 @@
-// Command sinfonia-client-demo demonstrates the public Sinfonia client API.
 package main
 
 import (
@@ -16,7 +15,7 @@ import (
 )
 
 const (
-	balanceAddress = 0 // Each node holds one balance at byte offset zero.
+	balanceAddress = 0
 	balanceSize    = 8 // Balances are big-endian uint64 values.
 	demoTimeout    = time.Minute
 )
@@ -49,7 +48,6 @@ func run(ctx context.Context, executable string, out io.Writer) (err error) {
 }
 
 func demonstrate(ctx context.Context, api *sinfoniaclient.Client, out io.Writer) error {
-	// Write-only minitransactions initialize independent balances on nodes 1 and 2.
 	for id := uint32(1); id <= 2; id++ {
 		if err := api.Write(ctx, id, balanceAddress, number(100)); err != nil {
 			return fmt.Errorf("initialize node %d: %w", id, err)
@@ -59,7 +57,6 @@ func demonstrate(ctx context.Context, api *sinfoniaclient.Client, out io.Writer)
 		return err
 	}
 
-	// Both comparisons must succeed for either write to commit.
 	result := api.NewMiniTransaction().
 		Compare(1, balanceAddress, number(100)).
 		Compare(2, balanceAddress, number(100)).
@@ -80,7 +77,6 @@ func demonstrate(ctx context.Context, api *sinfoniaclient.Client, out io.Writer)
 		return err
 	}
 
-	// Node 1 now holds 75, so this stale comparison must reject BOTH writes.
 	result = api.NewMiniTransaction().
 		Compare(1, balanceAddress, number(100)).
 		Write(1, balanceAddress, number(0)).

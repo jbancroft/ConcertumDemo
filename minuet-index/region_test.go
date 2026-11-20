@@ -12,7 +12,6 @@ import (
 	sinfoniaclient "github.com/jbancroft/ConcertumDemo/sinfonia-client"
 )
 
-// Fail at the client boundary if any tree operation escapes its region.
 type boundedTestClient struct {
 	sinfoniaclient.TxnClient
 	t       *testing.T
